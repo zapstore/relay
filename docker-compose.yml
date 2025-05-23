@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  relay:
+    container_name: relay
+    image: zapstore/relay:latest
+    restart: unless-stopped
+    ports:
+      - "3334:3334"
+    environment:
+      RELAY_NAME: "Zapstore relay"
+      RELAY_PUBKEY: "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
+      RELAY_DESCRIPTION: "A Nostr relay for applications"
+      RELAY_URL: "wss://relay.zapstore.dev"
+      RELAY_ICON: "https://avatars.githubusercontent.com/u/160731958?s=200&v=4"
+      RELAY_BANNER: ""
+      RELAY_CONTACT: "https://zapstore.dev"
+      WORKING_DIR: "relay_wd/"
+      RELAY_PORT: ":3334"
+      ADMIN_PUBKEYS: ""
+    volumes:
+      - relay_data:/app/relay_wd/
+    networks:
+      - relay_network
+
+volumes:
+  relay_data:
