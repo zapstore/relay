@@ -1,5 +1,6 @@
 github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 h1:ClzzXMDDuUbWfNNZqGeYq4PnYOlwlOVIvSyNaIy0ykg=
 github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3/go.mod h1:we0YA5CsBbH5+/NUzC/AlMmxaDtWlXeNsqrwXjTzmzA=
+github.com/btcsuite/btcd v0.24.2 h1:aLmxPguqxza+4ag8R1I2nnJjSu2iFn/kqtHTIImswcY=
 github.com/btcsuite/btcd/btcec/v2 v2.3.4 h1:3EJjcN70HCu/mwqlUsGK8GcNVyLVxFDlWurTXGPFfiQ=
 github.com/btcsuite/btcd/btcec/v2 v2.3.4/go.mod h1:zYzJ8etWJQIv1Ogk7OzpWjowwOdXY1W/17j2MW85J04=
 github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0 h1:59Kx4K6lzOW5w6nFlA0v5+lk/6sjybR934QNHSJZPTQ=
@@ -46,6 +47,8 @@ github.com/nbd-wtf/go-nostr v0.51.11 h1:Dk0+7ZNq17ElYAVlGunalh0loIKiPgU2mWuAi3mW
 github.com/nbd-wtf/go-nostr v0.51.11/go.mod h1:IF30/Cm4AS90wd1GjsFJbBqq7oD1txo+2YUFYXqK3Nc=
 github.com/pippellia-btc/rely v0.3.3 h1:7fX1mCINs0uW2FPYDwEDGrL4q/Cmt44a57RFWW7Fk8k=
 github.com/pippellia-btc/rely v0.3.3/go.mod h1:zi1rPk3j74AqSSia4J+6JcH4WD/JaQtdtX1wJzdJAbs=
+github.com/pippellia-btc/rely v0.6.0 h1:Jj9BaJjwSiN6qQnhdZD9mFz4VJ95ChTSmaQDrbDWRVo=
+github.com/pippellia-btc/rely v0.6.0/go.mod h1:zi1rPk3j74AqSSia4J+6JcH4WD/JaQtdtX1wJzdJAbs=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/puzpuzpuz/xsync/v3 v3.5.1 h1:GJYJZwO6IdxN/IKbneznS6yPkVC+c3zyY/j19c++5Fg=

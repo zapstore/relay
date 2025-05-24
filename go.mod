@@ -4,7 +4,7 @@ go 1.24.1
 
 toolchain go1.24.3
 
-require github.com/pippellia-btc/rely v0.3.3
+require github.com/pippellia-btc/rely v0.6.0
 
 require github.com/nbd-wtf/go-nostr v0.51.11 // indirect
 
