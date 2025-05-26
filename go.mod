@@ -6,7 +6,13 @@ toolchain go1.24.3
 
 require github.com/pippellia-btc/rely v0.6.0
 
-require github.com/nbd-wtf/go-nostr v0.51.11 // indirect
+require github.com/nbd-wtf/go-nostr v0.51.11
+
+require (
+	fiatjaf.com/lib v0.2.0 // indirect
+	github.com/fiatjaf/eventstore v0.16.7
+	github.com/mattn/go-sqlite3 v1.14.24 // indirect
+)
 
 require (
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect
@@ -19,6 +25,7 @@ require (
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kelseyhightower/envconfig v1.4.0
