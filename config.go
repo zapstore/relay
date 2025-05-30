@@ -18,8 +18,6 @@ type Config struct {
 	WorkingDirectory string `envconfig:"WORKING_DIR"`
 
 	RelayPort string `envconfig:"RELAY_PORT"`
-
-	Admins []string `envconfig:"ADMIN_PUBKEYS"`
 }
 
 func LoadConfig() {
