@@ -94,7 +94,6 @@ func (b SQLite3Backend) DeleteEvent(ctx context.Context, evt *nostr.Event) error
 	return err
 }
 
-
 func (b *SQLite3Backend) SaveEvent(ctx context.Context, evt *nostr.Event) error {
 	// insert
 	tagsj, _ := json.Marshal(evt.Tags)
@@ -156,7 +155,6 @@ func IsOlder(previous, next *nostr.Event) bool {
 	return previous.CreatedAt < next.CreatedAt ||
 		(previous.CreatedAt == next.CreatedAt && previous.ID > next.ID)
 }
-
 
 func (b SQLite3Backend) QueryEvents(ctx context.Context, filter nostr.Filter) (ch chan *nostr.Event, err error) {
 	query, params, err := b.queryEventsSql(filter, false)
@@ -274,13 +272,19 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter, doCount bool) (strin
 		conditions = append(conditions, `created_at >= ?`)
 		params = append(params, filter.Since)
 	}
+
 	if filter.Until != nil {
 		conditions = append(conditions, `created_at <= ?`)
 		params = append(params, filter.Until)
 	}
+
 	if filter.Search != "" {
-		conditions = append(conditions, `content LIKE ? ESCAPE '\'`)
-		params = append(params, `%`+strings.ReplaceAll(filter.Search, `%`, `\%`)+`%`)
+		escaped := strings.ReplaceAll(filter.Search, `%`, `\%`)
+		conditions = append(conditions, `(tags LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\')`)
+		params = append(params,
+			`%["name","%`+escaped+`%"]%`,
+			`%["url","%`+escaped+`%"]%`,
+		)
 	}
 
 	if len(conditions) == 0 {
