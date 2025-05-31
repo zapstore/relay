@@ -48,6 +48,11 @@ var ddls = []string{
        tags jsonb NOT NULL,
        content text NOT NULL,
        sig text NOT NULL);`,
+	`CREATE TABLE IF NOT EXISTS whitelist (
+       pubkey text NOT NULL,
+       level integer NOT NULL);`,
+	`CREATE TABLE IF NOT EXISTS logs (
+       log text NOT NULL);`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS ididx ON event(id)`,
 	`CREATE INDEX IF NOT EXISTS pubkeyprefix ON event(pubkey)`,
 	`CREATE INDEX IF NOT EXISTS timeidx ON event(created_at DESC)`,
@@ -112,6 +117,18 @@ func (b *SQLite3Backend) SaveEvent(ctx context.Context, evt *nostr.Event) error 
 
 	if nr == 0 {
 		return ErrDupEvent
+	}
+
+	return nil
+}
+
+func (b *SQLite3Backend) Savelog(ctx context.Context, log string) error {
+	_, err := b.DB.ExecContext(ctx, `
+        INSERT OR IGNORE INTO logs (log)
+        VALUES ($1)
+    `, log)
+	if err != nil {
+		return err
 	}
 
 	return nil

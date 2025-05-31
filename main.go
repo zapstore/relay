@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"regexp"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
@@ -14,6 +15,8 @@ var (
 	relay  *rely.Relay
 	db     SQLite3Backend
 	config Config
+
+	ghRegex = regexp.MustCompile(`https?://(www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/?`)
 )
 
 func main() {
@@ -72,13 +75,23 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 	evts := make([]nostr.Event, 0)
 
 	for _, f := range filters {
+		c := 0
 		ch, err := db.QueryEvents(context.Background(), f)
 		if err != nil {
 			return nil, err
 		}
 
 		for e := range ch {
+			c++
 			evts = append(evts, *e)
+		}
+
+		if c == 0 {
+			if f.Search != "" {
+				if ghRegex.MatchString(f.Search) {
+					// index the repo
+				}
+			}
 		}
 	}
 
