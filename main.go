@@ -6,14 +6,13 @@ import (
 	"log"
 	"path"
 
-	"github.com/fiatjaf/eventstore/sqlite3"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
 )
 
 var (
 	relay  *rely.Relay
-	db     sqlite3.SQLite3Backend
+	db     SQLite3Backend
 	config Config
 )
 
@@ -29,7 +28,7 @@ func main() {
 
 	relay = rely.NewRelay(rely.WithDomain(config.RelayURL))
 
-	db = sqlite3.SQLite3Backend{
+	db = SQLite3Backend{
 		DatabaseURL: path.Join(config.WorkingDirectory, "database"),
 	}
 
