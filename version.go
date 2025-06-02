@@ -11,7 +11,7 @@ var (
 	meta  = "beta"
 )
 
-func StringVersion() string {
+func version() string {
 	v := fmt.Sprintf("Relay - %d.%d.%d", major, minor, patch)
 
 	if meta != "" {

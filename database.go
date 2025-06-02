@@ -11,8 +11,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
-	"github.com/nbd-wtf/go-nostr"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nbd-wtf/go-nostr"
 )
 
 type SQLite3Backend struct {
@@ -332,4 +332,18 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter, doCount bool) (strin
 	}
 
 	return query, params, nil
+}
+
+func (b *SQLite3Backend) GetWhitelistLevel(ctx context.Context, pubkey string) (int, error) {
+	var level int
+	err := b.DB.GetContext(ctx, &level, `
+        SELECT level FROM whitelist WHERE pubkey = ?
+    `, pubkey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return level, nil
 }

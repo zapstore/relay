@@ -21,13 +21,19 @@ var (
 
 func main() {
 	log.SetPrefix("Relay ")
-	log.Printf("Running %s\n", StringVersion())
+	log.Printf("Running %s\n", version())
 
 	LoadConfig()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go rely.HandleSignals(cancel)
+
+	if !pathExists(config.WorkingDirectory) {
+		if err := mkdir(config.WorkingDirectory); err != nil {
+			log.Fatalf("can't make a working directory: %v\n", err)
+		}
+	}
 
 	relay = rely.NewRelay(rely.WithDomain(config.RelayURL))
 
@@ -39,11 +45,7 @@ func main() {
 		log.Fatalf("can't init database: %v", err)
 	}
 
-	// Rejects
 	relay.RejectEvent = append(relay.RejectEvent, rejectEvent)
-	relay.RejectReq = append(relay.RejectReq, rejectReq)
-
-	// Logics
 	relay.OnEvent = onEvent
 	relay.OnReq = onReq
 
@@ -86,10 +88,12 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 			evts = append(evts, *e)
 		}
 
+		// We had a search query with github link, but we didn't had a result.
+		// We try to index it.
 		if c == 0 {
 			if f.Search != "" {
 				if ghRegex.MatchString(f.Search) {
-					// index the repo
+					publishApp(f.Search)
 				}
 			}
 		}

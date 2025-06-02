@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"os"
 	"os/exec"
+	"path"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -16,7 +16,7 @@ type PubApp struct {
 	Repository string `yaml:"repository"`
 }
 
-func PublishApp(r string) {
+func publishApp(r string) {
 	data, err := yaml.Marshal(&PubApp{
 		Repository: r,
 	})
@@ -31,13 +31,14 @@ func PublishApp(r string) {
 		return
 	}
 
-	err = os.WriteFile(name, data, 0o644)
+	fpath := path.Join(config.WorkingDirectory, name)
+	err = writeFile(fpath, data)
 	if err != nil {
 		log.Println("Error writing YAML file:", err)
 		return
 	}
 
-	out, code, err := runCLI("zapstore-cli", "publish", "-c", name)
+	out, code, err := runCLI("zapstore-cli", "publish", "-c", fpath)
 	if err != nil {
 		log.Println("Error running cli:", err)
 		return
@@ -49,12 +50,8 @@ func PublishApp(r string) {
 		}
 	}
 
-	if code == 2 {
-		// add nothing to index in database
-	}
-
 	if code == 0 {
-		// successful.
+		log.Printf("New software indexed: %s\n", r)
 	}
 }
 
