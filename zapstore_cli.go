@@ -41,7 +41,7 @@ func publishApp(repository string) {
 		return
 	}
 
-	out, code, err := runCLI("zapstore-cli", "--no-auto-update", "publish", "-c", fpath)
+	out, code, err := runCLI("zapstore-cli", "--no-auto-update", "publish", "-c", fpath, "--daemon-mode")
 	if err != nil {
 		log.Println("Error running cli:", err)
 		return
