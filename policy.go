@@ -19,31 +19,31 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 
 	if level == 0 && e.PubKey != config.RelayPubkey {
 		if (e.Kind != 4) && (e.Kind != 30267) {
-			return fmt.Errorf("blocked: kind %d is not accepted from public", e.Kind)
+			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
 		}
 	}
 
-	// Developer
+	// User (level 1)
 	if level == 1 && e.PubKey != config.RelayPubkey {
+		if (e.Kind != 1) && (e.Kind != 1111) && (e.Kind != 4) && (e.Kind != 30267) {
+			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
+		}
+	}
+
+	// Developer (level 2)
+	if level == 2 && e.PubKey != config.RelayPubkey {
 		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
 			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) {
-			return fmt.Errorf("blocked: kind %d is not accepted from devs", e.Kind)
+			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
 		}
 	}
 
-	// User
-	if level == 2 && e.PubKey != config.RelayPubkey {
-		if (e.Kind != 1) && (e.Kind != 1111) && (e.Kind != 4) && (e.Kind != 30267) {
-			return fmt.Errorf("blocked: kind %d is not accepted from users", e.Kind)
-		}
-	}
-
-	// User + Dev
+	// User + Developer (level 3)
 	if level == 3 && e.PubKey != config.RelayPubkey {
 		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
 			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) &&
 			(e.Kind != 1) && (e.Kind != 1111) {
-			return fmt.Errorf("blocked: kind %d is not accepted from devs and users", e.Kind)
+			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
 		}
 	}
 
