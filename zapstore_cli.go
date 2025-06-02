@@ -12,13 +12,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type PubApp struct {
-	Repository string `yaml:"repository"`
+type ZapstoreConfig struct {
+	Repository string   `yaml:"repository"`
+	Assets     []string `yaml:"assets"`
 }
 
 func publishApp(r string) {
-	data, err := yaml.Marshal(&PubApp{
+	data, err := yaml.Marshal(&ZapstoreConfig{
 		Repository: r,
+		Assets:     []string{".*.apk"},
 	})
 	if err != nil {
 		log.Println("Error marshaling YAML:", err)
