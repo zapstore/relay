@@ -18,9 +18,9 @@ type ZapstoreConfig struct {
 	Assets     []string `yaml:"assets"`
 }
 
-func publishApp(repository string) {
+func publishApp(repository *url.URL) {
 	data, err := yaml.Marshal(&ZapstoreConfig{
-		Repository: repository,
+		Repository: strings.Trim(repository.String(), "/"),
 		Assets:     []string{".*.apk"},
 	})
 	if err != nil {
@@ -28,7 +28,7 @@ func publishApp(repository string) {
 		return
 	}
 
-	name, err := githubURLToYAML(repository)
+	name, err := getYamlFileName(repository)
 	if err != nil {
 		log.Println("Error parsing the name:", err)
 		return
@@ -81,17 +81,21 @@ func runCLI(name string, args ...string) (string, int, error) {
 	return output, exitCode, nil
 }
 
-func githubURLToYAML(githubUrl string) (string, error) {
-	parsedURL, err := url.Parse(githubUrl)
+func getGithubURL(s string) (*url.URL, error) {
+	parsedUrl, err := url.Parse(s)
+	segments := strings.Split(strings.TrimSuffix(parsedUrl.Path, "/"), "/")
+	if len(segments) != 2 {
+		return nil, fmt.Errorf("URL does not contain exactly user and repo")
+	}
+
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %v", err)
+		return nil, err
 	}
+	return parsedUrl, nil
+}
 
-	segments := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
-	if len(segments) < 2 {
-		return "", fmt.Errorf("URL does not contain user and repo")
-	}
-
+func getYamlFileName(githubUrl *url.URL) (string, error) {
+	segments := strings.Split(githubUrl.Path, "/")
 	user := segments[0]
 	repo := segments[1]
 

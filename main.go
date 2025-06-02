@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"path"
-	"regexp"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
@@ -15,8 +14,6 @@ var (
 	relay  *rely.Relay
 	db     SQLite3Backend
 	config Config
-
-	ghRegex = regexp.MustCompile(`https?://(www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/?`)
 )
 
 func main() {
@@ -90,12 +87,14 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 
 		// We had a search query with github link, but we didn't had a result.
 		// We try to index it.
-		if c == 0 {
-			if f.Search != "" {
-				if ghRegex.MatchString(f.Search) {
-					publishApp(f.Search)
-				}
+		if c == 0 && f.Search != "" {
+			parsedUrl, err := getGithubURL(f.Search)
+			if err != nil {
+				// If err just ignore
+				return evts, nil
 			}
+			publishApp(parsedUrl)
+			// TODO: Query again here
 		}
 	}
 
