@@ -17,9 +17,9 @@ type ZapstoreConfig struct {
 	Assets     []string `yaml:"assets"`
 }
 
-func publishApp(r string) {
+func publishApp(repository string) {
 	data, err := yaml.Marshal(&ZapstoreConfig{
-		Repository: r,
+		Repository: repository,
 		Assets:     []string{".*.apk"},
 	})
 	if err != nil {
@@ -27,7 +27,7 @@ func publishApp(r string) {
 		return
 	}
 
-	name, err := githubURLToYAML(r)
+	name, err := githubURLToYAML(repository)
 	if err != nil {
 		log.Println("Error parsing the name:", err)
 		return
@@ -53,7 +53,7 @@ func publishApp(r string) {
 	}
 
 	if code == 0 {
-		log.Printf("New software indexed: %s\n", r)
+		log.Printf("New software indexed: %s\n", repository)
 	}
 }
 
@@ -76,8 +76,8 @@ func runCLI(name string, args ...string) (string, int, error) {
 	return output, exitCode, nil
 }
 
-func githubURLToYAML(gurl string) (string, error) {
-	parsedURL, err := url.Parse(gurl)
+func githubURLToYAML(githubUrl string) (string, error) {
+	parsedURL, err := url.Parse(githubUrl)
 	if err != nil {
 		return "", fmt.Errorf("invalid URL: %v", err)
 	}

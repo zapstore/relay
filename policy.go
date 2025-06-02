@@ -17,21 +17,25 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 		return errors.New("internal: reading from database")
 	}
 
-	if level == 0 && e.PubKey != config.RelayPubkey {
-		if (e.Kind != 4) && (e.Kind != 30267) {
+	if e.PubKey == config.RelayPubkey {
+		return nil
+	}
+
+	if level == 0 {
+		if (e.Kind != 4) && (e.Kind != 30267) && (e.Kind != 24133) {
 			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
 		}
 	}
 
 	// User (level 1)
-	if level == 1 && e.PubKey != config.RelayPubkey {
+	if level == 1 {
 		if (e.Kind != 1) && (e.Kind != 1111) && (e.Kind != 4) && (e.Kind != 30267) {
 			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
 		}
 	}
 
 	// Developer (level 2)
-	if level == 2 && e.PubKey != config.RelayPubkey {
+	if level == 2 {
 		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
 			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) {
 			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
@@ -39,7 +43,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 	}
 
 	// User + Developer (level 3)
-	if level == 3 && e.PubKey != config.RelayPubkey {
+	if level == 3 {
 		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
 			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) &&
 			(e.Kind != 1) && (e.Kind != 1111) {
@@ -47,7 +51,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 		}
 	}
 
-	if e.Kind == 4 && e.PubKey != config.RelayPubkey {
+	if e.Kind == 4 {
 		for _, t := range e.Tags {
 			if len(t) < 2 {
 				continue
