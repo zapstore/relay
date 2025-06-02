@@ -90,6 +90,7 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 		if c == 0 && f.Search != "" {
 			parsedUrl, err := getGithubURL(f.Search)
 			if err != nil {
+				log.Printf("Error was %s", err)
 				// If err just ignore
 				return evts, nil
 			}

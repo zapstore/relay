@@ -43,7 +43,7 @@ func publishApp(repository *url.URL) {
 
 	log.Printf("About to index %s", fpath)
 	out, code, err := runCLI("zapstore-cli", "--no-auto-update", "publish", "-c", fpath, "--daemon-mode")
-	log.Printf("Got result %s and code %s", out, code)
+	log.Printf("Got result %s", out)
 
 	if err != nil {
 		log.Println("Error running cli:", err)
@@ -84,6 +84,7 @@ func runCLI(name string, args ...string) (string, int, error) {
 func getGithubURL(s string) (*url.URL, error) {
 	parsedUrl, err := url.Parse(s)
 	segments := strings.Split(strings.TrimSuffix(parsedUrl.Path, "/"), "/")
+
 	if len(segments) != 2 {
 		return nil, fmt.Errorf("URL does not contain exactly user and repo")
 	}
