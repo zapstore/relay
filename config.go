@@ -2,27 +2,40 @@ package main
 
 import (
 	"log"
+	"os"
 
-	"github.com/kelseyhightower/envconfig"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	RelayName        string `envconfig:"RELAY_NAME"`
-	RelayPubkey      string `envconfig:"RELAY_PUBKEY"`
-	RelayDescription string `envconfig:"RELAY_DESCRIPTION"`
-	RelayURL         string `envconfig:"RELAY_URL"`
-	RelayContact     string `envconfig:"RELAY_CONTACT"`
-	RelayIcon        string `envconfig:"RELAY_ICON"`
-	RelayBanner      string `envconfig:"RELAY_BANNER"`
+	RelayName        string
+	RelayPubkey      string
+	RelayDescription string
+	RelayURL         string
+	RelayContact     string
+	RelayIcon        string
+	RelayBanner      string
 
-	WorkingDirectory string `envconfig:"WORKING_DIR"`
+	WorkingDirectory string
 
-	RelayPort string `envconfig:"RELAY_PORT"`
+	RelayPort string
 }
 
 func LoadConfig() {
-	if err := envconfig.Process("", &config); err != nil {
-		log.Fatalf("failed to read from env: %s", err)
-		return
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	config = Config{
+		RelayName:        os.Getenv("RELAY_NAME"),
+		RelayPubkey:      os.Getenv("RELAY_PUBKEY"),
+		RelayDescription: os.Getenv("RELAY_DESCRIPTION"),
+		RelayURL:         os.Getenv("RELAY_URL"),
+		RelayContact:     os.Getenv("RELAY_CONTACT"),
+		RelayIcon:        os.Getenv("RELAY_ICON"),
+		RelayBanner:      os.Getenv("RELAY_BANNER"),
+		WorkingDirectory: os.Getenv("WORKING_DIR"),
+		RelayPort:        os.Getenv("RELAY_PORT"),
 	}
 }

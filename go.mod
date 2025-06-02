@@ -5,11 +5,13 @@ go 1.24.1
 toolchain go1.24.3
 
 require (
-	github.com/mattn/go-sqlite3 v1.14.24
-	github.com/nbd-wtf/go-nostr v0.51.11
-	github.com/pippellia-btc/rely v0.6.0
+	github.com/mattn/go-sqlite3 v1.14.28
+	github.com/nbd-wtf/go-nostr v0.51.12
+	github.com/pippellia-btc/rely v0.6.1
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+require github.com/joho/godotenv v1.5.1 // indirect
 
 require (
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect
@@ -36,6 +38,6 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	golang.org/x/arch v0.17.0 // indirect
-	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
+	golang.org/x/exp v0.0.0-20250531010427-b6e5de432a8b // indirect
 	golang.org/x/sys v0.33.0 // indirect
 )
