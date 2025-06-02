@@ -22,7 +22,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 	}
 
 	if level == 0 {
-		if (e.Kind != 4) && (e.Kind != 30267) && (e.Kind != 24133) {
+		if (e.Kind != 4) && (e.Kind != 30267) {
 			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
 		}
 	}
@@ -30,7 +30,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 	// User (level 1)
 	if level == 1 {
 		if (e.Kind != 1) && (e.Kind != 1111) && (e.Kind != 4) && (e.Kind != 30267) {
-			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
+			return fmt.Errorf("blocked: you must be a member to publish")
 		}
 	}
 
@@ -38,7 +38,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 	if level == 2 {
 		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
 			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) {
-			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
+			return fmt.Errorf("blocked: you must be whitelisted to publish")
 		}
 	}
 
@@ -47,7 +47,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
 			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) &&
 			(e.Kind != 1) && (e.Kind != 1111) {
-			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
+			return fmt.Errorf("blocked: you must be whitelisted to publish")
 		}
 	}
 
@@ -62,7 +62,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 			}
 
 			if t[1] != config.RelayPubkey {
-				return errors.New("blocked: only DMs to relay pubkey is accepted")
+				return errors.New("blocked: unsupported kind")
 			}
 		}
 	}
