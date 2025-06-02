@@ -86,7 +86,7 @@ func getGithubURL(s string) (*url.URL, error) {
 	segments := strings.Split(strings.TrimSuffix(parsedUrl.Path, "/"), "/")
 
 	if len(segments) != 2 {
-		return nil, fmt.Errorf("URL does not contain exactly user and repo")
+		return nil, fmt.Errorf("URL does not contain exactly user and repo %s", segments)
 	}
 
 	if err != nil {
