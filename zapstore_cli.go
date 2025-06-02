@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"os/exec"
 	"path"
 	"strings"
@@ -59,6 +60,7 @@ func publishApp(repository string) {
 
 func runCLI(name string, args ...string) (string, int, error) {
 	cmd := exec.Command(name, args...)
+	cmd.Env = os.Environ()
 
 	outBytes, err := cmd.CombinedOutput()
 	output := string(outBytes)
