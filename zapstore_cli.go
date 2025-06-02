@@ -40,7 +40,7 @@ func publishApp(r string) {
 		return
 	}
 
-	out, code, err := runCLI("zapstore-cli", "publish", "-c", fpath)
+	out, code, err := runCLI("zapstore-cli", "--no-auto-update", "publish", "-c", fpath)
 	if err != nil {
 		log.Println("Error running cli:", err)
 		return
