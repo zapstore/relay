@@ -5,11 +5,11 @@ go 1.24.1
 toolchain go1.24.3
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/nbd-wtf/go-nostr v0.51.11
 	github.com/pippellia-btc/rely v0.6.0
+	gopkg.in/yaml.v3 v3.0.1
 )
-
-require gopkg.in/yaml.v3 v3.0.1
 
 require (
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect

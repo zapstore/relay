@@ -12,6 +12,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
 	"github.com/nbd-wtf/go-nostr"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type SQLite3Backend struct {
