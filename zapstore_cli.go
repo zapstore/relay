@@ -83,7 +83,9 @@ func runCLI(name string, args ...string) (string, int, error) {
 
 func getGithubURL(s string) (*url.URL, error) {
 	parsedUrl, err := url.Parse(s)
-	segments := strings.Split(strings.Trim(parsedUrl.Path, "/"), "/")
+	trimmedUrl := strings.Trim(parsedUrl.Path, "/")
+	segments := strings.Split(trimmedUrl, "/")
+	log.Printf("Trimmed %s and segments %s", trimmedUrl, segments)
 
 	if len(segments) != 2 {
 		return nil, fmt.Errorf("URL does not contain exactly user and repo %s", segments)
