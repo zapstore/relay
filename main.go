@@ -73,7 +73,6 @@ func onEvent(_ rely.Client, e *nostr.Event) error {
 func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.Event, error) {
 	evts := make([]nostr.Event, 0)
 
-query:
 	for _, f := range filters {
 		c := 0
 		ch, err := db.QueryEvents(context.Background(), f)
@@ -95,9 +94,17 @@ query:
 				// If err just ignore
 				return evts, nil
 			}
-			
+
 			if success := publishApp(parsedUrl); success {
-				break query
+				ch, err := db.QueryEvents(context.Background(), f)
+				if err != nil {
+					return nil, err
+				}
+
+				for e := range ch {
+					evts = append(evts, *e)
+				}
+
 			}
 		}
 	}
