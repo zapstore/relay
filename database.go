@@ -42,30 +42,48 @@ const (
 
 var ddls = []string{
 	`CREATE TABLE IF NOT EXISTS event (
-       id text NOT NULL,
-       pubkey text NOT NULL,
-       created_at integer NOT NULL,
-       kind integer NOT NULL,
-       tags jsonb NOT NULL,
-       content text NOT NULL,
-       sig text NOT NULL);`,
+		id TEXT NOT NULL PRIMARY KEY,
+		pubkey TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		kind INTEGER NOT NULL,
+		tags JSON NOT NULL,
+		content TEXT NOT NULL,
+		sig TEXT NOT NULL
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_event_pubkey ON event(pubkey);`,
+	`CREATE INDEX IF NOT EXISTS idx_event_time ON event(created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_event_kind ON event(kind);`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS events_fts
+	USING fts5(text,
+	          content='',
+	          tokenize = 'trigram',
+	          contentless_delete = 1
+	);`,
+	`CREATE TRIGGER IF NOT EXISTS trg_event_ai AFTER INSERT ON event
+	BEGIN
+	  INSERT INTO events_fts(rowid, text)
+	    SELECT
+	      new.rowid AS rowid,
+	      new.content AS text
+	    WHERE new.kind = 1063 OR new.kind = 32267;
+
+	  INSERT INTO events_fts(rowid, text)
+	    SELECT
+	      new.rowid AS rowid,
+	      GROUP_CONCAT(json_extract(j.value, '$[1]'), ' ')
+	    FROM json_each(new.tags) AS j
+	    WHERE json_extract(j.value, '$[0]')
+	      IN ('url', 'title', 'description', 'name', 'summary', 'alt', 't', 'd', 'f');
+	END;`,
+	`CREATE TRIGGER IF NOT EXISTS trg_event_ad AFTER DELETE ON event
+	BEGIN
+	  DELETE FROM events_fts WHERE rowid = old.rowid;
+	END;`,
 	`CREATE TABLE IF NOT EXISTS whitelist (
        pubkey text NOT NULL,
        level integer NOT NULL);`,
 	`CREATE TABLE IF NOT EXISTS logs (
        log text NOT NULL);`,
-
-	// FTS5: index “id” + “tags” so that we can search inside the JSON quickly
-	`CREATE VIRTUAL TABLE IF NOT EXISTS event_fts USING fts5(
-        id,
-        tags,
-        tokenize = 'unicode61'  -- default tokenizer
-    );`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ididx ON event(id)`,
-	`CREATE INDEX IF NOT EXISTS pubkeyprefix ON event(pubkey)`,
-	`CREATE INDEX IF NOT EXISTS timeidx ON event(created_at DESC)`,
-	`CREATE INDEX IF NOT EXISTS kindidx ON event(kind)`,
-	`CREATE INDEX IF NOT EXISTS kindtimeidx ON event(kind,created_at DESC)`,
 }
 
 func (b *SQLite3Backend) Init() error {
@@ -106,9 +124,6 @@ func (b SQLite3Backend) DeleteEvent(ctx context.Context, evt *nostr.Event) error
 	if _, err := b.DB.ExecContext(ctx, `DELETE FROM event WHERE id = ?`, evt.ID); err != nil {
 		return err
 	}
-	if _, err := b.DB.ExecContext(ctx, `DELETE FROM event_fts WHERE id = ?`, evt.ID); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -128,25 +143,6 @@ func (b *SQLite3Backend) SaveEvent(ctx context.Context, evt *nostr.Event) error 
 
 	if rowsAffected == 0 {
 		return ErrDupEvent
-	}
-
-	ftstags := make(nostr.Tags, 0)
-	for _, t := range evt.Tags {
-		if len(t) < 2 {
-			continue
-		}
-
-		if t[0] == "name" || t[0] == "url" {
-			ftstags = append(ftstags, t)
-		}
-	}
-
-	tagsjfts, _ := json.Marshal(ftstags)
-
-	if _, err := b.DB.ExecContext(ctx, `
-        INSERT INTO event_fts (id, tags) VALUES (?, ?);
-    `, evt.ID, string(tagsjfts)); err != nil {
-		return err
 	}
 
 	return nil
@@ -251,19 +247,17 @@ func makePlaceHolders(n int) string {
 }
 
 func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, error) {
-	conditions := make([]string, 0, 10)
-	params := make([]any, 0, 20)
-
-	joinFTS := false
+	conditions := []string{}
+	params := []any{}
 
 	if len(filter.IDs) > 0 {
 		if len(filter.IDs) > b.QueryIDsLimit {
 			return "", nil, TooManyIDs
 		}
-		ph := makePlaceHolders(len(filter.IDs))
-		conditions = append(conditions, fmt.Sprintf("e.id IN (%s)", ph))
-		for _, v := range filter.IDs {
-			params = append(params, v)
+		place := makePlaceHolders(len(filter.IDs))
+		conditions = append(conditions, "event.id IN ("+place+")")
+		for _, id := range filter.IDs {
+			params = append(params, id)
 		}
 	}
 
@@ -271,10 +265,10 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 		if len(filter.Authors) > b.QueryAuthorsLimit {
 			return "", nil, TooManyAuthors
 		}
-		ph := makePlaceHolders(len(filter.Authors))
-		conditions = append(conditions, fmt.Sprintf("e.pubkey IN (%s)", ph))
-		for _, v := range filter.Authors {
-			params = append(params, v)
+		place := makePlaceHolders(len(filter.Authors))
+		conditions = append(conditions, "event.pubkey IN ("+place+")")
+		for _, a := range filter.Authors {
+			params = append(params, a)
 		}
 	}
 
@@ -282,10 +276,10 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 		if len(filter.Kinds) > b.QueryKindsLimit {
 			return "", nil, TooManyKinds
 		}
-		ph := makePlaceHolders(len(filter.Kinds))
-		conditions = append(conditions, fmt.Sprintf("e.kind IN (%s)", ph))
-		for _, v := range filter.Kinds {
-			params = append(params, v)
+		place := makePlaceHolders(len(filter.Kinds))
+		conditions = append(conditions, "event.kind IN ("+place+")")
+		for _, k := range filter.Kinds {
+			params = append(params, k)
 		}
 	}
 
@@ -294,12 +288,13 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 		if len(values) == 0 {
 			return "", nil, EmptyTagSet
 		}
-		orTag := make([]string, len(values))
-		for i, tv := range values {
-			orTag[i] = "e.tags LIKE ? ESCAPE '\\'"
-			params = append(params, "%"+strings.ReplaceAll(tv, "%", "\\%")+"%")
+		orTags := []string{}
+		for _, tagVal := range values {
+			orTags = append(orTags, `event.tags LIKE ? ESCAPE '\'`)
+			escaped := "%" + strings.ReplaceAll(tagVal, `%`, `\%`) + "%"
+			params = append(params, escaped)
 		}
-		conditions = append(conditions, "("+strings.Join(orTag, " OR ")+")")
+		conditions = append(conditions, "("+strings.Join(orTags, " OR ")+")")
 		totalTags += len(values)
 		if totalTags > b.QueryTagsLimit {
 			return "", nil, TooManyTagValues
@@ -307,52 +302,42 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 	}
 
 	if filter.Since != nil {
-		conditions = append(conditions, "e.created_at >= ?")
+		conditions = append(conditions, "event.created_at >= ?")
 		params = append(params, filter.Since)
 	}
 	if filter.Until != nil {
-		conditions = append(conditions, "e.created_at <= ?")
+		conditions = append(conditions, "event.created_at <= ?")
 		params = append(params, filter.Until)
 	}
 
 	if filter.Search != "" {
-		joinFTS = true
-		conditions = append(conditions, "event_fts MATCH ?")
+		conditions = append(conditions, "event.rowid IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)")
 		params = append(params, filter.Search)
 	}
 
-	// Fallback if no WHERE clause
 	if len(conditions) == 0 {
-		conditions = append(conditions, "1=1")
+		conditions = append(conditions, "1")
 	}
 
-	limit := b.QueryLimit
+	limitVal := b.QueryLimit
 	if filter.Limit >= 1 && filter.Limit <= b.QueryLimit {
-		limit = filter.Limit
+		limitVal = filter.Limit
 	}
-	params = append(params, limit)
+	params = append(params, limitVal)
 
-	var query string
-	if joinFTS {
-		query = fmt.Sprintf(`
-                SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-                  FROM event AS e
-                  JOIN event_fts ON event_fts.id = e.id
-                 WHERE %s
-              ORDER BY e.created_at DESC, e.id
-                 LIMIT ?
-            `, strings.Join(conditions, " AND "))
-	} else {
-		query = fmt.Sprintf(`
-                SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-                  FROM event AS e
-                 WHERE %s
-              ORDER BY e.created_at DESC, e.id
-                 LIMIT ?
-            `, strings.Join(conditions, " AND "))
-	}
+	var sqlStr string
 
-	return query, params, nil
+	sqlStr = fmt.Sprintf(
+		`SELECT id, pubkey, created_at, kind, tags, content, sig
+			   FROM event
+			  WHERE %s
+			  ORDER BY created_at DESC, id
+			  LIMIT ?`,
+		strings.Join(conditions, " AND "),
+	)
+
+	sqlStr = sqlx.Rebind(sqlx.BindType("sqlite3"), sqlStr)
+	return sqlStr, params, nil
 }
 
 func (b *SQLite3Backend) GetWhitelistLevel(ctx context.Context, pubkey string) (int, error) {
