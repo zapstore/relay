@@ -35,7 +35,7 @@ func main() {
 	relay = rely.NewRelay(rely.WithDomain(config.RelayURL))
 
 	db = SQLite3Backend{
-		DatabaseURL: path.Join(config.WorkingDirectory, "database"),
+		DatabaseURL: path.Join(config.WorkingDirectory, "database.sqlite"),
 	}
 
 	if err := db.Init(); err != nil {

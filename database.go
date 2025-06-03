@@ -54,6 +54,13 @@ var ddls = []string{
        level integer NOT NULL);`,
 	`CREATE TABLE IF NOT EXISTS logs (
        log text NOT NULL);`,
+
+	// FTS5: index “id” + “tags” so that we can search inside the JSON quickly
+	`CREATE VIRTUAL TABLE IF NOT EXISTS event_fts USING fts5(
+        id,
+        tags,
+        tokenize = 'unicode61'  -- default tokenizer
+    );`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS ididx ON event(id)`,
 	`CREATE INDEX IF NOT EXISTS pubkeyprefix ON event(pubkey)`,
 	`CREATE INDEX IF NOT EXISTS timeidx ON event(created_at DESC)`,
@@ -96,28 +103,50 @@ func (b *SQLite3Backend) Init() error {
 }
 
 func (b SQLite3Backend) DeleteEvent(ctx context.Context, evt *nostr.Event) error {
-	_, err := b.DB.ExecContext(ctx, "DELETE FROM event WHERE id = $1", evt.ID)
-	return err
+	if _, err := b.DB.ExecContext(ctx, `DELETE FROM event WHERE id = ?`, evt.ID); err != nil {
+		return err
+	}
+	if _, err := b.DB.ExecContext(ctx, `DELETE FROM event_fts WHERE id = ?`, evt.ID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *SQLite3Backend) SaveEvent(ctx context.Context, evt *nostr.Event) error {
-	// insert
 	tagsj, _ := json.Marshal(evt.Tags)
 	res, err := b.DB.ExecContext(ctx, `
         INSERT OR IGNORE INTO event (id, pubkey, created_at, kind, tags, content, sig)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES (?, ?, ?, ?, ?, ?, ?);
     `, evt.ID, evt.PubKey, evt.CreatedAt, evt.Kind, tagsj, evt.Content, evt.Sig)
 	if err != nil {
 		return err
 	}
-
-	nr, err := res.RowsAffected()
+	rowsAffected, err := res.RowsAffected()
 	if err != nil {
 		return err
 	}
 
-	if nr == 0 {
+	if rowsAffected == 0 {
 		return ErrDupEvent
+	}
+
+	ftstags := make(nostr.Tags, 0)
+	for _, t := range evt.Tags {
+		if len(t) < 2 {
+			continue
+		}
+
+		if t[0] == "name" || t[0] == "url" {
+			ftstags = append(ftstags, t)
+		}
+	}
+
+	tagsjfts, _ := json.Marshal(ftstags)
+
+	if _, err := b.DB.ExecContext(ctx, `
+        INSERT INTO event_fts (id, tags) VALUES (?, ?);
+    `, evt.ID, string(tagsjfts)); err != nil {
+		return err
 	}
 
 	return nil
@@ -175,7 +204,7 @@ func IsOlder(previous, next *nostr.Event) bool {
 }
 
 func (b SQLite3Backend) QueryEvents(ctx context.Context, filter nostr.Filter) (ch chan *nostr.Event, err error) {
-	query, params, err := b.queryEventsSql(filter, false)
+	query, params, err := b.queryEventsSql(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -221,114 +250,106 @@ func makePlaceHolders(n int) string {
 	return strings.TrimRight(strings.Repeat("?,", n), ",")
 }
 
-func (b SQLite3Backend) queryEventsSql(filter nostr.Filter, doCount bool) (string, []any, error) {
-	conditions := make([]string, 0, 7)
+func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, error) {
+	conditions := make([]string, 0, 10)
 	params := make([]any, 0, 20)
 
+	joinFTS := false
+
 	if len(filter.IDs) > 0 {
-		if len(filter.IDs) > 500 {
-			// too many ids, fail everything
+		if len(filter.IDs) > b.QueryIDsLimit {
 			return "", nil, TooManyIDs
 		}
-
+		ph := makePlaceHolders(len(filter.IDs))
+		conditions = append(conditions, fmt.Sprintf("e.id IN (%s)", ph))
 		for _, v := range filter.IDs {
 			params = append(params, v)
 		}
-		conditions = append(conditions, `id IN (`+makePlaceHolders(len(filter.IDs))+`)`)
 	}
 
 	if len(filter.Authors) > 0 {
 		if len(filter.Authors) > b.QueryAuthorsLimit {
-			// too many authors, fail everything
 			return "", nil, TooManyAuthors
 		}
-
+		ph := makePlaceHolders(len(filter.Authors))
+		conditions = append(conditions, fmt.Sprintf("e.pubkey IN (%s)", ph))
 		for _, v := range filter.Authors {
 			params = append(params, v)
 		}
-		conditions = append(conditions, `pubkey IN (`+makePlaceHolders(len(filter.Authors))+`)`)
 	}
 
 	if len(filter.Kinds) > 0 {
-		if len(filter.Kinds) > 10 {
-			// too many kinds, fail everything
+		if len(filter.Kinds) > b.QueryKindsLimit {
 			return "", nil, TooManyKinds
 		}
-
+		ph := makePlaceHolders(len(filter.Kinds))
+		conditions = append(conditions, fmt.Sprintf("e.kind IN (%s)", ph))
 		for _, v := range filter.Kinds {
 			params = append(params, v)
 		}
-		conditions = append(conditions, `kind IN (`+makePlaceHolders(len(filter.Kinds))+`)`)
 	}
 
-	// tags
 	totalTags := 0
-	// we use a very bad implementation in which we only check the tag values and ignore the tag names
 	for _, values := range filter.Tags {
 		if len(values) == 0 {
-			// any tag set to [] is wrong
 			return "", nil, EmptyTagSet
 		}
-
 		orTag := make([]string, len(values))
-		for i, tagValue := range values {
-			orTag[i] = `tags LIKE ? ESCAPE '\'`
-			params = append(params, `%`+strings.ReplaceAll(tagValue, `%`, `\%`)+`%`)
+		for i, tv := range values {
+			orTag[i] = "e.tags LIKE ? ESCAPE '\\'"
+			params = append(params, "%"+strings.ReplaceAll(tv, "%", "\\%")+"%")
 		}
-
-		// each separate tag key is an independent condition
-		conditions = append(conditions, "("+strings.Join(orTag, "OR ")+")")
-
+		conditions = append(conditions, "("+strings.Join(orTag, " OR ")+")")
 		totalTags += len(values)
 		if totalTags > b.QueryTagsLimit {
-			// too many tags, fail everything
 			return "", nil, TooManyTagValues
 		}
 	}
 
 	if filter.Since != nil {
-		conditions = append(conditions, `created_at >= ?`)
+		conditions = append(conditions, "e.created_at >= ?")
 		params = append(params, filter.Since)
 	}
-
 	if filter.Until != nil {
-		conditions = append(conditions, `created_at <= ?`)
+		conditions = append(conditions, "e.created_at <= ?")
 		params = append(params, filter.Until)
 	}
 
 	if filter.Search != "" {
-		escaped := strings.ReplaceAll(filter.Search, `%`, `\%`)
-		conditions = append(conditions, `(tags LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\')`)
-		params = append(params,
-			`%["name","%`+escaped+`%"]%`,
-			`%["url","%`+escaped+`%"]%`,
-		)
+		joinFTS = true
+		conditions = append(conditions, "event_fts MATCH ?")
+		params = append(params, filter.Search)
 	}
 
+	// Fallback if no WHERE clause
 	if len(conditions) == 0 {
-		// fallback
-		conditions = append(conditions, `true`)
+		conditions = append(conditions, "1=1")
 	}
 
-	if filter.Limit < 1 || filter.Limit > b.QueryLimit {
-		params = append(params, b.QueryLimit)
-	} else {
-		params = append(params, filter.Limit)
+	limit := b.QueryLimit
+	if filter.Limit >= 1 && filter.Limit <= b.QueryLimit {
+		limit = filter.Limit
 	}
+	params = append(params, limit)
 
 	var query string
-	if doCount {
-		query = sqlx.Rebind(sqlx.BindType("sqlite3"), `SELECT
-          COUNT(*)
-        FROM event WHERE `+
-			strings.Join(conditions, " AND ")+
-			" LIMIT ?")
+	if joinFTS {
+		query = fmt.Sprintf(`
+                SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
+                  FROM event AS e
+                  JOIN event_fts ON event_fts.id = e.id
+                 WHERE %s
+              ORDER BY e.created_at DESC, e.id
+                 LIMIT ?
+            `, strings.Join(conditions, " AND "))
 	} else {
-		query = sqlx.Rebind(sqlx.BindType("sqlite3"), `SELECT
-          id, pubkey, created_at, kind, tags, content, sig
-        FROM event WHERE `+
-			strings.Join(conditions, " AND ")+
-			" ORDER BY created_at DESC, id LIMIT ?")
+		query = fmt.Sprintf(`
+                SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
+                  FROM event AS e
+                 WHERE %s
+              ORDER BY e.created_at DESC, e.id
+                 LIMIT ?
+            `, strings.Join(conditions, " AND "))
 	}
 
 	return query, params, nil
