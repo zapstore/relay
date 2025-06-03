@@ -18,27 +18,27 @@ type ZapstoreConfig struct {
 	Assets     []string `yaml:"assets"`
 }
 
-func publishApp(repository *url.URL) {
+func publishApp(repository *url.URL) bool {
 	data, err := yaml.Marshal(&ZapstoreConfig{
 		Repository: strings.Trim(repository.String(), "/"),
 		Assets:     []string{".*.apk"},
 	})
 	if err != nil {
 		log.Println("Error marshaling YAML:", err)
-		return
+		return false
 	}
 
 	name, err := getYamlFileName(repository)
 	if err != nil {
 		log.Println("Error parsing the name:", err)
-		return
+		return false
 	}
 
 	fpath := path.Join(config.WorkingDirectory, name)
 	err = writeFile(fpath, data)
 	if err != nil {
 		log.Println("Error writing YAML file:", err)
-		return
+		return false
 	}
 
 	log.Printf("About to index %s", fpath)
@@ -47,18 +47,22 @@ func publishApp(repository *url.URL) {
 
 	if err != nil {
 		log.Println("Error running cli:", err)
-		return
+		return false
 	}
 
 	if code == 1 {
 		if err := db.Savelog(context.Background(), out); err != nil {
 			log.Fatalln("Error writing log to database:", err)
 		}
+
+		return false
 	}
 
 	if code == 0 {
 		log.Printf("New software indexed: %s\n", repository)
 	}
+
+	return true
 }
 
 func runCLI(name string, args ...string) (string, int, error) {
