@@ -104,7 +104,6 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 				for e := range ch {
 					evts = append(evts, *e)
 				}
-
 			}
 		}
 	}
