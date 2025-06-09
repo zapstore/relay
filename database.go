@@ -32,14 +32,6 @@ func (b *SQLite3Backend) Close() {
 
 var ErrDupEvent = errors.New("duplicate: event already exists")
 
-const (
-	queryLimit        = 100
-	queryIDsLimit     = 500
-	queryAuthorsLimit = 500
-	queryKindsLimit   = 10
-	queryTagsLimit    = 10
-)
-
 var ddls = []string{
 	`CREATE TABLE IF NOT EXISTS event (
 		id TEXT NOT NULL PRIMARY KEY,
@@ -102,21 +94,6 @@ func (b *SQLite3Backend) Init() error {
 		}
 	}
 
-	if b.QueryLimit == 0 {
-		b.QueryLimit = queryLimit
-	}
-	if b.QueryIDsLimit == 0 {
-		b.QueryIDsLimit = queryIDsLimit
-	}
-	if b.QueryAuthorsLimit == 0 {
-		b.QueryAuthorsLimit = queryAuthorsLimit
-	}
-	if b.QueryKindsLimit == 0 {
-		b.QueryKindsLimit = queryKindsLimit
-	}
-	if b.QueryTagsLimit == 0 {
-		b.QueryTagsLimit = queryTagsLimit
-	}
 	return nil
 }
 
