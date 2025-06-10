@@ -261,7 +261,7 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 			return "", nil, errors.New("empty tag set")
 		}
 		if len(name) != 1 {
-			return "", nil, fmt.Errorf("tag %s is not indexable", name)
+			continue
 		}
 
 		placeholders := makePlaceHolders(len(values))
