@@ -3,3 +3,4 @@ relay
 database
 database.sqlite
 zapstore_wd/
+test/

@@ -18,12 +18,7 @@ import (
 type SQLite3Backend struct {
 	sync.Mutex
 	*sqlx.DB
-	DatabaseURL       string
-	QueryLimit        int
-	QueryIDsLimit     int
-	QueryAuthorsLimit int
-	QueryKindsLimit   int
-	QueryTagsLimit    int
+	DatabaseURL string
 }
 
 func (b *SQLite3Backend) Close() {
@@ -33,7 +28,10 @@ func (b *SQLite3Backend) Close() {
 var ErrDupEvent = errors.New("duplicate: event already exists")
 
 var ddls = []string{
-	`CREATE TABLE IF NOT EXISTS event (
+	`PRAGMA journal_mode = WAL;`,
+
+	// Main basic event table to keep actual events
+	`CREATE TABLE IF NOT EXISTS events (
 		id TEXT NOT NULL PRIMARY KEY,
 		pubkey TEXT NOT NULL,
 		created_at INTEGER NOT NULL,
@@ -42,35 +40,49 @@ var ddls = []string{
 		content TEXT NOT NULL,
 		sig TEXT NOT NULL
 	);`,
-	`CREATE INDEX IF NOT EXISTS idx_event_pubkey ON event(pubkey);`,
-	`CREATE INDEX IF NOT EXISTS idx_event_time ON event(created_at DESC);`,
-	`CREATE INDEX IF NOT EXISTS idx_event_kind ON event(kind);`,
+
+	// Index table for single-letter tags
+	`CREATE TABLE IF NOT EXISTS tags_index(
+    fid INTEGER NOT NULL, 
+    value TEXT NOT NULL,
+    FOREIGN KEY(fid) REFERENCES events(rowid) ON DELETE CASCADE
+  	);`,
+
+	// Creating indexes
+	`CREATE INDEX IF NOT EXISTS idx_event_pubkey ON events(pubkey);`,
+	`CREATE INDEX IF NOT EXISTS idx_event_time ON events(created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_event_kind ON events(kind);`,
+	`CREATE INDEX IF NOT EXISTS value_idx ON tags_index(value);`,
+
+	// Event FTS for NIP-50 search
 	`CREATE VIRTUAL TABLE IF NOT EXISTS events_fts
 	USING fts5(text,
 	          content='',
 	          tokenize = 'trigram',
 	          contentless_delete = 1
 	);`,
-	`CREATE TRIGGER IF NOT EXISTS trg_event_ai AFTER INSERT ON event
-	BEGIN
-	  INSERT INTO events_fts(rowid, text)
-	    SELECT
-	      new.rowid AS rowid,
-	      new.content AS text
-	    WHERE new.kind = 1063 OR new.kind = 32267;
 
-	  INSERT INTO events_fts(rowid, text)
-	    SELECT
-	      new.rowid AS rowid,
-	      GROUP_CONCAT(json_extract(j.value, '$[1]'), ' ')
-	    FROM json_each(new.tags) AS j
-	    WHERE json_extract(j.value, '$[0]')
-	      IN ('url', 'title', 'description', 'name', 'summary', 'alt', 't', 'd', 'f');
-	END;`,
-	`CREATE TRIGGER IF NOT EXISTS trg_event_ad AFTER DELETE ON event
-	BEGIN
-	  DELETE FROM events_fts WHERE rowid = old.rowid;
-	END;`,
+	// Indexing incoming events (content, tags) for NIP-50 search
+	`CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
+    INSERT INTO events_fts (rowid, text)
+      SELECT new.rowid, new.content as text
+        WHERE new.kind = 1063 OR new.kind = 32267;
+    INSERT INTO events_fts (rowid, text)
+      SELECT new.rowid, GROUP_CONCAT(json_extract(value, '$[1]'), ' ') as text
+        FROM json_each(new.tags)
+        WHERE json_extract(value, '$[0]') IN ('url', 'title', 'description', 'name', 'summary', 'alt', 't', 'd', 'f');
+    INSERT INTO tags_index (fid, value)
+      SELECT new.rowid, json_extract(value, '$[0]') || ':' || json_extract(value, '$[1]')
+        FROM json_each(new.tags)
+        WHERE LENGTH(json_extract(value, '$[0]')) = 1;
+  	END;`,
+
+	`CREATE TRIGGER IF NOT EXISTS event_ad AFTER DELETE ON events BEGIN
+    DELETE FROM events_fts WHERE rowid = old.rowid;
+    DELETE FROM tags_index WHERE fid = old.rowid;
+  END;`,
+
+	// White list and logs table: not related to Nostr specs
 	`CREATE TABLE IF NOT EXISTS whitelist (
        pubkey text NOT NULL,
        level integer NOT NULL);`,
@@ -98,7 +110,7 @@ func (b *SQLite3Backend) Init() error {
 }
 
 func (b SQLite3Backend) DeleteEvent(ctx context.Context, evt *nostr.Event) error {
-	if _, err := b.DB.ExecContext(ctx, `DELETE FROM event WHERE id = ?`, evt.ID); err != nil {
+	if _, err := b.DB.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, evt.ID); err != nil {
 		return err
 	}
 	return nil
@@ -107,7 +119,7 @@ func (b SQLite3Backend) DeleteEvent(ctx context.Context, evt *nostr.Event) error
 func (b *SQLite3Backend) SaveEvent(ctx context.Context, evt *nostr.Event) error {
 	tagsj, _ := json.Marshal(evt.Tags)
 	res, err := b.DB.ExecContext(ctx, `
-        INSERT OR IGNORE INTO event (id, pubkey, created_at, kind, tags, content, sig)
+        INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
         VALUES (?, ?, ?, ?, ?, ?, ?);
     `, evt.ID, evt.PubKey, evt.CreatedAt, evt.Kind, tagsj, evt.Content, evt.Sig)
 	if err != nil {
@@ -211,14 +223,6 @@ func (b SQLite3Backend) QueryEvents(ctx context.Context, filter nostr.Filter) (c
 	return ch, nil
 }
 
-var (
-	TooManyIDs       = errors.New("too many ids")
-	TooManyAuthors   = errors.New("too many authors")
-	TooManyKinds     = errors.New("too many kinds")
-	TooManyTagValues = errors.New("too many tag values")
-	EmptyTagSet      = errors.New("empty tag set")
-)
-
 func makePlaceHolders(n int) string {
 	return strings.TrimRight(strings.Repeat("?,", n), ",")
 }
@@ -228,67 +232,59 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 	params := []any{}
 
 	if len(filter.IDs) > 0 {
-		if len(filter.IDs) > b.QueryIDsLimit {
-			return "", nil, TooManyIDs
-		}
 		place := makePlaceHolders(len(filter.IDs))
-		conditions = append(conditions, "event.id IN ("+place+")")
+		conditions = append(conditions, "events.id IN ("+place+")")
 		for _, id := range filter.IDs {
 			params = append(params, id)
 		}
 	}
 
 	if len(filter.Authors) > 0 {
-		if len(filter.Authors) > b.QueryAuthorsLimit {
-			return "", nil, TooManyAuthors
-		}
 		place := makePlaceHolders(len(filter.Authors))
-		conditions = append(conditions, "event.pubkey IN ("+place+")")
+		conditions = append(conditions, "events.pubkey IN ("+place+")")
 		for _, a := range filter.Authors {
 			params = append(params, a)
 		}
 	}
 
 	if len(filter.Kinds) > 0 {
-		if len(filter.Kinds) > b.QueryKindsLimit {
-			return "", nil, TooManyKinds
-		}
 		place := makePlaceHolders(len(filter.Kinds))
-		conditions = append(conditions, "event.kind IN ("+place+")")
+		conditions = append(conditions, "events.kind IN ("+place+")")
 		for _, k := range filter.Kinds {
 			params = append(params, k)
 		}
 	}
 
-	totalTags := 0
-	for _, values := range filter.Tags {
+	// handle single-letter tags (e.g. #e, #p, #d)
+	for name, values := range filter.Tags {
 		if len(values) == 0 {
-			return "", nil, EmptyTagSet
+			return "", nil, errors.New("empty tag set")
 		}
-		orTags := []string{}
-		for _, tagVal := range values {
-			orTags = append(orTags, `event.tags LIKE ? ESCAPE '\'`)
-			escaped := "%" + strings.ReplaceAll(tagVal, `%`, `\%`) + "%"
-			params = append(params, escaped)
+		if len(name) != 1 {
+			return "", nil, fmt.Errorf("tag %s is not indexable", name)
 		}
-		conditions = append(conditions, "("+strings.Join(orTags, " OR ")+")")
-		totalTags += len(values)
-		if totalTags > b.QueryTagsLimit {
-			return "", nil, TooManyTagValues
+
+		placeholders := makePlaceHolders(len(values))
+		conditions = append(conditions,
+			fmt.Sprintf("rowid IN (SELECT fid FROM tags_index WHERE value IN (%s))", placeholders),
+		)
+
+		for _, v := range values {
+			params = append(params, name+":"+v)
 		}
 	}
 
 	if filter.Since != nil {
-		conditions = append(conditions, "event.created_at >= ?")
+		conditions = append(conditions, "events.created_at >= ?")
 		params = append(params, filter.Since)
 	}
 	if filter.Until != nil {
-		conditions = append(conditions, "event.created_at <= ?")
+		conditions = append(conditions, "events.created_at <= ?")
 		params = append(params, filter.Until)
 	}
 
 	if filter.Search != "" {
-		conditions = append(conditions, "event.rowid IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)")
+		conditions = append(conditions, "events.rowid IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)")
 		params = append(params, filter.Search)
 	}
 
@@ -296,8 +292,8 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 		conditions = append(conditions, "1")
 	}
 
-	limitVal := b.QueryLimit
-	if filter.Limit >= 1 && filter.Limit <= b.QueryLimit {
+	limitVal := config.DefaultLimit
+	if filter.Limit != 0 {
 		limitVal = filter.Limit
 	}
 	params = append(params, limitVal)
@@ -306,7 +302,7 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 
 	sqlStr = fmt.Sprintf(
 		`SELECT id, pubkey, created_at, kind, tags, content, sig
-			   FROM event
+			   FROM events
 			  WHERE %s
 			  ORDER BY created_at DESC, id
 			  LIMIT ?`,

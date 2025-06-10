@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -15,6 +16,7 @@ type Config struct {
 	RelayContact     string
 	RelayIcon        string
 	RelayBanner      string
+	DefaultLimit     int
 
 	WorkingDirectory string
 
@@ -24,7 +26,12 @@ type Config struct {
 func LoadConfig() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		log.Fatalf("Error loading .env file: %v\n", err)
+	}
+
+	dl, err := strconv.Atoi(os.Getenv("DEFAULT_LIMIT"))
+	if err != nil {
+		log.Fatalf("Error reading DEFAULT_LIMIT: %v\n", err)
 	}
 
 	config = Config{
@@ -37,5 +44,6 @@ func LoadConfig() {
 		RelayBanner:      os.Getenv("RELAY_BANNER"),
 		WorkingDirectory: os.Getenv("WORKING_DIR"),
 		RelayPort:        os.Getenv("RELAY_PORT"),
+		DefaultLimit:     dl,
 	}
 }

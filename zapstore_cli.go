@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -87,15 +88,20 @@ func runCLI(name string, args ...string) (string, int, error) {
 
 func getGithubURL(s string) (*url.URL, error) {
 	parsedUrl, err := url.Parse(s)
+	if err != nil {
+		return nil, err
+	}
+
+	if parsedUrl.Scheme != "https" || parsedUrl.Host != "github.com" {
+		return nil, errors.New("only github URLs are accepted")
+	}
+
 	segments := strings.Split(strings.Trim(parsedUrl.Path, "/"), "/")
 
 	if len(segments) != 2 {
 		return nil, fmt.Errorf("URL does not contain exactly user and repo %s", segments)
 	}
 
-	if err != nil {
-		return nil, err
-	}
 	return parsedUrl, nil
 }
 
