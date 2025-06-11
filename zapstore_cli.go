@@ -22,7 +22,7 @@ type ZapstoreConfig struct {
 func publishApp(repository *url.URL) bool {
 	data, err := yaml.Marshal(&ZapstoreConfig{
 		Repository: strings.Trim(repository.String(), "/"),
-		Assets:     []string{".*.apk"},
+		Assets:     []string{".*.apk$"},
 	})
 	if err != nil {
 		log.Println("Error marshaling YAML:", err)
