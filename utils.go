@@ -4,7 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+func makePlaceHolders(n int) string {
+	return strings.TrimRight(strings.Repeat("?,", n), ",")
+}
 
 func mkdir(path string) error {
 	if err := os.MkdirAll(path, 0o750); err != nil {

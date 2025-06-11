@@ -223,10 +223,6 @@ func (b SQLite3Backend) QueryEvents(ctx context.Context, filter nostr.Filter) (c
 	return ch, nil
 }
 
-func makePlaceHolders(n int) string {
-	return strings.TrimRight(strings.Repeat("?,", n), ",")
-}
-
 func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, error) {
 	conditions := []string{}
 	params := []any{}
