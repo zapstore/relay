@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"path"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -75,41 +74,28 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 	evts := make([]nostr.Event, 0)
 
 	for _, f := range filters {
-		isURL := false
-		parsedURL := &url.URL{}
-		if f.Search != "" {
-			var err error
-			parsedURL, err = getGithubURL(f.Search)
-			if err == nil {
-				isURL = true
-
-				newVals := []string{f.Search}
-				vals, ok := f.Tags["repository"]
-				if ok {
-					newVals = append(newVals, vals...)
-				}
-
-				f.Tags["repository"] = newVals
-
-				f.Search = ""
-			} else {
-				log.Printf("Error parsing incoming URL: %v\n", err)
-			}
-		}
-
+		c := 0
 		ch, err := db.QueryEvents(context.Background(), f)
 		if err != nil {
 			return nil, err
 		}
 
-		c := 0
 		for e := range ch {
 			c++
 			evts = append(evts, *e)
 		}
 
-		if c == 0 && isURL {
-			if success := publishApp(parsedURL); success {
+		// We had a search query with github link, but we didn't had a result.
+		// We try to index it.
+		if c == 0 && f.Search != "" {
+			parsedUrl, err := getGithubURL(f.Search)
+			if err != nil {
+				log.Printf("Error was %s", err)
+				// If err just ignore
+				return evts, nil
+			}
+
+			if success := publishApp(parsedUrl); success {
 				ch, err := db.QueryEvents(context.Background(), f)
 				if err != nil {
 					return nil, err

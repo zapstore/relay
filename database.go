@@ -41,10 +41,18 @@ var ddls = []string{
 		sig TEXT NOT NULL
 	);`,
 
+	// Index table for single-letter tags
+	`CREATE TABLE IF NOT EXISTS tags_index(
+    fid INTEGER NOT NULL, 
+    value TEXT NOT NULL,
+    FOREIGN KEY(fid) REFERENCES events(rowid) ON DELETE CASCADE
+  	);`,
+
 	// Creating indexes
 	`CREATE INDEX IF NOT EXISTS idx_event_pubkey ON events(pubkey);`,
 	`CREATE INDEX IF NOT EXISTS idx_event_time ON events(created_at DESC);`,
 	`CREATE INDEX IF NOT EXISTS idx_event_kind ON events(kind);`,
+	`CREATE INDEX IF NOT EXISTS value_idx ON tags_index(value);`,
 
 	// Event FTS for NIP-50 search
 	`CREATE VIRTUAL TABLE IF NOT EXISTS events_fts
@@ -54,15 +62,7 @@ var ddls = []string{
 	          contentless_delete = 1
 	);`,
 
-	// Tags FTS table for exact match check
-	`CREATE VIRTUAL TABLE IF NOT EXISTS tags_fts USING fts5(
-    	id UNINDEXED,
-    	tags,
-    	content='events',
-    	content_rowid='rowid'
-  	);`,
-
-	// Indexing incoming events for NIP-50 search using triggers.
+	// Indexing incoming events (content, tags) for NIP-50 search
 	`CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
     INSERT INTO events_fts (rowid, text)
       SELECT new.rowid, new.content as text
@@ -70,51 +70,17 @@ var ddls = []string{
     INSERT INTO events_fts (rowid, text)
       SELECT new.rowid, GROUP_CONCAT(json_extract(value, '$[1]'), ' ') as text
         FROM json_each(new.tags)
-        WHERE json_extract(value, '$[0]') IN ('title', 'description', 'name', 'summary', 'alt', 't', 'd', 'f');
-		END;`,
+        WHERE json_extract(value, '$[0]') IN ('url', 'title', 'description', 'name', 'summary', 'alt', 't', 'd', 'f');
+    INSERT INTO tags_index (fid, value)
+      SELECT new.rowid, json_extract(value, '$[0]') || ':' || json_extract(value, '$[1]')
+        FROM json_each(new.tags)
+        WHERE LENGTH(json_extract(value, '$[0]')) = 1;
+  	END;`,
 
-	// Indexing tags for exact match check
-	`CREATE TRIGGER IF NOT EXISTS tags_ai
-	AFTER INSERT ON events
-	BEGIN
-  	INSERT INTO tags_fts(rowid, tags)
-  	VALUES (
-    	NEW.rowid,
-    	(
-      	SELECT GROUP_CONCAT(
-               json_extract(value, '$[0]') || ':' || json_extract(value, '$[1]'),
-               ' '
-             )
-      	FROM json_each(NEW.tags)
-      	WHERE
-        LENGTH(json_extract(value, '$[0]')) = 1
-        OR json_extract(value, '$[0]') IN ('repository', 'url', 'version')
-    	)
-  		);
-		END;`,
-
-	`CREATE TRIGGER IF NOT EXISTS tags_au
-	AFTER UPDATE ON events
-	BEGIN
-  	UPDATE tags_fts
-  	SET tags = (
-    SELECT GROUP_CONCAT(
-             json_extract(value, '$[0]') || ':' || json_extract(value, '$[1]'),
-             ' '
-           )
-    	FROM json_each(NEW.tags)
-    	WHERE
-      LENGTH(json_extract(value, '$[0]')) = 1
-      OR json_extract(value, '$[0]') IN ('repository', 'url', 'version')
-  	)
-  	WHERE rowid = NEW.rowid;
-	END;`,
-
-	// Trigger for deleting from FTS tables
 	`CREATE TRIGGER IF NOT EXISTS event_ad AFTER DELETE ON events BEGIN
     DELETE FROM events_fts WHERE rowid = old.rowid;
-    DELETE FROM tags_fts WHERE rowid = old.rowid;
-  	END;`,
+    DELETE FROM tags_index WHERE fid = old.rowid;
+  END;`,
 
 	// White list and logs table: not related to Nostr specs
 	`CREATE TABLE IF NOT EXISTS whitelist (
@@ -285,21 +251,23 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 		}
 	}
 
+	// handle single-letter tags (e.g. #e, #p, #d)
 	for name, values := range filter.Tags {
 		if len(values) == 0 {
 			return "", nil, errors.New("empty tag set")
 		}
-
-		var ors []string
-		for _, v := range values {
-			ors = append(ors, fmt.Sprintf(`"%s:%s"`, name, v))
+		if len(name) != 1 {
+			continue
 		}
-		matchExpr := "(" + strings.Join(ors, " OR ") + ")"
 
+		placeholders := makePlaceHolders(len(values))
 		conditions = append(conditions,
-			"events.id IN (SELECT tags_fts.id FROM tags_fts WHERE tags MATCH ?)",
+			fmt.Sprintf("rowid IN (SELECT fid FROM tags_index WHERE value IN (%s))", placeholders),
 		)
-		params = append(params, matchExpr)
+
+		for _, v := range values {
+			params = append(params, name+":"+v)
+		}
 	}
 
 	if filter.Since != nil {
