@@ -74,7 +74,7 @@ var ddls = []string{
     INSERT INTO tags_index (fid, value)
       SELECT new.rowid, json_extract(value, '$[0]') || ':' || json_extract(value, '$[1]')
         FROM json_each(new.tags)
-        WHERE LENGTH(json_extract(value, '$[0]')) = 1;
+        WHERE LENGTH(json_extract(value, '$[0]')) = 1 OR json_extract(value, '$[0]') IN ('repository', 'url', 'version');
   	END;`,
 
 	`CREATE TRIGGER IF NOT EXISTS event_ad AFTER DELETE ON events BEGIN
