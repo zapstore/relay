@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
+
+	// "net/url"
 	"path"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -75,27 +76,29 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 	evts := make([]nostr.Event, 0)
 
 	for _, f := range filters {
-		isURL := false
-		parsedURL := &url.URL{}
-		if f.Search != "" {
-			var err error
-			parsedURL, err = getGithubURL(f.Search)
-			if err == nil {
-				isURL = true
+		// Disable publishing for now
 
-				newVals := []string{f.Search}
-				vals, ok := f.Tags["repository"]
-				if ok {
-					newVals = append(newVals, vals...)
-				}
+		// isURL := false
+		// parsedURL := &url.URL{}
+		// if f.Search != "" {
+		// 	var err error
+		// 	parsedURL, err = getGithubURL(f.Search)
+		// 	if err == nil {
+		// 		isURL = true
 
-				f.Tags["repository"] = newVals
+		// 		newVals := []string{f.Search}
+		// 		vals, ok := f.Tags["repository"]
+		// 		if ok {
+		// 			newVals = append(newVals, vals...)
+		// 		}
 
-				f.Search = ""
-			} else {
-				log.Printf("Error parsing incoming URL: %v\n", err)
-			}
-		}
+		// 		f.Tags["repository"] = newVals
+
+		// 		f.Search = ""
+		// 	} else {
+		// 		log.Printf("Error parsing incoming URL: %v\n", err)
+		// 	}
+		// }
 
 		ch, err := db.QueryEvents(context.Background(), f)
 		if err != nil {
@@ -108,18 +111,18 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 			evts = append(evts, *e)
 		}
 
-		if c == 0 && isURL {
-			if success := publishApp(parsedURL); success {
-				ch, err := db.QueryEvents(context.Background(), f)
-				if err != nil {
-					return nil, err
-				}
+		// if c == 0 && isURL {
+		// 	if success := publishApp(parsedURL); success {
+		// 		ch, err := db.QueryEvents(context.Background(), f)
+		// 		if err != nil {
+		// 			return nil, err
+		// 		}
 
-				for e := range ch {
-					evts = append(evts, *e)
-				}
-			}
-		}
+		// 		for e := range ch {
+		// 			evts = append(evts, *e)
+		// 		}
+		// 	}
+		// }
 	}
 
 	return evts, nil
