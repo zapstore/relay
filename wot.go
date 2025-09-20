@@ -47,7 +47,7 @@ func GetWoTRank(pubkey string) (float64, error) {
 
 	responses, err := relay.QueryEvents(context.Background(), filter)
 	if err != nil {
-		panic(err)
+		return 0, err
 	}
 
 	response := <-responses
