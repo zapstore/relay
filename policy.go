@@ -22,7 +22,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 		return fmt.Errorf("blocked: you must be whitelisted to publish")
 	}
 
-	if e.CreatedAt.Time().Before(time.Now()) {
+	if e.CreatedAt.Time().After(time.Now()) {
 		return errors.New("invalid: event creation date is far from the current time")
 	}
 
