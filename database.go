@@ -316,7 +316,7 @@ func (b *SQLite3Backend) IsBlacklisted(ctx context.Context, pubkey string) (bool
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
-		return false, err //? Is this a correct logic?
+		return false, err
 	}
 
 	return true, nil
