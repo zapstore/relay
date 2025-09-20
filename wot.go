@@ -52,14 +52,14 @@ func GetWoTRank(pubkey string) (float64, error) {
 
 	response := <-responses
 
-  rank := new(VertexResponse)
+	rank := new(VertexResponse)
 	if err := json.Unmarshal([]byte(response.Content), rank); err != nil {
-    return 0, err
-  }
+		return 0, err
+	}
 
-  if rank.Pubkey != pubkey {
-    return 0, errors.New("internal error: invalid response from vertex")
-  }
+	if rank.Pubkey != pubkey {
+		return 0, errors.New("internal error: invalid response from vertex")
+	}
 
 	return rank.Rank, nil
 }
