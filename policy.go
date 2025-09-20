@@ -5,49 +5,62 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
 )
 
 func rejectEvent(c rely.Client, e *nostr.Event) error {
-	level, err := db.GetWhitelistLevel(context.Background(), e.PubKey)
-	if err != nil {
-		log.Printf("Can't read the whitelist from db: %v\n", err)
-		return errors.New("internal: reading from database")
-	}
-
 	if e.PubKey == config.RelayPubkey {
 		return nil
 	}
 
-	if level == 0 {
-		if (e.Kind != 4) && (e.Kind != 30267) {
-			return fmt.Errorf("blocked: kind %d is not accepted", e.Kind)
-		}
+	if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
+		(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) &&
+		(e.Kind != 1) && (e.Kind != 1111) {
+		return fmt.Errorf("blocked: you must be whitelisted to publish")
 	}
 
-	// User (level 1)
-	if level == 1 {
-		if (e.Kind != 1) && (e.Kind != 1111) && (e.Kind != 4) && (e.Kind != 30267) {
-			return fmt.Errorf("blocked: you must be a member to publish")
-		}
+	if e.CreatedAt.Time().Before(time.Now()) {
+		return errors.New("invalid: event creation date is far from the current time")
 	}
 
-	// Developer (level 2)
-	if level == 2 {
-		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
-			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) {
-			return fmt.Errorf("blocked: you must be whitelisted to publish")
-		}
+	isblackListed, err := db.IsBlacklisted(context.Background(), e.PubKey)
+	if err != nil {
+		log.Printf("Can't read the blacklist from db: %v\n", err)
+		return errors.New("error: reading from database")
 	}
 
-	// User + Developer (level 3)
-	if level == 3 {
-		if (e.Kind != 32267) && (e.Kind != 30063) && (e.Kind != 1063) &&
-			(e.Kind != 30267) && (e.Kind != 3063) && (e.Kind != 4) &&
-			(e.Kind != 1) && (e.Kind != 1111) {
-			return fmt.Errorf("blocked: you must be whitelisted to publish")
+	if isblackListed {
+		return errors.New("blocked: you are blacklisted")
+	}
+
+	// Check if the pubkey has already published anything to our database
+	ch, err := db.QueryEvents(context.Background(), nostr.Filter{
+		Authors: []string{e.PubKey},
+		Limit:   1,
+	})
+	if err != nil {
+		log.Printf("Can't query events from db: %v\n", err)
+		return errors.New("error: reading from database")
+	}
+
+	hasPublished := false
+	for range ch {
+		hasPublished = true
+		break
+	}
+
+	if !hasPublished {
+		rank, err := GetWoTRank(e.PubKey)
+		if err != nil {
+			log.Printf("Can't query WoT Rank from vertex: %v\n", err)
+			return errors.New("error: inquiry to vertex")
+		}
+
+		if rank < config.WoTThreshold {
+			return errors.New("restricted: low WoT rank; contact the Zapstore on the Nostr")
 		}
 	}
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 
-	// "net/url"
 	"path"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -48,6 +48,15 @@ func main() {
 	relay.OnEvent = onEvent
 	relay.OnReq = onReq
 
+	httpMux := SetupHTTPRoutes()
+
+	go func() {
+		log.Printf("HTTP API server running on port: %s", config.HTTPPort)
+		if err := http.ListenAndServe(config.HTTPPort, httpMux); err != nil {
+			log.Fatalf("HTTP server failed to start: %v", err)
+		}
+	}()
+
 	log.Println("Relay running on port: ", config.RelayPort)
 
 	if err := relay.StartAndServe(ctx, fmt.Sprintf("localhost%s", config.RelayPort)); err != nil {
@@ -76,30 +85,6 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 	evts := make([]nostr.Event, 0)
 
 	for _, f := range filters {
-		// Disable publishing for now
-
-		// isURL := false
-		// parsedURL := &url.URL{}
-		// if f.Search != "" {
-		// 	var err error
-		// 	parsedURL, err = getGithubURL(f.Search)
-		// 	if err == nil {
-		// 		isURL = true
-
-		// 		newVals := []string{f.Search}
-		// 		vals, ok := f.Tags["repository"]
-		// 		if ok {
-		// 			newVals = append(newVals, vals...)
-		// 		}
-
-		// 		f.Tags["repository"] = newVals
-
-		// 		f.Search = ""
-		// 	} else {
-		// 		log.Printf("Error parsing incoming URL: %v\n", err)
-		// 	}
-		// }
-
 		ch, err := db.QueryEvents(context.Background(), f)
 		if err != nil {
 			return nil, err
@@ -110,19 +95,6 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 			c++
 			evts = append(evts, *e)
 		}
-
-		// if c == 0 && isURL {
-		// 	if success := publishApp(parsedURL); success {
-		// 		ch, err := db.QueryEvents(context.Background(), f)
-		// 		if err != nil {
-		// 			return nil, err
-		// 		}
-
-		// 		for e := range ch {
-		// 			evts = append(evts, *e)
-		// 		}
-		// 	}
-		// }
 	}
 
 	return evts, nil

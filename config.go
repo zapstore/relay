@@ -16,11 +16,14 @@ type Config struct {
 	RelayContact     string
 	RelayIcon        string
 	RelayBanner      string
-	DefaultLimit     int
+
+	WoTThreshold float64
 
 	WorkingDirectory string
-
-	RelayPort string
+	RelayPort        string
+	HTTPPort         string
+	PrivateKey       string
+	DefaultLimit     int
 }
 
 func LoadConfig() {
@@ -34,6 +37,11 @@ func LoadConfig() {
 		log.Fatalf("Error reading DEFAULT_LIMIT: %v\n", err)
 	}
 
+	wt, err := strconv.ParseFloat(os.Getenv("WOT_THRESHOLD"), 64)
+	if err != nil {
+		log.Fatalf("Error reading WOT_THRESHOLD: %v\n", err)
+	}
+
 	config = Config{
 		RelayName:        os.Getenv("RELAY_NAME"),
 		RelayPubkey:      os.Getenv("RELAY_PUBKEY"),
@@ -44,6 +52,9 @@ func LoadConfig() {
 		RelayBanner:      os.Getenv("RELAY_BANNER"),
 		WorkingDirectory: os.Getenv("WORKING_DIR"),
 		RelayPort:        os.Getenv("RELAY_PORT"),
+		HTTPPort:         os.Getenv("HTTP_PORT"),
+		PrivateKey:       os.Getenv("PRIVATE_KEY"),
+		WoTThreshold:     wt,
 		DefaultLimit:     dl,
 	}
 }
