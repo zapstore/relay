@@ -58,6 +58,17 @@ func IsAboveThreshold(pubkey string) (bool, error) {
 		return false, errors.New("timeout waiting for vertex response")
 	}
 
+	if response.Kind == 7000 {
+		err := ""
+		for _, t := range response.Tags {
+			if len(t) >= 3 && t[1] == "error" {
+				err = t[2]
+				break
+			}
+		}
+		return false, errors.New(err)
+	}
+
 	rank := new(VertexResponse)
 	if err := json.Unmarshal([]byte(response.Content), rank); err != nil {
 		return false, err
