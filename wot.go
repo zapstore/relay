@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -50,7 +51,12 @@ func IsAboveThreshold(pubkey string) (bool, error) {
 		return false, err
 	}
 
-	response := <-responses
+	response := new(nostr.Event)
+	select {
+	case response = <-responses:
+	case <-time.After(10 * time.Second):
+		return false, errors.New("timeout waiting for vertex response")
+	}
 
 	rank := new(VertexResponse)
 	if err := json.Unmarshal([]byte(response.Content), rank); err != nil {

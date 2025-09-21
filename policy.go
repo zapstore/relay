@@ -27,7 +27,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 	}
 
 	if e.CreatedAt.Time().After(time.Now()) {
-		return errors.New("invalid: event creation date is far from the current time")
+		return errors.New("invalid: event creation date is from the future")
 	}
 
 	if slices.Contains(developerKinds, e.Kind) {
