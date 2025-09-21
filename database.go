@@ -321,3 +321,15 @@ func (b *SQLite3Backend) IsBlacklisted(ctx context.Context, pubkey string) (bool
 
 	return true, nil
 }
+
+func (b *SQLite3Backend) AddToBlacklist(ctx context.Context, pubkey string) error {
+	_, err := b.DB.ExecContext(ctx, `
+        INSERT OR IGNORE INTO blacklist (pubkey)
+        VALUES (?)
+    `, pubkey)
+	if err != nil {
+		return fmt.Errorf("failed to add pubkey to blacklist: %w", err)
+	}
+
+	return nil
+}

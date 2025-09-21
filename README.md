@@ -30,67 +30,8 @@ The relay will start two servers:
 
 **Example API Usage**:
 ```bash
-# Check if a pubkey is blacklisted
-curl "http://localhost:8080/api/v1/blacklist?pubkey=npub1example..."
-
-# Get WoT rank for a pubkey
-curl "http://localhost:8080/api/v1/wot-rank?pubkey=npub1example..."
-```
-
-## HTTP API
-
-The relay also provides HTTP API endpoints for checking blacklist status and Web of Trust (WoT) rankings:
-
-### Endpoints
-
-#### 1. Check Blacklist Status
-- **Endpoint**: `GET /api/v1/blacklist?pubkey={pubkey}`
-- **Description**: Check if a public key is blacklisted
-- **Parameters**:
-  - `pubkey` (required): The public key to check
-
-**Success Response** (200 OK):
-```json
-{
-  "success": true,
-  "data": {
-    "pubkey": "npub...",
-    "is_blacklisted": false
-  }
-}
-```
-
-**Error Response** (400/500):
-```json
-{
-  "success": false,
-  "error": "error message"
-}
-```
-
-#### 2. Get WoT Rank
-- **Endpoint**: `GET /api/v1/wot-rank?pubkey={pubkey}`
-- **Description**: Get the Web of Trust rank for a public key
-- **Parameters**:
-  - `pubkey` (required): The public key to get rank for
-
-**Success Response** (200 OK):
-```json
-{
-  "success": true,
-  "data": {
-    "pubkey": "npub...",
-    "rank": 0.75
-  }
-}
-```
-
-**Error Response** (400/500):
-```json
-{
-  "success": false,
-  "error": "error message"
-}
+# Check if a pubkey is accepted to publish software events
+curl "http://localhost:8080/api/v1/accept?pubkey=npub1example..."
 ```
 
 # License

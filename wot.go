@@ -9,14 +9,14 @@ import (
 )
 
 type VertexResponse struct {
-	Pubkey string `json:"pubkey"`
+	Pubkey string  `json:"pubkey"`
 	Rank   float64 `json:"rank"`
 }
 
-func GetWoTRank(pubkey string) (float64, error) {
+func IsAboveThreshold(pubkey string) (bool, error) {
 	relay, err := nostr.RelayConnect(context.Background(), "wss://relay.vertexlab.io")
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 
 	verifyReputation := &nostr.Event{
@@ -30,12 +30,12 @@ func GetWoTRank(pubkey string) (float64, error) {
 
 	err = verifyReputation.Sign(config.PrivateKey)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 
 	err = relay.Publish(context.Background(), *verifyReputation)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 
 	filter := nostr.Filter{
@@ -47,19 +47,19 @@ func GetWoTRank(pubkey string) (float64, error) {
 
 	responses, err := relay.QueryEvents(context.Background(), filter)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 
 	response := <-responses
 
 	rank := new(VertexResponse)
 	if err := json.Unmarshal([]byte(response.Content), rank); err != nil {
-		return 0, err
+		return false, err
 	}
 
 	if rank.Pubkey != pubkey {
-		return 0, errors.New("internal error: invalid response from vertex")
+		return false, errors.New("internal error: invalid response from vertex")
 	}
 
-	return rank.Rank, nil
+	return rank.Rank > config.WoTThreshold, nil
 }
