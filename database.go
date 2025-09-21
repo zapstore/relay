@@ -309,7 +309,8 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 }
 
 func (b *SQLite3Backend) IsBlacklisted(ctx context.Context, pubkey string) (bool, error) {
-	err := b.DB.GetContext(ctx, `
+	var exists int
+	err := b.DB.GetContext(ctx, &exists, `
         SELECT 1 FROM blacklist WHERE pubkey = ?
     `, pubkey)
 	if err != nil {

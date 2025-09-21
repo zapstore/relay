@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -69,14 +70,26 @@ func IsAboveThreshold(pubkey string) (bool, error) {
 		return false, errors.New(err)
 	}
 
-	rank := new(VertexResponse)
-	if err := json.Unmarshal([]byte(response.Content), rank); err != nil {
+	var ranks []VertexResponse
+	if err := json.Unmarshal([]byte(response.Content), &ranks); err != nil {
 		return false, err
 	}
 
-	if rank.Pubkey != pubkey {
-		return false, errors.New("internal error: invalid response from vertex")
+	// Find the entry that matches our queried pubkey
+	var targetRank *VertexResponse
+	for _, rank := range ranks {
+		if rank.Pubkey == pubkey {
+			targetRank = &rank
+			break
+		}
 	}
 
-	return rank.Rank > config.WoTThreshold, nil
+	if targetRank == nil {
+		return false, errors.New("internal error: pubkey not found in vertex response")
+	}
+
+	fmt.Printf("wot rank of %s is %v\n", pubkey, targetRank.Rank)
+
+	result := targetRank.Rank > config.WoTThreshold
+	return result, nil
 }

@@ -31,7 +31,7 @@ The relay will start two servers:
 **Example API Usage**:
 ```bash
 # Check if a pubkey is accepted to publish software events
-curl "http://localhost:8080/api/v1/accept?pubkey=npub1example..."
+curl "http://localhost::3335/api/v1/accept?pubkey=npub1example..."
 ```
 
 # License

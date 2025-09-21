@@ -11,6 +11,8 @@ require (
 	github.com/pippellia-btc/rely v0.9.2
 )
 
+require github.com/btcsuite/btcd/btcutil v1.1.5 // indirect
+
 require (
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.3.5 // indirect

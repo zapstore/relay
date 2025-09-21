@@ -3,6 +3,9 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
+
+	"github.com/nbd-wtf/go-nostr/nip19"
 )
 
 type AcceptResponse struct {
@@ -13,6 +16,7 @@ func Accept(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	pubkey := r.URL.Query().Get("pubkey")
+
 	if pubkey == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(AcceptResponse{
@@ -21,7 +25,23 @@ func Accept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isBlacklisted, err := db.IsBlacklisted(r.Context(), pubkey)
+	// Convert npub to hex format if needed
+	var hexPubkey string
+	if strings.HasPrefix(pubkey, "npub") {
+		_, hex, err := nip19.Decode(pubkey)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(AcceptResponse{
+				Accept: false,
+			})
+			return
+		}
+		hexPubkey = hex.(string)
+	} else {
+		hexPubkey = pubkey
+	}
+
+	isBlacklisted, err := db.IsBlacklisted(r.Context(), hexPubkey)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AcceptResponse{
@@ -30,7 +50,15 @@ func Accept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isAboveThreshold, err := IsAboveThreshold(pubkey)
+	if isBlacklisted {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(AcceptResponse{
+			Accept: false,
+		})
+		return
+	}
+
+	isAboveThreshold, err := IsAboveThreshold(hexPubkey)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(AcceptResponse{
@@ -41,7 +69,7 @@ func Accept(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(AcceptResponse{
-		Accept: isAboveThreshold && !isBlacklisted,
+		Accept: isAboveThreshold,
 	})
 }
 
