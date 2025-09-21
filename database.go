@@ -82,10 +82,9 @@ var ddls = []string{
     DELETE FROM tags_index WHERE fid = old.rowid;
   END;`,
 
-	// White list and logs table: not related to Nostr specs
-	`CREATE TABLE IF NOT EXISTS whitelist (
-       pubkey text NOT NULL,
-       level integer NOT NULL);`,
+	// Black list and logs table: not related to Nostr specs
+	`CREATE TABLE IF NOT EXISTS blacklist (
+       pubkey text NOT NULL);`,
 	`CREATE TABLE IF NOT EXISTS logs (
        log text NOT NULL);`,
 }
@@ -309,16 +308,29 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 	return sqlStr, params, nil
 }
 
-func (b *SQLite3Backend) GetWhitelistLevel(ctx context.Context, pubkey string) (int, error) {
-	var level int
-	err := b.DB.GetContext(ctx, &level, `
-        SELECT level FROM whitelist WHERE pubkey = ?
+func (b *SQLite3Backend) IsBlacklisted(ctx context.Context, pubkey string) (bool, error) {
+	var exists int
+	err := b.DB.GetContext(ctx, &exists, `
+        SELECT 1 FROM blacklist WHERE pubkey = ?
     `, pubkey)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil
+			return false, nil
 		}
-		return 0, err
+		return false, err
 	}
-	return level, nil
+
+	return true, nil
+}
+
+func (b *SQLite3Backend) AddToBlacklist(ctx context.Context, pubkey string) error {
+	_, err := b.DB.ExecContext(ctx, `
+        INSERT OR IGNORE INTO blacklist (pubkey)
+        VALUES (?)
+    `, pubkey)
+	if err != nil {
+		return fmt.Errorf("failed to add pubkey to blacklist: %w", err)
+	}
+
+	return nil
 }
