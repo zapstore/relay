@@ -51,7 +51,7 @@ func Accept(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isBlacklisted {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(AcceptResponse{
 			Accept: false,
 		})
