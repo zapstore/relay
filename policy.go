@@ -38,7 +38,7 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 		}
 
 		if isblackListed {
-			return errors.New("blocked: you are blacklisted")
+			return errors.New("restricted: Contact Zapstore on Nostr: https://npub.world/npub10r8xl2njyepcw2zwv3a6dyufj4e4ajx86hz6v4ehu4gnpupxxp7stjt2p8")
 		}
 
 		// Check if the pubkey has already published anything to our database
@@ -62,14 +62,14 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 			isAboveThreshold, err := IsAboveThreshold(e.PubKey)
 			if err != nil {
 				log.Printf("Can't query WoT Rank from vertex: %v\n", err)
-				return errors.New("error: inquiry to vertex")
+				return errors.New("error: DVM error")
 			}
 
 			if !isAboveThreshold {
 				if err := db.AddToBlacklist(context.Background(), e.PubKey); err != nil {
 					log.Printf("Can't insert to db: %v\n", err)
 				}
-				return errors.New("restricted: low WoT rank; contact the Zapstore on the Nostr")
+				return errors.New("restricted: Contact Zapstore on Nostr: https://npub.world/npub10r8xl2njyepcw2zwv3a6dyufj4e4ajx86hz6v4ehu4gnpupxxp7stjt2p8")
 			}
 		}
 	}
