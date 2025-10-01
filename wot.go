@@ -16,6 +16,10 @@ type VertexResponse struct {
 }
 
 func IsAboveThreshold(pubkey string) (bool, error) {
+	if config.WoTThreshold == 0 {
+		return true, nil
+	}
+
 	relay, err := nostr.RelayConnect(context.Background(), "wss://relay.vertexlab.io")
 	if err != nil {
 		return false, err
