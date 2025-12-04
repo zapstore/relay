@@ -291,6 +291,9 @@ func (b SQLite3Backend) queryEventsSql(filter nostr.Filter) (string, []any, erro
 	if filter.Limit != 0 {
 		limitVal = filter.Limit
 	}
+	if limitVal > config.MaxLimit {
+		limitVal = config.MaxLimit
+	}
 	params = append(params, limitVal)
 
 	var sqlStr string
