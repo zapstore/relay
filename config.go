@@ -23,6 +23,7 @@ type Config struct {
 	RelayPort        string
 	PrivateKey       string
 	DefaultLimit     int
+	MaxLimit         int
 }
 
 func LoadConfig() {
@@ -34,6 +35,14 @@ func LoadConfig() {
 	dl, err := strconv.Atoi(os.Getenv("DEFAULT_LIMIT"))
 	if err != nil {
 		log.Fatalf("Error reading DEFAULT_LIMIT: %v\n", err)
+	}
+
+	ml := 20
+	if mlStr := os.Getenv("MAX_LIMIT"); mlStr != "" {
+		ml, err = strconv.Atoi(mlStr)
+		if err != nil {
+			log.Fatalf("Error reading MAX_LIMIT: %v\n", err)
+		}
 	}
 
 	wt, err := strconv.ParseFloat(os.Getenv("WOT_THRESHOLD"), 64)
@@ -54,5 +63,6 @@ func LoadConfig() {
 		PrivateKey:       os.Getenv("PRIVATE_KEY"),
 		WoTThreshold:     wt,
 		DefaultLimit:     dl,
+		MaxLimit:         ml,
 	}
 }

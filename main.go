@@ -87,12 +87,12 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 			return nil, err
 		}
 
-		c := 0
 		for e := range ch {
-			c++
 			evts = append(evts, *e)
 		}
 	}
+
+	log.Printf("REQ %s %s → %d events", c.IP(), filters, len(evts))
 
 	return evts, nil
 }
