@@ -92,3 +92,20 @@ func rejectEvent(c rely.Client, e *nostr.Event) error {
 
 	return nil
 }
+
+func rejectReq(_ rely.Client, filters nostr.Filters) error {
+	for _, f := range filters {
+		if isLimitOnlyFilter(f) {
+			return errors.New("blocked: filter too broad")
+		}
+	}
+	return nil
+}
+
+func isLimitOnlyFilter(f nostr.Filter) bool {
+	return len(f.IDs) == 0 &&
+		len(f.Authors) == 0 &&
+		len(f.Kinds) == 0 &&
+		len(f.Tags) == 0 &&
+		f.Search == ""
+}

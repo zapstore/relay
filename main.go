@@ -45,6 +45,7 @@ func main() {
 	}
 
 	relay.RejectEvent = append(relay.RejectEvent, rejectEvent)
+	relay.RejectReq = append(relay.RejectReq, rejectReq)
 	relay.OnEvent = onEvent
 	relay.OnReq = onReq
 
@@ -100,11 +101,6 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 	evts := make([]nostr.Event, 0)
 
 	for _, f := range filters {
-		// Reject queries that only specify limit (with or without since/until)
-		if isLimitOnlyFilter(f) {
-			continue
-		}
-
 		ch, err := db.QueryEvents(context.Background(), f)
 		if err != nil {
 			return nil, err
@@ -115,17 +111,5 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 		}
 	}
 
-	log.Printf("REQ %s %s → %d events", c.IP(), filters, len(evts))
-
 	return evts, nil
-}
-
-// isLimitOnlyFilter returns true if the filter only specifies limit
-// (optionally with since/until), without any IDs, authors, kinds, tags, or search.
-func isLimitOnlyFilter(f nostr.Filter) bool {
-	return len(f.IDs) == 0 &&
-		len(f.Authors) == 0 &&
-		len(f.Kinds) == 0 &&
-		len(f.Tags) == 0 &&
-		f.Search == ""
 }
