@@ -98,6 +98,11 @@ func rejectReq(_ rely.Client, filters nostr.Filters) error {
 		if isLimitOnlyFilter(f) {
 			return errors.New("blocked: filter too broad")
 		}
+		for tagName := range f.Tags {
+			if len(tagName) != 1 {
+				return fmt.Errorf("blocked: only single-letter tags are indexed")
+			}
+		}
 	}
 	return nil
 }

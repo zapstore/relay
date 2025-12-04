@@ -113,9 +113,13 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 		}
 	}
 
-	reqJSON, _ := json.Marshal(filters)
+	// Marshal to map for alphabetical key ordering, then back to JSON
+	var filtersMap []map[string]any
+	tmp, _ := json.Marshal(filters)
+	json.Unmarshal(tmp, &filtersMap)
+	reqJSON, _ := json.Marshal(filtersMap)
 	escapedReq := strings.ReplaceAll(string(reqJSON), `"`, `\"`)
-	log.Printf(`%s - - [%s] "%s" - %d`, c.IP(), time.Now().UTC().Format("02/Jan/2006:15:04:05 -0700"), escapedReq, len(evts))
+	log.Printf(`"%s" %d`, escapedReq, len(evts))
 
 	return evts, nil
 }
