@@ -48,18 +48,15 @@ func main() {
 	relay.OnEvent = onEvent
 	relay.OnReq = onReq
 
-	httpMux := SetupHTTPRoutes()
+	mux := http.NewServeMux()
+	SetupHTTPRoutes(mux)
+	mux.Handle("/", relay)
 
-	go func() {
-		log.Printf("HTTP API server running on port: %s", config.HTTPPort)
-		if err := http.ListenAndServe(config.HTTPPort, httpMux); err != nil {
-			log.Fatalf("HTTP server failed to start: %v", err)
-		}
-	}()
+	relay.Start(ctx)
 
-	log.Println("Relay running on port: ", config.RelayPort)
+	log.Println("Relay running on port:", config.RelayPort)
 
-	if err := relay.StartAndServe(ctx, fmt.Sprintf("localhost%s", config.RelayPort)); err != nil {
+	if err := http.ListenAndServe(fmt.Sprintf("localhost%s", config.RelayPort), mux); err != nil {
 		db.Close()
 		log.Fatalf("Can't start the relay: %v", err)
 	}

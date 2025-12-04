@@ -21,7 +21,6 @@ type Config struct {
 
 	WorkingDirectory string
 	RelayPort        string
-	HTTPPort         string
 	PrivateKey       string
 	DefaultLimit     int
 }
@@ -52,7 +51,6 @@ func LoadConfig() {
 		RelayBanner:      os.Getenv("RELAY_BANNER"),
 		WorkingDirectory: os.Getenv("WORKING_DIR"),
 		RelayPort:        os.Getenv("RELAY_PORT"),
-		HTTPPort:         os.Getenv("HTTP_PORT"),
 		PrivateKey:       os.Getenv("PRIVATE_KEY"),
 		WoTThreshold:     wt,
 		DefaultLimit:     dl,

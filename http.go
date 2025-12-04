@@ -73,9 +73,6 @@ func Accept(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func SetupHTTPRoutes() *http.ServeMux {
-	mux := http.NewServeMux()
+func SetupHTTPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/accept", Accept)
-
-	return mux
 }

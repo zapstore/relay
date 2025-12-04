@@ -7,8 +7,7 @@ The Relay is an app store relay designed for Zapstore. It keeps software events 
 You have to set environment variables defined in [the example file](./.env.example) on a `.env` file with no prefixes in the same directory with executable. 
 
 **Important Environment Variables**:
-- `RELAY_PORT`: Port for the Nostr relay (default: `:7777`)
-- `HTTP_PORT`: Port for the HTTP API endpoints (default: `:8080`)
+- `RELAY_PORT`: Port for the relay and HTTP API (default: `:3334`)
 
 Then you can build the project using:
 
@@ -24,14 +23,12 @@ Then you can run the relay using:
 ./relay
 ```
 
-The relay will start two servers:
-- Nostr relay server on the configured `RELAY_PORT`
-- HTTP API server on the configured `HTTP_PORT`
+The relay will serve both the Nostr WebSocket relay and HTTP API on the configured `RELAY_PORT`.
 
 **Example API Usage**:
 ```bash
 # Check if a pubkey is accepted to publish software events
-curl "http://localhost:3335/api/v1/accept?pubkey=npub1example..."
+curl "http://localhost:3334/api/v1/accept?pubkey=npub1example..."
 ```
 
 # License
