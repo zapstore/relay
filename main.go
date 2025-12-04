@@ -19,7 +19,7 @@ var (
 )
 
 func main() {
-	log.SetPrefix("Relay ")
+	log.SetFlags(0)
 	log.Printf("Running %s\n", version())
 
 	LoadConfig()
@@ -110,6 +110,8 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 			evts = append(evts, *e)
 		}
 	}
+
+	log.Printf(`{"ip":"%s","req":%s,"total":%d}`, c.IP(), filters, len(evts))
 
 	return evts, nil
 }
