@@ -14,7 +14,7 @@ import (
 
 var (
 	developerKinds = []int{32267, 30063, 1063, 3063}
-	userKinds      = []int{30267, 1, 1111, 4}
+	userKinds      = []int{30267}
 )
 
 func rejectEvent(c rely.Client, e *nostr.Event) error {
