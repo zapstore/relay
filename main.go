@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -111,7 +113,9 @@ func onReq(ctx context.Context, c rely.Client, filters nostr.Filters) ([]nostr.E
 		}
 	}
 
-	log.Printf(`{"ip":"%s","req":%s,"total":%d}`, c.IP(), filters, len(evts))
+	reqJSON, _ := json.Marshal(filters)
+	escapedReq := strings.ReplaceAll(string(reqJSON), `"`, `\"`)
+	log.Printf(`%s - - [%s] "%s" - %d`, c.IP(), time.Now().UTC().Format("02/Jan/2006:15:04:05 -0700"), escapedReq, len(evts))
 
 	return evts, nil
 }
