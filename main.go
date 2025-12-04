@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-
 	"path"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
@@ -54,12 +54,30 @@ func main() {
 
 	relay.Start(ctx)
 
+	server := &http.Server{
+		Addr:    fmt.Sprintf("localhost%s", config.RelayPort),
+		Handler: mux,
+	}
+
+	go func() {
+		<-ctx.Done()
+		log.Println("Shutting down server...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Server shutdown error: %v", err)
+		}
+		db.Close()
+	}()
+
 	log.Println("Relay running on port:", config.RelayPort)
 
-	if err := http.ListenAndServe(fmt.Sprintf("localhost%s", config.RelayPort), mux); err != nil {
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		db.Close()
 		log.Fatalf("Can't start the relay: %v", err)
 	}
+
+	log.Println("Server stopped")
 }
 
 func onEvent(_ rely.Client, e *nostr.Event) error {
