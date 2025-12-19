@@ -247,11 +247,30 @@ func Process(w http.ResponseWriter, r *http.Request) {
 	}
 
 	yamlConfig := yamlBuilder.String()
-	log.Printf("Running zapstore publish with config:\n%s", yamlConfig)
+
+	// Convert pubkey to npub format for SIGN_WITH
+	var npub string
+	if strings.HasPrefix(req.Pubkey, "npub") {
+		npub = req.Pubkey
+	} else {
+		var err error
+		npub, err = nip19.EncodePublicKey(req.Pubkey)
+		if err != nil {
+			log.Printf("Failed to encode pubkey to npub: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: "invalid pubkey format"})
+			return
+		}
+	}
+
+	// Build command args: only --indexer-mode
+	args := []string{"publish", "--indexer-mode"}
+
+	log.Printf("Running: SIGN_WITH=%s zapstore %s <<EOF\n%sEOF", npub, strings.Join(args, " "), yamlConfig)
 
 	// Call zapstore publish with YAML via stdin
-	cmd := exec.Command("zapstore", "publish")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("SIGN_WITH=%s", req.Pubkey))
+	cmd := exec.Command("zapstore", args...)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("SIGN_WITH=%s", npub))
 	cmd.Stdin = strings.NewReader(yamlConfig)
 
 	var stdout, stderr bytes.Buffer
@@ -259,26 +278,59 @@ func Process(w http.ResponseWriter, r *http.Request) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		log.Printf("zapstore publish failed: %v, stderr: %s", err, stderr.String())
+		stderrStr := strings.TrimSpace(stderr.String())
+		stdoutStr := strings.TrimSpace(stdout.String())
+		log.Printf("zapstore publish failed: %v\nstderr: %s\nstdout: %s", err, stderrStr, stdoutStr)
+
+		// Build a helpful error message combining all available info
+		var errMsg string
+		if stderrStr != "" && stdoutStr != "" {
+			errMsg = fmt.Sprintf("%s\n%s", stderrStr, stdoutStr)
+		} else if stderrStr != "" {
+			errMsg = stderrStr
+		} else if stdoutStr != "" {
+			errMsg = stdoutStr
+		} else {
+			errMsg = err.Error()
+		}
+
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: fmt.Sprintf("zapstore publish failed: %s", stderr.String())})
+		json.NewEncoder(w).Encode(ErrorResponse{Error: fmt.Sprintf("zapstore publish failed: %s", errMsg)})
 		return
 	}
 
 	// Parse the output - expecting JSON events
-	output := stdout.String()
-	log.Printf("zapstore publish output: %s", output)
+	stdoutStr := strings.TrimSpace(stdout.String())
+	stderrStr := strings.TrimSpace(stderr.String())
+	log.Printf("stdout: %s\nstderr: %s", stdoutStr, stderrStr)
 
-	// Parse the output as JSON array of events
+	// Prefer stdout, fallback to stderr
+	respStr := stdoutStr
+	if respStr == "" {
+		respStr = stderrStr
+	}
+	if respStr == "" {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: ""})
+		return
+	}
+
+	// Parse the output as JSON array of events and ensure they are signed
 	var events []json.RawMessage
-	if err := json.Unmarshal([]byte(output), &events); err != nil {
-		// Try to parse as newline-delimited JSON
-		lines := strings.Split(strings.TrimSpace(output), "\n")
-		events = make([]json.RawMessage, 0, len(lines))
-		for _, line := range lines {
-			if line != "" {
-				events = append(events, json.RawMessage(line))
-			}
+	if err := json.Unmarshal([]byte(respStr), &events); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: respStr})
+		return
+	}
+
+	for i, ev := range events {
+		var signed struct {
+			Sig string `json:"sig"`
+		}
+		if err := json.Unmarshal(ev, &signed); err != nil || strings.TrimSpace(signed.Sig) == "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(ErrorResponse{Error: fmt.Sprintf("event %d missing signature", i)})
+			return
 		}
 	}
 
