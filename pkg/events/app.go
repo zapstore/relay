@@ -55,12 +55,7 @@ func (app App) Validate() error {
 		return fmt.Errorf("missing or empty 'name' tag")
 	}
 	if len(app.Platforms) == 0 {
-		return fmt.Errorf("missing 'f' tag (platform identifier)")
-	}
-	for i, p := range app.Platforms {
-		if !slices.Contains(PlatformIdentifiers, p) {
-			return fmt.Errorf("invalid platform identifier in 'f' tag at index %d: %s", i, p)
-		}
+		return fmt.Errorf("missing 'f' tag (no recognized platform identifier)")
 	}
 	return nil
 }
@@ -92,7 +87,9 @@ func ParseApp(event *nostr.Event) (App, error) {
 			app.Name = tag[1]
 
 		case "f":
-			app.Platforms = append(app.Platforms, tag[1])
+			if slices.Contains(PlatformIdentifiers, tag[1]) {
+				app.Platforms = append(app.Platforms, tag[1])
+			}
 
 		case "summary":
 			if app.Summary != "" {

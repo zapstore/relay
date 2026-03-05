@@ -50,12 +50,7 @@ func (a *Asset) Validate() error {
 		return fmt.Errorf("missing or empty 'version' tag")
 	}
 	if len(a.Platforms) == 0 {
-		return fmt.Errorf("missing 'f' tag (platform identifier)")
-	}
-	for i, p := range a.Platforms {
-		if !slices.Contains(PlatformIdentifiers, p) {
-			return fmt.Errorf("invalid platform identifier in 'f' tag at index %d: %s", i, p)
-		}
+		return fmt.Errorf("missing 'f' tag (no recognized platform identifier)")
 	}
 
 	if err := ValidateHash(a.Hash); err != nil {
@@ -116,7 +111,9 @@ func ParseAsset(event *nostr.Event) (Asset, error) {
 			asset.Version = tag[1]
 
 		case "f":
-			asset.Platforms = append(asset.Platforms, tag[1])
+			if slices.Contains(PlatformIdentifiers, tag[1]) {
+				asset.Platforms = append(asset.Platforms, tag[1])
+			}
 
 		case "url":
 			asset.URL = tag[1]

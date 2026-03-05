@@ -46,12 +46,7 @@ func (s AppSet) Validate() error {
 	}
 
 	if len(s.Platforms) == 0 {
-		return fmt.Errorf("missing 'f' tag (platform identifier)")
-	}
-	for i, p := range s.Platforms {
-		if !slices.Contains(PlatformIdentifiers, p) {
-			return fmt.Errorf("invalid platform identifier in 'f' tag at index %d: %s", i, p)
-		}
+		return fmt.Errorf("missing 'f' tag (no recognized platform identifier)")
 	}
 	return nil
 }
@@ -92,7 +87,9 @@ func ParseAppSet(event *nostr.Event) (AppSet, error) {
 		case "a":
 			appSet.Apps = append(appSet.Apps, AppIdentifier(tag[1]))
 		case "f":
-			appSet.Platforms = append(appSet.Platforms, tag[1])
+			if slices.Contains(PlatformIdentifiers, tag[1]) {
+				appSet.Platforms = append(appSet.Platforms, tag[1])
+			}
 		}
 	}
 	return appSet, nil
