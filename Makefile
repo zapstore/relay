@@ -11,8 +11,13 @@ TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
 HOST_OS   := $(shell go env GOOS)
 HOST_ARCH := $(shell go env GOARCH)
 
+ifeq ($(HOST_OS),darwin)
+linux-arm64_CC := $(or $(CC_LINUX_ARM64),zig cc -target aarch64-linux-musl)
+linux-amd64_CC := $(or $(CC_LINUX_AMD64),zig cc -target x86_64-linux-musl)
+else
 linux-arm64_CC := $(or $(CC_LINUX_ARM64),aarch64-linux-gnu-gcc)
 linux-amd64_CC := $(or $(CC_LINUX_AMD64),x86_64-linux-gnu-gcc)
+endif
 
 .PHONY: all build build-darwin-arm64 build-linux-amd64 build-linux-arm64 clean run
 
