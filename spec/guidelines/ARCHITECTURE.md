@@ -3,7 +3,7 @@ description: Architecture — package layout, relay/blossom separation, ACL, ana
 alwaysApply: true
 ---
 
-# server — Architecture
+# relay — Architecture
 
 ## Core Principle
 
@@ -17,6 +17,7 @@ pkg/
   relay/                 Nostr relay — WebSocket handler, event validation, NIP-42 auth
   blossom/               Blossom server — upload, download, CDN redirect (Bunny)
   acl/                   Access control — hot-reloadable CSV allow/block lists, Vertex DVM
+  indexing/              Demand-driven indexing signals — discovery queue, staleness tracking (shared DB with zindex)
   analytics/             Privacy-preserving impression and download counters (batched SQLite writes)
   rate/                  Token bucket rate limiting per IP group
   config/                Server configuration (env vars via caarlos0/env)
@@ -28,6 +29,7 @@ pkg/
 - `relay.db` — SQLite via `vertex-lab/nostr-sqlite` for Nostr events
 - `blossom.db` — SQLite for blob metadata (hash, size, MIME, CDN URL)
 - `analytics.db` — SQLite for impression/download counters
+- `indexing.db` — SQLite for demand-driven indexing signals (shared with zindex, WAL mode)
 - Blobs themselves live on Bunny CDN; server stores metadata only
 
 ## Request Flow

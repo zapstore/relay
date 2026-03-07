@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zapstore/server/pkg/blossom/bunny"
+	"github.com/zapstore/relay/pkg/blossom/bunny"
 )
 
 type Config struct {

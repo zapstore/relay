@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zapstore/server/pkg/analytics/geo"
+	"github.com/zapstore/relay/pkg/analytics/geo"
 )
 
 type Config struct {

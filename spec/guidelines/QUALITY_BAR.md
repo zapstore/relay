@@ -3,7 +3,7 @@ description: Quality expectations — when to spec, testing, anti-patterns, AI w
 alwaysApply: true
 ---
 
-# server — Quality Bar
+# relay — Quality Bar
 
 ## When to Create a Feature Spec
 

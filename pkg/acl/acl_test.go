@@ -34,8 +34,7 @@ func TestManualHotReload(t *testing.T) {
 	t.Logf("watching %s for 30 seconds...", dir)
 	t.Logf("allowed_pubkeys: %d", controller.pubkeysAllowed.Size())
 	t.Logf("blocked_pubkeys: %d", controller.pubkeysBlocked.Size())
-	t.Logf("blocked_events: %d", controller.eventsBlocked.Size())
-	t.Logf("blocked_blobs: %d", controller.blobsBlocked.Size())
+	t.Logf("platform_users_blocked: %d", controller.platformUsersBlocked.Size())
 	time.Sleep(30 * time.Second)
 }
 

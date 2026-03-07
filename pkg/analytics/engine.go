@@ -18,8 +18,8 @@ import (
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
 	"github.com/pippellia-btc/rely"
-	"github.com/zapstore/server/pkg/analytics/geo"
-	"github.com/zapstore/server/pkg/analytics/store"
+	"github.com/zapstore/relay/pkg/analytics/geo"
+	"github.com/zapstore/relay/pkg/analytics/store"
 )
 
 // Paths holds the file system locations for the analytics engine's files.

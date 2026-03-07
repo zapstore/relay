@@ -1,4 +1,4 @@
-# server — Agent Instructions
+# relay — Agent Instructions
 
 Nostr relay and Blossom CDN server for the Zapstore ecosystem.
 
@@ -31,7 +31,7 @@ Guidelines are symlinked into `.cursor/rules/` and auto-load.
 ## Key Commands
 
 ```bash
-make server           # Build
+make build            # Build
 go test ./...         # Tests
 go vet ./...          # Lint
 go mod tidy           # After dependency changes

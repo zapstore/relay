@@ -1,4 +1,4 @@
-BINARY_NAME := server
+BINARY_NAME := relay
 CMD_PATH    := ./cmd
 DIST        := dist
 

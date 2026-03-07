@@ -1,13 +1,13 @@
 ---
-description: Product vision — what the server is, who it serves, what success means
+description: Product vision — what the relay is, who it serves, what success means
 alwaysApply: true
 ---
 
-# server — Vision
+# relay — Vision
 
 ## What the Server Is
 
-The Zapstore server is the infrastructure backbone: a Nostr relay and Blossom CDN server purpose-built for the Zapstore app ecosystem. It stores and serves NIP-82 software events and APK/media blobs.
+The Zapstore relay is the infrastructure backbone: a Nostr relay and Blossom CDN server purpose-built for the Zapstore app ecosystem. It stores and serves NIP-82 software events and APK/media blobs.
 
 ## Who Uses It
 
@@ -24,7 +24,7 @@ The Zapstore server is the infrastructure backbone: a Nostr relay and Blossom CD
 
 ## Non-Goals
 
-- The server is not a general-purpose Nostr relay (only Zapstore-relevant kinds)
-- The server does not store blob content locally (CDN only)
-- The server does not perform app indexing (that's `zindex`)
-- The server does not have a web UI
+- The relay is not a general-purpose Nostr relay (only Zapstore-relevant kinds)
+- The relay does not store blob content locally (CDN only)
+- The relay does not perform app indexing (that's `zindex`)
+- The relay does not have a web UI

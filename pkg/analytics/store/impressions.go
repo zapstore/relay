@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
-	eventPkg "github.com/zapstore/server/pkg/events"
+	eventPkg "github.com/zapstore/relay/pkg/events"
 )
 
 // Source represents where the impression was made.

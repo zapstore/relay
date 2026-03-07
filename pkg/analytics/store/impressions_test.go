@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
-	eventPkg "github.com/zapstore/server/pkg/events"
+	eventPkg "github.com/zapstore/relay/pkg/events"
 )
 
 // --- ImpressionType ---

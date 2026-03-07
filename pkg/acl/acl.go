@@ -21,24 +21,22 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip19"
-	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/smallset"
-	"github.com/zapstore/server/pkg/acl/github"
-	"github.com/zapstore/server/pkg/acl/vertex"
-	"github.com/zapstore/server/pkg/events"
+	"github.com/zapstore/relay/pkg/acl/repo"
+	"github.com/zapstore/relay/pkg/acl/vertex"
+	"github.com/zapstore/relay/pkg/events"
 )
 
-// Controller is an access control list that manages allowed/blocked pubkeys, ids, and blobs.
+// Controller is an access control list that manages allowed/blocked pubkeys and platform users.
 // It supports hot-reloading of the CSV files when they are modified.
 type Controller struct {
-	mu             sync.RWMutex
-	pubkeysAllowed *smallset.Ordered[string]
-	pubkeysBlocked *smallset.Ordered[string]
-	eventsBlocked  *smallset.Ordered[string]
-	blobsBlocked   *smallset.Ordered[string]
+	mu                   sync.RWMutex
+	pubkeysAllowed       *smallset.Ordered[string]
+	pubkeysBlocked       *smallset.Ordered[string]
+	platformUsersBlocked *smallset.Ordered[string] // format: "platform:username"
 
-	vertex vertex.Filter
-	github github.Client
+	vertex   vertex.Filter
+	verifier *repo.Verifier
 
 	log     *slog.Logger
 	watcher *fsnotify.Watcher
@@ -66,21 +64,20 @@ func New(c Config, dir string, log *slog.Logger) (*Controller, error) {
 	}
 
 	acl := &Controller{
-		dir:            absDir,
-		config:         c,
-		pubkeysAllowed: smallset.New[string](100),
-		pubkeysBlocked: smallset.New[string](100),
-		eventsBlocked:  smallset.New[string](100),
-		blobsBlocked:   smallset.New[string](100),
-		log:            log,
-		done:           make(chan struct{}),
+		dir:                  absDir,
+		config:               c,
+		pubkeysAllowed:       smallset.New[string](100),
+		pubkeysBlocked:       smallset.New[string](100),
+		platformUsersBlocked: smallset.New[string](100),
+		log:                  log,
+		done:                 make(chan struct{}),
 	}
 
 	if c.UnknownPubkeyPolicy == UseVertex {
 		acl.vertex = vertex.NewFilter(c.Vertex)
 	}
 
-	acl.github = github.NewClient(c.Github)
+	acl.verifier = repo.NewVerifier(c.Repo)
 
 	if _, err = acl.reloadAllowedPubkeys(); err != nil {
 		return nil, fmt.Errorf("failed to load allowed pubkeys: %w", err)
@@ -88,11 +85,8 @@ func New(c Config, dir string, log *slog.Logger) (*Controller, error) {
 	if _, err = acl.reloadBlockedPubkeys(); err != nil {
 		return nil, fmt.Errorf("failed to load blocked pubkeys: %w", err)
 	}
-	if _, err = acl.reloadBlockedEvents(); err != nil {
-		return nil, fmt.Errorf("failed to load blocked ids: %w", err)
-	}
-	if _, err = acl.reloadBlockedBlobs(); err != nil {
-		return nil, fmt.Errorf("failed to load blocked blobs: %w", err)
+	if _, err = acl.reloadBlockedPlatformUsers(); err != nil {
+		return nil, fmt.Errorf("failed to load blocked platform users: %w", err)
 	}
 
 	acl.watcher, err = fsnotify.NewWatcher()
@@ -113,10 +107,9 @@ func New(c Config, dir string, log *slog.Logger) (*Controller, error) {
 
 // fileTemplates maps each required file to its initial content (header comments).
 var fileTemplates = map[string]string{
-	PubkeysAllowedFile: "# Allowed pubkeys\n# pubkey,reason\n",
-	PubkeysBlockedFile: "# Blocked pubkeys\n# pubkey,reason\n",
-	EventsBlockedFile:  "# Blocked events\n# event_id,reason\n",
-	BlobsBlockedFile:   "# Blocked blobs\n# hash,reason\n",
+	PubkeysAllowedFile:       "# Allowed pubkeys\n# pubkey,reason\n",
+	PubkeysBlockedFile:       "# Blocked pubkeys\n# pubkey,reason\n",
+	PlatformUsersBlockedFile: "# Blocked platform users\n# platform:username,reason\n",
 }
 
 // initDir ensures the ACL directory and required files exist.
@@ -186,8 +179,9 @@ func (c *Controller) AllowPubkey(ctx context.Context, pubkey string) (bool, erro
 	}
 }
 
-// AllowEvent is like AllowPubkey, but applies verification using Github when Vertex doesn't allow.
-// TODO: this is a clusterfuck and should be redesigned.
+// AllowEvent checks whether an event's author is allowed to publish.
+// For kind 32267 (App) events with a "repository" tag, repo verification is attempted
+// before falling through to the configured unknown-pubkey policy.
 func (c *Controller) AllowEvent(ctx context.Context, e *nostr.Event) (bool, error) {
 	c.mu.RLock()
 	blocked := c.pubkeysBlocked.Contains(e.PubKey)
@@ -202,6 +196,31 @@ func (c *Controller) AllowEvent(ctx context.Context, e *nostr.Event) (bool, erro
 		return true, nil
 	}
 
+	// Repo verification: for kind 32267 with a repository tag, check zapstore.yaml
+	if e.Kind == events.KindApp {
+		if repoURL, ok := events.Find(e.Tags, "repository"); ok && repoURL != "" {
+			result, err := c.verifier.Verify(ctx, repoURL, e.PubKey)
+			if err != nil {
+				c.log.Warn("acl: repo verification failed", "repo", repoURL, "error", err)
+				// Fall through to policy — don't hard-fail on network errors
+			} else if result.Matched {
+				// Check if the platform user is blocked before whitelisting
+				if c.IsPlatformUserBlocked(result.Platform, result.Username) {
+					c.log.Warn("acl: blocked platform user attempted auto-whitelist",
+						"platform", result.Platform, "username", result.Username)
+					return false, nil
+				}
+				reason := fmt.Sprintf("verified via %s repo %s", result.Platform, repoURL)
+				if err := c.appendAllowedPubkey(e.PubKey, reason); err != nil {
+					return false, fmt.Errorf("failed to append pubkey to allowed list: %w", err)
+				}
+				c.log.Info("acl: auto-whitelisted via repo verification",
+					"pubkey", e.PubKey, "platform", result.Platform, "repo", repoURL)
+				return true, nil
+			}
+		}
+	}
+
 	switch c.config.UnknownPubkeyPolicy {
 	case AllowAll:
 		return true, nil
@@ -214,45 +233,20 @@ func (c *Controller) AllowEvent(ctx context.Context, e *nostr.Event) (bool, erro
 		if err != nil {
 			return false, fmt.Errorf("failed to verify reputation: %w", err)
 		}
-
-		if allow {
-			return true, nil
-		}
-
-		// try to verify with github when vertex doesn't allow.
-		// TODO: this is a clusterfuck and should be redesigned.
-		if e.Kind != events.KindApp {
-			return false, nil
-		}
-
-		url, ok := events.Find(e.Tags, "repository")
-		if !ok {
-			return false, nil
-		}
-
-		repo, err := c.github.RepoInfo(ctx, url)
-		if err != nil {
-			return false, fmt.Errorf("failed to verify with repository: %w", err)
-		}
-
-		if repo.Pubkey != e.PubKey {
-			return false, nil
-		}
-		if time.Since(repo.CreatedAt) < 24*time.Hour {
-			return false, nil
-		}
-		if err := c.appendAllowedPubkey(e.PubKey, fmt.Sprintf("verified via github repo %s", url)); err != nil {
-			return false, fmt.Errorf("failed to append pubkey to allowed list: %w", err)
-		}
-		return true, nil
+		return allow, nil
 
 	default:
 		return false, fmt.Errorf("internal error: unknown pubkey policy: %s", c.config.UnknownPubkeyPolicy)
 	}
 }
 
-// appendAllowedPubkey appends a pubkey to the allowed pubkeys CSV file.
+// AppendAllowedPubkey appends a pubkey to the allowed pubkeys CSV file.
 // The file watcher will pick up the change and reload the list automatically.
+func (c *Controller) AppendAllowedPubkey(pubkey, reason string) error {
+	return c.appendAllowedPubkey(pubkey, reason)
+}
+
+// appendAllowedPubkey is the internal implementation.
 func (c *Controller) appendAllowedPubkey(pubkey, reason string) error {
 	csvPath := filepath.Join(c.dir, PubkeysAllowedFile)
 	f, err := os.OpenFile(csvPath, os.O_APPEND|os.O_WRONLY, 0644)
@@ -272,18 +266,11 @@ func (c *Controller) appendAllowedPubkey(pubkey, reason string) error {
 	return nil
 }
 
-// IsEventBlocked checks if an event ID is in the blocked list.
-func (c *Controller) IsEventBlocked(ID string) bool {
+// IsPlatformUserBlocked checks if a platform user (format: "platform:username") is blocked.
+func (c *Controller) IsPlatformUserBlocked(platform, username string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.eventsBlocked.Contains(ID)
-}
-
-// IsBlobBlocked checks if a blob hash is in the blocked list.
-func (c *Controller) IsBlobBlocked(hash blossom.Hash) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.blobsBlocked.Contains(hash.Hex())
+	return c.platformUsersBlocked.Contains(platform + ":" + username)
 }
 
 // watch monitors the ACL directory for file changes and reloads the changed file.
@@ -342,10 +329,8 @@ func (c *Controller) reload(file string) (int, error) {
 		return c.reloadAllowedPubkeys()
 	case PubkeysBlockedFile:
 		return c.reloadBlockedPubkeys()
-	case EventsBlockedFile:
-		return c.reloadBlockedEvents()
-	case BlobsBlockedFile:
-		return c.reloadBlockedBlobs()
+	case PlatformUsersBlockedFile:
+		return c.reloadBlockedPlatformUsers()
 	default:
 		return 0, fmt.Errorf("unknown file: %s", file)
 	}
@@ -401,50 +386,21 @@ func (c *Controller) reloadBlockedPubkeys() (int, error) {
 	return c.pubkeysBlocked.Size(), nil
 }
 
-// reloadBlockedEvents reloads the blocked events list from the blocked_events.csv file.
-// It returns the number of events in the new list.
-func (c *Controller) reloadBlockedEvents() (int, error) {
-	path := filepath.Join(c.dir, EventsBlockedFile)
-	ids, _, err := parseCSV(path)
+// reloadBlockedPlatformUsers reloads the blocked platform users list.
+// Format: "platform:username,reason"
+func (c *Controller) reloadBlockedPlatformUsers() (int, error) {
+	path := filepath.Join(c.dir, PlatformUsersBlockedFile)
+	entries, _, err := parseCSV(path)
 	if err != nil {
 		return 0, err
-	}
-
-	for i, id := range ids {
-		if err := blossom.ValidateHash(id); err != nil {
-			return 0, fmt.Errorf("invalid event id at line %d: %w", i+1, err)
-		}
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.eventsBlocked.Clear()
-	c.eventsBlocked = smallset.NewFrom(ids...)
-	return c.eventsBlocked.Size(), nil
-}
-
-// reloadBlockedBlobs reloads the blocked blobs list from the blocked_blobs.csv file.
-// It returns the number of blobs in the new list.
-func (c *Controller) reloadBlockedBlobs() (int, error) {
-	path := filepath.Join(c.dir, BlobsBlockedFile)
-	hashes, _, err := parseCSV(path)
-	if err != nil {
-		return 0, err
-	}
-
-	for i, hash := range hashes {
-		if err := blossom.ValidateHash(hash); err != nil {
-			return 0, fmt.Errorf("invalid blob hash at line %d: %w", i+1, err)
-		}
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.blobsBlocked.Clear()
-	c.blobsBlocked = smallset.NewFrom(hashes...)
-	return c.blobsBlocked.Size(), nil
+	c.platformUsersBlocked.Clear()
+	c.platformUsersBlocked = smallset.NewFrom(entries...)
+	return c.platformUsersBlocked.Size(), nil
 }
 
 // toPubkey tries to parse a string into a hex pubkey.

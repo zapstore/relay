@@ -10,8 +10,8 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
-	"github.com/zapstore/server/pkg/events"
-	"github.com/zapstore/server/pkg/events/legacy"
+	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/events/legacy"
 )
 
 var ctx = context.Background()

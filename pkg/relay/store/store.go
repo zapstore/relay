@@ -12,7 +12,7 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
-	"github.com/zapstore/server/pkg/events"
+	"github.com/zapstore/relay/pkg/events"
 )
 
 var ErrUnsupportedREQ = errors.New("unsupported REQ")
@@ -33,7 +33,8 @@ func New(path string) (*sqlite.Store, error) {
 }
 
 // queryBuilder handles FTS search for apps when there's exactly one app search filter.
-// Otherwise, it delegates to the default query builder.
+// When the search term is a GitHub URL, it performs an exact match on the `repository` tag
+// instead of FTS. Otherwise, it delegates to the default query builder.
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if searchesIn(filters) == 0 {
 		return sqlite.DefaultQueryBuilder(filters...)
@@ -49,6 +50,12 @@ func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if !slices.Equal(search.Kinds, []int{events.KindApp}) {
 		return nil, fmt.Errorf("%w: we allow NIP-50 search only for kind %d", ErrUnsupportedREQ, events.KindApp)
 	}
+
+	// GitHub URL search: exact match on repository tag (no FTS)
+	if strings.HasPrefix(search.Search, "https://github.com/") {
+		return repositoryURLQuery(search)
+	}
+
 	return appSearchQuery(search)
 }
 
@@ -61,6 +68,28 @@ func searchesIn(filters nostr.Filters) int {
 		}
 	}
 	return count
+}
+
+// repositoryURLQuery performs an exact match on the `repository` tag for GitHub URLs.
+// It tries both the URL as-is and with ".git" stripped to handle both forms.
+func repositoryURLQuery(filter nostr.Filter) ([]sqlite.Query, error) {
+	url := filter.Search
+	urlWithoutGit := strings.TrimSuffix(url, ".git")
+
+	query := `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
+		FROM events e
+		JOIN tags t ON t.event_id = e.id
+		WHERE e.kind = 32267
+		  AND t.key = 'repository'
+		  AND (t.value = ? OR t.value = ?)
+		LIMIT ?`
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	return []sqlite.Query{{SQL: query, Args: []any{url, urlWithoutGit, limit}}}, nil
 }
 
 // appSearchQuery builds an FTS query for searching apps.

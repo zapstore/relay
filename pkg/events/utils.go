@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/zapstore/server/pkg/events/legacy"
+	"github.com/zapstore/relay/pkg/events/legacy"
 )
 
 // WithValidation is a list of event kinds that have validation functions.
@@ -17,6 +17,7 @@ var WithValidation = []int{
 	KindAsset,
 	KindAppSet,
 	KindAppRelays,
+	KindIdentityProof,
 	legacy.KindFile,
 }
 
@@ -54,6 +55,9 @@ func Validate(event *nostr.Event) error {
 
 	case KindAppRelays:
 		return ValidateAppRelays(event)
+
+	case KindIdentityProof:
+		return ValidateIdentityProof(event)
 
 	default:
 		return nil

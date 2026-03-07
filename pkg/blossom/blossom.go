@@ -15,11 +15,11 @@ import (
 
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
-	"github.com/zapstore/server/pkg/acl"
-	"github.com/zapstore/server/pkg/analytics"
-	"github.com/zapstore/server/pkg/blossom/bunny"
-	"github.com/zapstore/server/pkg/blossom/store"
-	"github.com/zapstore/server/pkg/rate"
+	"github.com/zapstore/relay/pkg/acl"
+	"github.com/zapstore/relay/pkg/analytics"
+	"github.com/zapstore/relay/pkg/blossom/bunny"
+	"github.com/zapstore/relay/pkg/blossom/store"
+	"github.com/zapstore/relay/pkg/rate"
 )
 
 var (
@@ -59,7 +59,6 @@ func Setup(
 		RateUploadIP(limiter),
 		MissingAuth(),
 		MissingHints(),
-		BlobIsBlocked(acl),
 		MediaNotAllowed(config.AllowedMedia),
 		AuthorNotAllowed(acl),
 	)
@@ -286,15 +285,6 @@ func MediaNotAllowed(allowed []string) func(r blossy.Request, hints blossy.Uploa
 		if !slices.Contains(allowed, hints.Type) {
 			reason := fmt.Sprintf("content type is not in the allowed list: %s", strings.Join(allowed, ", "))
 			return blossom.ErrUnsupportedMedia(reason)
-		}
-		return nil
-	}
-}
-
-func BlobIsBlocked(acl *acl.Controller) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
-	return func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
-		if hints.Hash != nil && acl.IsBlobBlocked(*hints.Hash) {
-			return blossom.ErrForbidden("this blob is blocked")
 		}
 		return nil
 	}

@@ -9,14 +9,17 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/zapstore/server/pkg/acl"
-	"github.com/zapstore/server/pkg/analytics"
-	"github.com/zapstore/server/pkg/blossom"
-	blobstore "github.com/zapstore/server/pkg/blossom/store"
-	"github.com/zapstore/server/pkg/config"
-	"github.com/zapstore/server/pkg/rate"
-	"github.com/zapstore/server/pkg/relay"
-	eventstore "github.com/zapstore/server/pkg/relay/store"
+	"github.com/zapstore/relay/pkg/acl"
+	"github.com/zapstore/relay/pkg/analytics"
+	"github.com/zapstore/relay/pkg/blossom"
+	blobstore "github.com/zapstore/relay/pkg/blossom/store"
+	"github.com/zapstore/relay/pkg/config"
+	"github.com/zapstore/relay/pkg/indexing"
+	indexingstore "github.com/zapstore/relay/pkg/indexing/store"
+	"github.com/zapstore/relay/pkg/rate"
+	"github.com/zapstore/relay/pkg/relay"
+	"github.com/zapstore/relay/pkg/relay/linkverify"
+	eventstore "github.com/zapstore/relay/pkg/relay/store"
 )
 
 func main() {
@@ -85,13 +88,30 @@ func main() {
 	defer analytics.Close()
 
 	// Step 4.
-	// Setup relay and blossom by passing dependencies
+	// Initialize indexing engine — indexing.db lives next to relay.db in the data directory.
+	var indexingEngine *indexing.Engine
+	istore, err := indexingstore.New(filepath.Join(dataDir, "indexing.db"))
+	if err != nil {
+		logger.Warn("indexing: failed to open indexing.db, demand-driven features disabled", "error", err)
+	} else {
+		defer istore.Close()
+		indexingEngine = indexing.New(istore, indexing.NewConfig(), logger)
+		defer indexingEngine.Close()
+		logger.Info("indexing: demand-driven indexing enabled")
+	}
+
+	// Step 5.
+	// Setup C1 verifier and relay/blossom
+	c1 := linkverify.New(rstore, acl, config.Blossom.Hostname, logger)
+
 	relay, err := relay.Setup(
 		config.Relay,
 		limiter,
 		acl,
 		rstore,
 		analytics,
+		c1,
+		indexingEngine,
 	)
 	if err != nil {
 		panic(err)
@@ -108,7 +128,7 @@ func main() {
 		panic(err)
 	}
 
-	// Step 5.
+	// Step 6.
 	// Run everything
 	exit := make(chan error, 2)
 	wg := sync.WaitGroup{}

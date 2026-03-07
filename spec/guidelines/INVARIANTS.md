@@ -3,7 +3,7 @@ description: Non-negotiable invariants — event integrity, security, availabili
 alwaysApply: true
 ---
 
-# server — Invariants
+# relay — Invariants
 
 ## Event Integrity
 
@@ -14,8 +14,8 @@ alwaysApply: true
 ## Access Control
 
 - Blocked pubkeys MUST never be able to publish events or upload blobs, regardless of auth.
-- Blocked event IDs and blob hashes MUST be rejected at the handler level before any processing.
 - ACL changes from CSV hot-reload MUST take effect on the next request — no stale cache.
+- AppOwnership MUST enforce one publisher per app ID (kind 32267 `d` tag). The indexer pubkey can take over any app; any developer can reclaim from the indexer; other transitions are rejected.
 
 ## Security
 
@@ -34,4 +34,5 @@ alwaysApply: true
 ## Storage
 
 - SQLite writes must use WAL mode for concurrent read performance.
-- relay.db, blossom.db, and analytics.db are separate files — never share a connection pool.
+- relay.db, blossom.db, analytics.db, and indexing.db are separate files — never share a connection pool.
+- indexing.db is shared with zindex (both read/write). WAL mode with 5s busy_timeout handles contention.

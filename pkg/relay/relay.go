@@ -4,6 +4,7 @@ package relay
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,16 +15,17 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
-	"github.com/zapstore/server/pkg/acl"
-	"github.com/zapstore/server/pkg/analytics"
-	"github.com/zapstore/server/pkg/events"
-	"github.com/zapstore/server/pkg/rate"
-	"github.com/zapstore/server/pkg/relay/store"
+	"github.com/zapstore/relay/pkg/acl"
+	"github.com/zapstore/relay/pkg/analytics"
+	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/indexing"
+	"github.com/zapstore/relay/pkg/rate"
+	"github.com/zapstore/relay/pkg/relay/linkverify"
+	"github.com/zapstore/relay/pkg/relay/store"
 )
 
 var (
 	ErrEventKindNotAllowed = errors.New("event kind is not in the allowed list")
-	ErrEventIDBlocked      = errors.New("event ID is blocked")
 	ErrEventPubkeyBlocked  = errors.New("event pubkey is not allowed. Please contact the Zapstore team.")
 
 	ErrAppAlreadyExists = errors.New(`failed to publish app: another pubkey has already published an app with the same 'd' tag identifier.
@@ -37,12 +39,17 @@ var (
 	ErrRateLimited = errors.New("rate-limited: slow down chief")
 )
 
+// indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
+const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
+
 func Setup(
 	config Config,
 	limiter rate.Limiter,
 	acl *acl.Controller,
 	store *sqlite.Store,
 	analytics *analytics.Engine,
+	c1 *linkverify.Verifier,
+	indexingEngine *indexing.Engine, // nil = no demand-driven indexing
 ) (*rely.Relay, error) {
 
 	relay := rely.NewRelay(
@@ -63,12 +70,11 @@ func Setup(
 	relay.Reject.Event.Append(
 		RateEventIP(limiter),
 		KindNotAllowed(config.AllowedKinds),
-		IDIsBlocked(acl),
 		rely.InvalidID,
 		rely.InvalidSignature,
 		InvalidStructure(),
 		AuthorNotAllowed(acl),
-		AppAlreadyExists(store),
+		AppOwnership(store, config.Info.Pubkey),
 	)
 
 	relay.Reject.Req.Clear()
@@ -78,12 +84,12 @@ func Setup(
 		// VagueFilters(),
 	)
 
-	relay.On.Event = Save(store, analytics)
-	relay.On.Req = Query(store, analytics)
+	relay.On.Event = Save(store, analytics, c1)
+	relay.On.Req = Query(store, analytics, indexingEngine)
 	return relay, nil
 }
 
-func Save(db *sqlite.Store, analytics *analytics.Engine) func(c rely.Client, event *nostr.Event) error {
+func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier) func(c rely.Client, event *nostr.Event) error {
 	return func(c rely.Client, event *nostr.Event) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -114,16 +120,22 @@ func Save(db *sqlite.Store, analytics *analytics.Engine) func(c rely.Client, eve
 		}
 
 		analytics.RecordEvent(c, event)
+
+		// C1 verification runs asynchronously after save
+		if c1 != nil {
+			c1.OnEvent(ctx, event)
+		}
+
 		return nil
 	}
 }
 
-func Query(db *sqlite.Store, analytics *analytics.Engine) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
+func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 	return func(ctx context.Context, client rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		events, err := db.Query(ctx, filters...)
+		result, err := db.Query(ctx, filters...)
 		if errors.Is(err, store.ErrUnsupportedREQ) {
 			return nil, err
 		}
@@ -132,9 +144,56 @@ func Query(db *sqlite.Store, analytics *analytics.Engine) func(ctx context.Conte
 			return nil, err
 		}
 
-		analytics.RecordReq(client, id, filters, events)
-		return events, nil
+		analytics.RecordReq(client, id, filters, result)
+
+		// Non-blocking demand signals — must not affect query latency
+		if idx != nil {
+			recordDemandSignals(idx, filters, result)
+		}
+
+		return result, nil
 	}
+}
+
+// recordDemandSignals records discovery misses and release requests non-blocking.
+func recordDemandSignals(idx *indexing.Engine, filters nostr.Filters, result []nostr.Event) {
+	for _, filter := range filters {
+		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results
+		if filter.Search != "" && len(result) == 0 {
+			if isKindOnly(filter.Kinds, events.KindApp) {
+				idx.RecordDiscoveryMiss(filter.Search)
+			}
+		}
+
+		// Release request: kind 30063 or 3063 with results — extract app ID from i tag filter
+		if hasReleaseKind(filter.Kinds) && len(result) > 0 {
+			if iVals, ok := filter.Tags["i"]; ok {
+				for _, appID := range iVals {
+					idx.RecordReleaseRequest(appID)
+				}
+			} else {
+				// Extract app IDs from returned events
+				for _, ev := range result {
+					if appID, ok := events.Find(ev.Tags, "i"); ok {
+						idx.RecordReleaseRequest(appID)
+					}
+				}
+			}
+		}
+	}
+}
+
+func isKindOnly(kinds []int, kind int) bool {
+	return len(kinds) == 1 && kinds[0] == kind
+}
+
+func hasReleaseKind(kinds []int) bool {
+	for _, k := range kinds {
+		if k == events.KindRelease || k == events.KindAsset {
+			return true
+		}
+	}
+	return false
 }
 
 func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Request) error {
@@ -237,26 +296,23 @@ func KindNotAllowed(kinds []int) func(_ rely.Client, e *nostr.Event) error {
 	}
 }
 
-func IDIsBlocked(acl *acl.Controller) func(_ rely.Client, e *nostr.Event) error {
-	return func(_ rely.Client, e *nostr.Event) error {
-		if acl.IsEventBlocked(e.ID) {
-			return fmt.Errorf("%w: %v", ErrEventIDBlocked, e.ID)
-		}
-		return nil
-	}
-}
-
 func InvalidStructure() func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		return events.Validate(e)
 	}
 }
 
-// AppAlreadyExists checks if an app (kind 32267) with the same identifier ("d" tag) has already been published by another pubkey.
-// This is to avoid duplicate apps with the same identifier, as that causes issues on Android.
+// AppOwnership enforces one publisher per app ID (kind 32267 d-tag) with role-aware transitions.
 //
-// TODO: we should not need this check at all.
-func AppAlreadyExists(store *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
+// Transition table:
+//   - same pubkey → same pubkey:         accept (NIP-33 replace)
+//   - indexer → non-indexer:             delete old 32267, accept (indexer takeover)
+//   - non-indexer → indexer:             delete indexer's 32267, accept (developer reclaim)
+//   - anyone else → anyone else:         reject
+func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e *nostr.Event) error {
+	if indexerPubkey == "" {
+		indexerPubkey = indexerPubkeyFallback
+	}
 	return func(_ rely.Client, e *nostr.Event) error {
 		if e.Kind != events.KindApp {
 			return nil
@@ -270,30 +326,73 @@ func AppAlreadyExists(store *sqlite.Store) func(_ rely.Client, e *nostr.Event) e
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		query := `SELECT COUNT(e.id)
+		// Find any existing kind 32267 with this d-tag from a different pubkey
+		query := `SELECT e.id, e.pubkey
 					FROM events AS e JOIN tags AS t ON t.event_id = e.id
 					WHERE e.kind = ?
 					AND e.pubkey != ?
-					AND t.key = 'd' AND t.value = ?`
-		args := []any{events.KindApp, e.PubKey, appID}
+					AND t.key = 'd' AND t.value = ?
+					LIMIT 1`
 
-		var count int
-		err := store.DB.QueryRowContext(ctx, query, args...).Scan(&count)
-		if err != nil {
-			slog.Error("failed to check if app event with the same id already exists", "error", err)
+		var existingID, existingPubkey string
+		err := db.DB.QueryRowContext(ctx, query, events.KindApp, e.PubKey, appID).Scan(&existingID, &existingPubkey)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("AppOwnership: failed to query existing app", "error", err)
 			return ErrInternal
 		}
 
-		if count > 0 {
+		if existingID == "" {
+			// No conflict — new app or NIP-33 replace by same pubkey
+			return nil
+		}
+
+		newIsIndexer := e.PubKey == indexerPubkey
+		existingIsIndexer := existingPubkey == indexerPubkey
+
+		switch {
+		case newIsIndexer && !existingIsIndexer:
+			// Indexer takeover: delete developer's old 32267
+			if err := deleteEvent(ctx, db, existingID); err != nil {
+				slog.Error("AppOwnership: failed to delete old app event for indexer takeover", "event_id", existingID, "error", err)
+				return ErrInternal
+			}
+			slog.Info("AppOwnership: indexer takeover", "app_id", appID, "old_pubkey", existingPubkey[:16])
+			return nil
+
+		case !newIsIndexer && existingIsIndexer:
+			// Developer reclaim: delete indexer's 32267
+			if err := deleteEvent(ctx, db, existingID); err != nil {
+				slog.Error("AppOwnership: failed to delete indexer app event for developer reclaim", "event_id", existingID, "error", err)
+				return ErrInternal
+			}
+			slog.Info("AppOwnership: developer reclaim", "app_id", appID, "new_pubkey", e.PubKey[:16])
+			return nil
+
+		default:
+			// Non-indexer vs non-indexer: reject
 			return ErrAppAlreadyExists
 		}
-		return nil
 	}
+}
+
+// deleteEvent removes an event and its tags from the relay store.
+// This is a relay-operator-level store management operation, not a Nostr protocol deletion.
+func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
+	_, err := db.DB.ExecContext(ctx, `DELETE FROM tags WHERE event_id = ?`, eventID)
+	if err != nil {
+		return fmt.Errorf("delete tags: %w", err)
+	}
+	_, err = db.DB.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, eventID)
+	if err != nil {
+		return fmt.Errorf("delete event: %w", err)
+	}
+	return nil
 }
 
 func AuthorNotAllowed(acl *acl.Controller) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
-		if e.Kind == events.KindAppSet {
+		// AppSet (30267) and IdentityProof (30509) are open — anyone can publish
+		if e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
 			return nil
 		}
 

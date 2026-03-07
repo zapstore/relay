@@ -7,20 +7,19 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/zapstore/server/pkg/acl/github"
-	"github.com/zapstore/server/pkg/acl/vertex"
+	"github.com/zapstore/relay/pkg/acl/repo"
+	"github.com/zapstore/relay/pkg/acl/vertex"
 )
 
 // Hardcoded file names within the ACL directory.
 const (
-	PubkeysAllowedFile = "pubkeys_allowed.csv"
-	PubkeysBlockedFile = "pubkeys_blocked.csv"
-	EventsBlockedFile  = "events_blocked.csv"
-	BlobsBlockedFile   = "blobs_blocked.csv"
+	PubkeysAllowedFile      = "pubkeys_allowed.csv"
+	PubkeysBlockedFile      = "pubkeys_blocked.csv"
+	PlatformUsersBlockedFile = "platform_users_blocked.csv"
 )
 
 // RequiredFiles is the list of files that must exist in the ACL directory.
-var RequiredFiles = []string{PubkeysAllowedFile, PubkeysBlockedFile, EventsBlockedFile, BlobsBlockedFile}
+var RequiredFiles = []string{PubkeysAllowedFile, PubkeysBlockedFile, PlatformUsersBlockedFile}
 
 // PubkeyPolicy determines how to handle pubkeys that are not in the allowed or blocked lists.
 type PubkeyPolicy string
@@ -46,8 +45,8 @@ type Config struct {
 	// Vertex is the configuration for the Vertex DVM, used when PubkeyPolicy is "VERTEX".
 	Vertex vertex.Config
 
-	// Github is the configuration for the Github API.
-	Github github.Config
+	// Repo is the configuration for the platform-agnostic repository verifier.
+	Repo repo.Config
 }
 
 // NewConfig creates a new Config with default values.
@@ -55,7 +54,7 @@ func NewConfig() Config {
 	return Config{
 		UnknownPubkeyPolicy: UseVertex,
 		Vertex:              vertex.NewConfig(),
-		Github:              github.NewConfig(),
+		Repo:                repo.NewConfig(),
 	}
 }
 
@@ -71,8 +70,8 @@ func (c Config) Validate() error {
 		}
 	}
 
-	if err := c.Github.Validate(); err != nil {
-		return fmt.Errorf("github: %w", err)
+	if err := c.Repo.Validate(); err != nil {
+		return fmt.Errorf("repo: %w", err)
 	}
 	return nil
 }
@@ -87,6 +86,6 @@ func (c Config) String() string {
 		s += c.Vertex.String()
 	}
 
-	s += c.Github.String()
+	s += c.Repo.String()
 	return s
 }

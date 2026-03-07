@@ -15,7 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/zapstore/server/pkg/events"
+	"github.com/zapstore/relay/pkg/events"
 )
 
 // Config holds the stress test configuration, loaded from a .env file.

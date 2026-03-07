@@ -14,11 +14,11 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	_ "github.com/joho/godotenv/autoload"
-	"github.com/zapstore/server/pkg/acl"
-	"github.com/zapstore/server/pkg/analytics"
-	"github.com/zapstore/server/pkg/blossom"
-	"github.com/zapstore/server/pkg/rate"
-	"github.com/zapstore/server/pkg/relay"
+	"github.com/zapstore/relay/pkg/acl"
+	"github.com/zapstore/relay/pkg/analytics"
+	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/rate"
+	"github.com/zapstore/relay/pkg/relay"
 )
 
 type Config struct {
