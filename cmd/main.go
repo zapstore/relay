@@ -15,7 +15,6 @@ import (
 	blobstore "github.com/zapstore/relay/pkg/blossom/store"
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/indexing"
-	indexingstore "github.com/zapstore/relay/pkg/indexing/store"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/relay/linkverify"
@@ -88,14 +87,18 @@ func main() {
 	defer analytics.Close()
 
 	// Step 4.
-	// Initialize indexing engine — indexing.db lives next to relay.db in the data directory.
+	// Initialize indexing engine — indexing.db lives in its own indexing/ folder.
+	indexingDir := filepath.Join(config.Sys.Dir, "indexing")
+	if err := os.MkdirAll(indexingDir, 0755); err != nil {
+		panic(err)
+	}
+
 	var indexingEngine *indexing.Engine
-	istore, err := indexingstore.New(filepath.Join(dataDir, "indexing.db"))
+	indexingPaths := indexing.Paths{Store: filepath.Join(indexingDir, "indexing.db")}
+	indexingEngine, err = indexing.NewEngine(config.Indexing, indexingPaths, logger)
 	if err != nil {
 		logger.Warn("indexing: failed to open indexing.db, demand-driven features disabled", "error", err)
 	} else {
-		defer istore.Close()
-		indexingEngine = indexing.New(istore, indexing.NewConfig(), logger)
 		defer indexingEngine.Close()
 		logger.Info("indexing: demand-driven indexing enabled")
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/zapstore/relay/pkg/acl"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 )
@@ -26,6 +27,7 @@ type Config struct {
 	Limiter   rate.Config
 	ACL       acl.Config
 	Analytics analytics.Config
+	Indexing  indexing.Config
 	Relay     relay.Config
 	Blossom   blossom.Config
 }
@@ -69,6 +71,7 @@ func New() Config {
 		Limiter:   rate.NewConfig(),
 		ACL:       acl.NewConfig(),
 		Analytics: analytics.NewConfig(),
+		Indexing:  indexing.NewConfig(),
 		Relay:     relay.NewConfig(),
 		Blossom:   blossom.NewConfig(),
 	}
@@ -86,6 +89,9 @@ func (c Config) Validate() error {
 	}
 	if err := c.Analytics.Validate(); err != nil {
 		return fmt.Errorf("analytics: %w", err)
+	}
+	if err := c.Indexing.Validate(); err != nil {
+		return fmt.Errorf("indexing: %w", err)
 	}
 	if err := c.Relay.Validate(); err != nil {
 		return fmt.Errorf("relay: %w", err)
@@ -105,6 +111,8 @@ func (c Config) String() string {
 	b.WriteString(c.ACL.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Analytics.String())
+	b.WriteByte('\n')
+	b.WriteString(c.Indexing.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Relay.String())
 	b.WriteByte('\n')

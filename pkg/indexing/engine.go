@@ -6,6 +6,7 @@
 package indexing
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -20,21 +21,6 @@ const (
 	maxTTL           = 7 * 24 * time.Hour
 )
 
-// Config holds configuration for the indexing engine.
-type Config struct {
-	QueueSize int
-	MinTTL    time.Duration
-	MaxTTL    time.Duration
-}
-
-// NewConfig returns a Config with sensible defaults.
-func NewConfig() Config {
-	return Config{
-		QueueSize: defaultQueueSize,
-		MinTTL:    minTTL,
-		MaxTTL:    maxTTL,
-	}
-}
 
 type discoveryMsg struct{ url string }
 type releaseMsg struct{ appID string }
@@ -52,8 +38,17 @@ type Engine struct {
 	releaseQueued  map[string]struct{}
 }
 
-// New creates and starts an indexing engine backed by the given store.
-func New(s *store.Store, cfg Config, logger *slog.Logger) *Engine {
+// NewEngine opens the indexing store at paths.Store and starts the background engine.
+// Returns an error if the store cannot be opened.
+func NewEngine(cfg Config, paths Paths, logger *slog.Logger) (*Engine, error) {
+	s, err := store.New(paths.Store)
+	if err != nil {
+		return nil, fmt.Errorf("indexing: open store: %w", err)
+	}
+	return newEngine(s, cfg, logger), nil
+}
+
+func newEngine(s *store.Store, cfg Config, logger *slog.Logger) *Engine {
 	e := &Engine{
 		store:         s,
 		config:        cfg,
@@ -70,10 +65,11 @@ func New(s *store.Store, cfg Config, logger *slog.Logger) *Engine {
 	return e
 }
 
-// Close shuts down the background goroutine and waits for it to finish.
+// Close shuts down the background goroutine, waits for it to finish, and closes the store.
 func (e *Engine) Close() {
 	close(e.done)
 	e.wg.Wait()
+	e.store.Close()
 }
 
 // RecordDiscoveryMiss records a GitHub URL that returned zero search results.
