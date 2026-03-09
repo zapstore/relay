@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultQueueSize = 512
+	defaultQueueSize = 4096
 	minTTL           = 1 * time.Hour
 	maxTTL           = 7 * 24 * time.Hour
 )
@@ -47,16 +47,20 @@ type Engine struct {
 	ch       chan any
 	wg       sync.WaitGroup
 	done     chan struct{}
+
+	releaseMu      sync.Mutex
+	releaseQueued  map[string]struct{}
 }
 
 // New creates and starts an indexing engine backed by the given store.
 func New(s *store.Store, cfg Config, logger *slog.Logger) *Engine {
 	e := &Engine{
-		store:  s,
-		config: cfg,
-		log:    logger,
-		ch:     make(chan any, cfg.QueueSize),
-		done:   make(chan struct{}),
+		store:         s,
+		config:        cfg,
+		log:           logger,
+		ch:            make(chan any, cfg.QueueSize),
+		done:          make(chan struct{}),
+		releaseQueued: make(map[string]struct{}),
 	}
 	e.wg.Add(1)
 	go func() {
@@ -88,13 +92,25 @@ func (e *Engine) RecordDiscoveryMiss(url string) {
 
 // RecordReleaseRequest records that a user requested releases for an app.
 // Non-blocking: if the channel is full, the write is dropped.
+// Duplicate app IDs already in the queue are silently skipped.
 func (e *Engine) RecordReleaseRequest(appID string) {
 	if appID == "" {
 		return
 	}
+	e.releaseMu.Lock()
+	if _, queued := e.releaseQueued[appID]; queued {
+		e.releaseMu.Unlock()
+		return
+	}
+	e.releaseQueued[appID] = struct{}{}
+	e.releaseMu.Unlock()
+
 	select {
 	case e.ch <- releaseMsg{appID: appID}:
 	default:
+		e.releaseMu.Lock()
+		delete(e.releaseQueued, appID)
+		e.releaseMu.Unlock()
 		e.log.Warn("indexing: release request channel full, dropping", "app_id", appID)
 	}
 }
@@ -131,6 +147,9 @@ func (e *Engine) handle(msg any) {
 			e.log.Error("indexing: failed to upsert discovery", "url", m.url, "error", err)
 		}
 	case releaseMsg:
+		e.releaseMu.Lock()
+		delete(e.releaseQueued, m.appID)
+		e.releaseMu.Unlock()
 		if err := e.store.UpsertReleaseRequest(m.appID); err != nil {
 			e.log.Error("indexing: failed to upsert release request", "app_id", m.appID, "error", err)
 		}
