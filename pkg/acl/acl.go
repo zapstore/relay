@@ -144,6 +144,14 @@ func (c *Controller) Close() error {
 	return c.watcher.Close()
 }
 
+// IsBlocked reports whether a pubkey is explicitly on the blocked list.
+// It does not consult the allowed list or the unknown-pubkey policy.
+func (c *Controller) IsBlocked(_ context.Context, pubkey string) (bool, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.pubkeysBlocked.Contains(pubkey), nil
+}
+
 // AllowPubkey checks if a pubkey should be allowed.
 // It checks the blocked list first, then the allowed list, and finally applies the unknown pubkey policy.
 func (c *Controller) AllowPubkey(ctx context.Context, pubkey string) (bool, error) {

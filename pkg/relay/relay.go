@@ -391,17 +391,26 @@ func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
 
 func AuthorNotAllowed(acl *acl.Controller) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
-		// AppSet (30267) and IdentityProof (30509) are open — anyone can publish
-		if e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
-			return nil
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
+		// Open kinds (30267, 30509) skip the allow-list and unknown-pubkey policy,
+		// but blocked pubkeys are still rejected.
+		if e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
+			blocked, err := acl.IsBlocked(ctx, e.PubKey)
+			if err != nil {
+				slog.Error("relay: failed to check if pubkey is blocked", "error", err)
+				return ErrEventPubkeyBlocked
+			}
+			if blocked {
+				return ErrEventPubkeyBlocked
+			}
+			return nil
+		}
+
 		allow, err := acl.AllowEvent(ctx, e)
 		if err != nil {
-			// fail closed policy;
+			// fail closed policy
 			slog.Error("relay: failed to check if pubkey is allowed", "error", err)
 			return ErrEventPubkeyBlocked
 		}
