@@ -95,6 +95,15 @@ func (s *Store) UpsertReleaseRequest(appID string) error {
 	return err
 }
 
+// ResetReleaseRequest resets request_count to 0 and updates window_start for the given app ID.
+// Called when a release event is successfully stored, satisfying the outstanding demand.
+func (s *Store) ResetReleaseRequest(appID string) error {
+	_, err := s.db.Exec(`
+		UPDATE index_status SET request_count = 0, window_start = ? WHERE app_id = ?
+	`, time.Now().Unix(), appID)
+	return err
+}
+
 // IsStale returns true if the app should be re-checked based on demand-driven TTL.
 // TTL = clamp(maxTTL / request_count, minTTL, maxTTL).
 func (s *Store) IsStale(appID string, minTTL, maxTTL time.Duration) (bool, error) {

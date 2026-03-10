@@ -24,6 +24,7 @@ const (
 
 type discoveryMsg struct{ url string }
 type releaseMsg struct{ appID string }
+type releaseResetMsg struct{ appID string }
 
 // Engine records demand signals non-blocking and flushes them to indexing.db.
 type Engine struct {
@@ -111,6 +112,19 @@ func (e *Engine) RecordReleaseRequest(appID string) {
 	}
 }
 
+// ResetReleaseRequest resets the request_count for an app after a release is successfully stored.
+// Non-blocking: if the channel is full, the reset is dropped (acceptable — it's best-effort).
+func (e *Engine) ResetReleaseRequest(appID string) {
+	if appID == "" {
+		return
+	}
+	select {
+	case e.ch <- releaseResetMsg{appID: appID}:
+	default:
+		e.log.Warn("indexing: reset channel full, dropping", "app_id", appID)
+	}
+}
+
 func (e *Engine) run() {
 	for {
 		select {
@@ -148,6 +162,10 @@ func (e *Engine) handle(msg any) {
 		e.releaseMu.Unlock()
 		if err := e.store.UpsertReleaseRequest(m.appID); err != nil {
 			e.log.Error("indexing: failed to upsert release request", "app_id", m.appID, "error", err)
+		}
+	case releaseResetMsg:
+		if err := e.store.ResetReleaseRequest(m.appID); err != nil {
+			e.log.Error("indexing: failed to reset release request", "app_id", m.appID, "error", err)
 		}
 	}
 }

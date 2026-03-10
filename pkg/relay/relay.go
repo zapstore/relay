@@ -84,12 +84,12 @@ func Setup(
 		// VagueFilters(),
 	)
 
-	relay.On.Event = Save(store, analytics, c1)
+	relay.On.Event = Save(store, analytics, c1, indexingEngine)
 	relay.On.Req = Query(store, analytics, indexingEngine)
 	return relay, nil
 }
 
-func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier) func(c rely.Client, event *nostr.Event) error {
+func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier, idx *indexing.Engine) func(c rely.Client, event *nostr.Event) error {
 	return func(c rely.Client, event *nostr.Event) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -120,6 +120,13 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier
 		}
 
 		analytics.RecordEvent(c, event)
+
+		// Reset demand counter when a release is stored — demand has been satisfied.
+		if idx != nil && event.Kind == events.KindRelease {
+			if appID, ok := events.Find(event.Tags, "i"); ok {
+				idx.ResetReleaseRequest(appID)
+			}
+		}
 
 		// C1 verification runs asynchronously after save
 		if c1 != nil {
