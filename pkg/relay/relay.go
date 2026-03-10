@@ -73,7 +73,7 @@ func Setup(
 		rely.InvalidID,
 		rely.InvalidSignature,
 		InvalidStructure(),
-		AuthorNotAllowed(acl),
+		AuthorNotAllowed(acl, config.Info.Pubkey),
 		AppOwnership(store, config.Info.Pubkey),
 	)
 
@@ -407,8 +407,13 @@ func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
 	return nil
 }
 
-func AuthorNotAllowed(acl *acl.Controller) func(_ rely.Client, e *nostr.Event) error {
+func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
+		// Operator pubkey is always allowed — no ACL check needed.
+		if operatorPubkey != "" && e.PubKey == operatorPubkey {
+			return nil
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
