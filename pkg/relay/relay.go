@@ -84,21 +84,32 @@ func Setup(
 		// VagueFilters(),
 	)
 
-	relay.On.Event = Save(store, analytics, c1, indexingEngine)
+	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
 	relay.On.Req = Query(store, analytics, indexingEngine)
 	return relay, nil
 }
 
-func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier, idx *indexing.Engine) func(c rely.Client, event *nostr.Event) error {
+func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier, idx *indexing.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
 	return func(c rely.Client, event *nostr.Event) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		switch {
 		case event.Kind == nostr.KindDeletion:
-			if _, err := db.DeleteRequest(ctx, event); err != nil {
-				slog.Error("relay: failed to fulfill the delete request", "error", err, "event", event.ID)
-				return err
+			if event.PubKey == operatorPubkey {
+				// Operator-level deletion: bypass NIP-09 author check and delete any targeted events directly.
+				for _, tag := range event.Tags {
+					if len(tag) >= 2 && tag[0] == "e" {
+						if err := deleteEvent(ctx, db, tag[1]); err != nil {
+							slog.Error("relay: operator deletion failed", "error", err, "target_event", tag[1])
+						}
+					}
+				}
+			} else {
+				if _, err := db.DeleteRequest(ctx, event); err != nil {
+					slog.Error("relay: failed to fulfill the delete request", "error", err, "event", event.ID)
+					return err
+				}
 			}
 
 			if _, err := db.Save(ctx, event); err != nil {
