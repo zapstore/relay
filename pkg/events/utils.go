@@ -10,6 +10,11 @@ import (
 	"github.com/zapstore/relay/pkg/events/legacy"
 )
 
+const (
+	KindComment = 1111
+	KindZap     = 9735
+)
+
 // WithValidation is a list of event kinds that have validation functions.
 var WithValidation = []int{
 	KindApp,
@@ -18,6 +23,8 @@ var WithValidation = []int{
 	KindAppSet,
 	KindAppRelays,
 	KindIdentityProof,
+	KindComment,
+	KindZap,
 	legacy.KindFile,
 }
 
@@ -59,9 +66,56 @@ func Validate(event *nostr.Event) error {
 	case KindIdentityProof:
 		return ValidateIdentityProof(event)
 
+	case KindComment, KindZap:
+		return ValidateAppReaction(event)
+
 	default:
 		return nil
 	}
+}
+
+// ValidateAppReaction validates that a comment (1111) or zap receipt (9735) is scoped to
+// a kind 32267 app event.
+//
+// For kind 1111 (NIP-22): the root scope is indicated by an uppercase "A" tag of the form
+// "32267:<pubkey>:<d-tag>", paired with a "K" tag of "32267".
+//
+// For kind 9735 (NIP-57): the zap receipt carries a lowercase "a" tag set by the LNURL server
+// referencing the zapped addressable event.
+func ValidateAppReaction(event *nostr.Event) error {
+	switch event.Kind {
+	case KindComment:
+		// NIP-22: uppercase "A" tag holds the root scope address.
+		a, ok := Find(event.Tags, "A")
+		if !ok {
+			return fmt.Errorf("kind 1111 must have an 'A' tag (root scope) referencing a kind 32267 app event")
+		}
+		if err := validateAppAddress(a, "A"); err != nil {
+			return fmt.Errorf("kind 1111: %w", err)
+		}
+	case KindZap:
+		// NIP-57: lowercase "a" tag is set by the LNURL server on the zap receipt.
+		a, ok := Find(event.Tags, "a")
+		if !ok {
+			return fmt.Errorf("kind 9735 must have an 'a' tag referencing a kind 32267 app event")
+		}
+		if err := validateAppAddress(a, "a"); err != nil {
+			return fmt.Errorf("kind 9735: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateAppAddress checks that an address value is a well-formed "32267:<pubkey>:<d-tag>" string.
+func validateAppAddress(addr, tagName string) error {
+	if !strings.HasPrefix(addr, "32267:") {
+		return fmt.Errorf("'%s' tag must reference a kind 32267 app event, got: %s", tagName, addr)
+	}
+	parts := strings.SplitN(addr, ":", 3)
+	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+		return fmt.Errorf("'%s' tag must be in the form '32267:<pubkey>:<d-tag>', got: %s", tagName, addr)
+	}
+	return nil
 }
 
 // ValidateHash validates a sha256 hash, reporting an error if it is invalid.

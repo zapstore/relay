@@ -74,6 +74,7 @@ func Setup(
 		rely.InvalidID,
 		rely.InvalidSignature,
 		InvalidStructure(),
+		AppReactionOnly(),
 		AuthorNotAllowed(acl, config.Info.Pubkey),
 		AppOwnership(store, config.Info.Pubkey),
 	)
@@ -415,6 +416,18 @@ func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
 		return fmt.Errorf("delete event: %w", err)
 	}
 	return nil
+}
+
+// AppReactionOnly rejects kind 1111 and 9735 events that do not reference a kind 32267 app
+// via a valid "a" tag. Validation of the tag structure is handled by events.Validate; this
+// check is a belt-and-suspenders guard at the rejection layer.
+func AppReactionOnly() func(_ rely.Client, e *nostr.Event) error {
+	return func(_ rely.Client, e *nostr.Event) error {
+		if e.Kind != events.KindComment && e.Kind != events.KindZap {
+			return nil
+		}
+		return events.ValidateAppReaction(e)
+	}
 }
 
 func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Client, e *nostr.Event) error {
