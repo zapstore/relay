@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -81,7 +82,7 @@ func Setup(
 	relay.Reject.Req.Append(
 		RateReqIP(limiter),
 		FiltersExceed(config.MaxReqFilters),
-		// VagueFilters(),
+		VagueFilters(),
 	)
 
 	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
@@ -166,7 +167,7 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) 
 
 		// Non-blocking demand signals — must not affect query latency
 		if idx != nil {
-			recordDemandSignals(idx, filters, result)
+			recordDemandSignals(idx, id, filters, result)
 		}
 
 		return result, nil
@@ -174,16 +175,25 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) 
 }
 
 // recordDemandSignals records discovery misses and release requests non-blocking.
-func recordDemandSignals(idx *indexing.Engine, filters nostr.Filters, result []nostr.Event) {
+// Only subscription IDs with the "app-updates" prefix generate release-request demand signals,
+// filtering out web scrapers, bots, and non-Zapstore clients.
+func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filters, result []nostr.Event) {
+	isAppUpdates := strings.HasPrefix(subID, "app-updates")
+
 	for _, filter := range filters {
-		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results
+		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results.
+		// Not gated on subID — discovery misses are always meaningful.
 		if filter.Search != "" && len(result) == 0 {
 			if isKindOnly(filter.Kinds, events.KindApp) {
 				idx.RecordDiscoveryMiss(filter.Search)
 			}
 		}
 
-		// Release request: kind 30063 or 3063 with results — extract app ID from i tag filter
+		// Release request: only count demand from Zapstore app clients polling for updates.
+		if !isAppUpdates {
+			continue
+		}
+
 		if hasReleaseKind(filter.Kinds) && len(result) > 0 {
 			if iVals, ok := filter.Tags["i"]; ok {
 				for _, appID := range iVals {
@@ -260,8 +270,8 @@ func FiltersExceed(n int) func(_ rely.Client, _ string, filters nostr.Filters) e
 }
 
 // VagueFilters rejects filters that are too vague, as determined by the specificity scoring mechanism.
-func VagueFilters() func(rely.Client, nostr.Filters) error {
-	return func(_ rely.Client, filters nostr.Filters) error {
+func VagueFilters() func(rely.Client, string, nostr.Filters) error {
+	return func(_ rely.Client, _ string, filters nostr.Filters) error {
 		for _, f := range filters {
 			if specificity(f) < 2 {
 				return ErrFiltersTooVague

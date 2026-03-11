@@ -135,9 +135,14 @@ func (e *Engine) lookupCountry(ip net.IP) string {
 
 // RecordReq records the REQ and the derived impressions.
 // The client IP address is only used to lookup the country of the client for analytics purposes.
+// Impressions from unknown sources (no app-/web- subscription prefix) are dropped.
 func (e *Engine) RecordReq(client rely.Client, id string, filters nostr.Filters, events []nostr.Event) {
 	e.relay.reqs.Add(1)
 	e.relay.filters.Add(int64(len(filters)))
+
+	if store.ImpressionSource(id) == store.SourceUnknown {
+		return
+	}
 
 	country := e.lookupCountry(client.IP().Raw)
 	impressions := store.NewImpressions(country, id, filters, events)
@@ -165,8 +170,13 @@ func (e *Engine) RecordCheck(_ blossy.Request, _ blossom.Hash) {
 
 // RecordDownload records the download of the given hash by the given request.
 // The client IP address is only used to lookup the country of the client for analytics purposes.
+// Downloads from unknown sources (no X-Zapstore-Client header) are dropped.
 func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 	e.blossom.downloads.Add(1)
+
+	if store.DownloadSource(r.Raw().Header) == store.SourceUnknown {
+		return
+	}
 
 	country := e.lookupCountry(r.IP().Raw)
 	download := store.NewDownload(country, r.Raw().Header, hash)

@@ -81,8 +81,14 @@ func (s *Store) UpsertDiscovery(url string) error {
 	return err
 }
 
+// requestCountWindow is the rolling window for request_count accumulation.
+// Counts within a window reflect genuine demand pressure; once the window
+// expires the counter resets so stale counts don't permanently shrink the TTL.
+const requestCountWindow = int64(3600) // 1 hour
+
 // UpsertReleaseRequest records a release request for the given app ID.
-// Updates last_requested_at and increments request_count.
+// request_count accumulates within a 1-hour window and resets when the window
+// expires, preventing unbounded growth from automated fetches.
 func (s *Store) UpsertReleaseRequest(appID string) error {
 	now := time.Now().Unix()
 	_, err := s.db.Exec(`
@@ -90,8 +96,11 @@ func (s *Store) UpsertReleaseRequest(appID string) error {
 		VALUES (?, ?, 1, ?)
 		ON CONFLICT(app_id) DO UPDATE SET
 		    last_requested_at = excluded.last_requested_at,
-		    request_count     = request_count + 1
-	`, appID, now, now)
+		    window_start      = CASE WHEN ? - window_start > ? THEN ? ELSE window_start END,
+		    request_count     = CASE WHEN ? - window_start > ? THEN 1 ELSE MIN(request_count + 1, 168) END
+	`, appID, now, now,
+		now, requestCountWindow, now,
+		now, requestCountWindow)
 	return err
 }
 
