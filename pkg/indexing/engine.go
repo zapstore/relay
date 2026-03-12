@@ -8,11 +8,11 @@ package indexing
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/zapstore/relay/pkg/indexing/store"
+	"github.com/zapstore/relay/pkg/repourl"
 )
 
 const (
@@ -73,17 +73,19 @@ func (e *Engine) Close() {
 	e.store.Close()
 }
 
-// RecordDiscoveryMiss records a GitHub URL that returned zero search results.
-// Only URLs with "https://github.com/" prefix are accepted; others are silently dropped.
+// RecordDiscoveryMiss records a repository URL that returned zero search results.
+// The search term is parsed for a /:user/:repo path pattern (any host). Plain-text
+// searches that don't resolve to a repo URL are silently dropped.
 // Non-blocking: if the channel is full, the write is dropped.
-func (e *Engine) RecordDiscoveryMiss(url string) {
-	if !strings.HasPrefix(url, "https://github.com/") {
+func (e *Engine) RecordDiscoveryMiss(rawSearch string) {
+	r, ok := repourl.Parse(rawSearch)
+	if !ok {
 		return
 	}
 	select {
-	case e.ch <- discoveryMsg{url: url}:
+	case e.ch <- discoveryMsg{url: r.Canonical}:
 	default:
-		e.log.Warn("indexing: discovery channel full, dropping", "url", url)
+		e.log.Warn("indexing: discovery channel full, dropping", "url", r.Canonical)
 	}
 }
 

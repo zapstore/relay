@@ -13,6 +13,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
 	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/repourl"
 )
 
 var ErrUnsupportedREQ = errors.New("unsupported REQ")
@@ -33,8 +34,9 @@ func New(path string) (*sqlite.Store, error) {
 }
 
 // queryBuilder handles FTS search for apps when there's exactly one app search filter.
-// When the search term is a GitHub URL, it performs an exact match on the `repository` tag
-// instead of FTS. Otherwise, it delegates to the default query builder.
+// When the search term is a repository URL (any host, /:user/:repo path), it performs
+// an exact match on the `repository` tag instead of FTS. Otherwise, it delegates to
+// the default query builder.
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if searchesIn(filters) == 0 {
 		return sqlite.DefaultQueryBuilder(filters...)
@@ -51,8 +53,11 @@ func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 		return nil, fmt.Errorf("%w: we allow NIP-50 search only for kind %d", ErrUnsupportedREQ, events.KindApp)
 	}
 
-	// GitHub URL search: exact match on repository tag (no FTS)
-	if strings.HasPrefix(search.Search, "https://github.com/") {
+	// Repository URL search: exact match on the `repository` tag (no FTS).
+	// Accepts any /:user/:repo URL (GitHub, GitLab, Codeberg, etc.) with or
+	// without a scheme and with or without trailing path/query.
+	if r, ok := repourl.Parse(search.Search); ok {
+		search.Search = r.Canonical
 		return repositoryURLQuery(search)
 	}
 
@@ -70,11 +75,12 @@ func searchesIn(filters nostr.Filters) int {
 	return count
 }
 
-// repositoryURLQuery performs an exact match on the `repository` tag for GitHub URLs.
-// It tries both the URL as-is and with ".git" stripped to handle both forms.
+// repositoryURLQuery performs an exact match on the `repository` tag.
+// It tries both the canonical URL and with ".git" appended to handle both storage forms.
 func repositoryURLQuery(filter nostr.Filter) ([]sqlite.Query, error) {
-	url := filter.Search
-	urlWithoutGit := strings.TrimSuffix(url, ".git")
+	// filter.Search is already canonical (no .git). Match both forms stored in the DB.
+	canonical := filter.Search
+	withGit := canonical + ".git"
 
 	query := `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
 		FROM events e
@@ -89,7 +95,7 @@ func repositoryURLQuery(filter nostr.Filter) ([]sqlite.Query, error) {
 		limit = 20
 	}
 
-	return []sqlite.Query{{SQL: query, Args: []any{url, urlWithoutGit, limit}}}, nil
+	return []sqlite.Query{{SQL: query, Args: []any{canonical, withGit, limit}}}, nil
 }
 
 // appSearchQuery builds an FTS query for searching apps.
