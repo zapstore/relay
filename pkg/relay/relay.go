@@ -27,7 +27,7 @@ import (
 
 var (
 	ErrEventKindNotAllowed = errors.New("event kind is not in the allowed list")
-	ErrEventPubkeyBlocked  = errors.New("event pubkey is not allowed. Please contact the Zapstore team.")
+	ErrEventPubkeyBlocked  = errors.New("event pubkey is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
 
 	ErrAppAlreadyExists = errors.New(`failed to publish app: another pubkey has already published an app with the same 'd' tag identifier.
 		This is a precautionary measure because Android doesn't allow apps with the same identifier to be installed side by side.

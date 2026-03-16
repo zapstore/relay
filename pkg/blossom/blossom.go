@@ -25,7 +25,7 @@ import (
 var (
 	ErrNotFound    = blossom.ErrNotFound("blob not found")
 	ErrInternal    = blossom.ErrInternal("internal error, please contact the Zapstore team.")
-	ErrNotAllowed  = blossom.ErrForbidden("authenticated pubkey is not allowed. Please contact the Zapstore team")
+	ErrNotAllowed  = blossom.ErrForbidden("authenticated pubkey is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
 	ErrRateLimited = blossom.ErrTooMany("rate-limited: slow down chief")
 )
 
