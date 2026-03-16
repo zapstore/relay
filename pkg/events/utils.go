@@ -78,7 +78,7 @@ func Validate(event *nostr.Event) error {
 // a kind 32267 app event.
 //
 // For kind 1111 (NIP-22): the root scope is indicated by an uppercase "A" tag of the form
-// "32267:<pubkey>:<d-tag>", paired with a "K" tag of "32267".
+// "32267:<pubkey>:<d-tag>" or "30267:<pubkey>:<d-tag>", paired with a "K" tag of the referenced kind.
 //
 // For kind 9735 (NIP-57): the zap receipt carries a lowercase "a" tag set by the LNURL server
 // referencing the zapped addressable event.
@@ -106,14 +106,15 @@ func ValidateAppReaction(event *nostr.Event) error {
 	return nil
 }
 
-// validateAppAddress checks that an address value is a well-formed "32267:<pubkey>:<d-tag>" string.
+// validateAppAddress checks that an address value is a well-formed "32267:<pubkey>:<d-tag>"
+// or "30267:<pubkey>:<d-tag>" string.
 func validateAppAddress(addr, tagName string) error {
-	if !strings.HasPrefix(addr, "32267:") {
+	if !strings.HasPrefix(addr, "32267:") && !strings.HasPrefix(addr, "30267:") {
 		return fmt.Errorf("'%s' tag must reference a kind 32267 app event, got: %s", tagName, addr)
 	}
 	parts := strings.SplitN(addr, ":", 3)
 	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
-		return fmt.Errorf("'%s' tag must be in the form '32267:<pubkey>:<d-tag>', got: %s", tagName, addr)
+		return fmt.Errorf("'%s' tag must be in the form '32267:<pubkey>:<d-tag>' or '30267:<pubkey>:<d-tag>', got: %s", tagName, addr)
 	}
 	return nil
 }
