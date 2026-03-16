@@ -97,7 +97,7 @@ func (s *Store) UpsertReleaseRequest(appID string) error {
 		ON CONFLICT(app_id) DO UPDATE SET
 		    last_requested_at = excluded.last_requested_at,
 		    window_start      = CASE WHEN ? - window_start > ? THEN ? ELSE window_start END,
-		    request_count     = CASE WHEN ? - window_start > ? THEN 1 ELSE MIN(request_count + 1, 168) END
+		    request_count     = CASE WHEN ? - window_start > ? THEN 1 ELSE request_count + 1 END
 	`, appID, now, now,
 		now, requestCountWindow, now,
 		now, requestCountWindow)
