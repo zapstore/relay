@@ -11,7 +11,7 @@ import (
 
 const KindAppSet = 30267
 
-type AppIdentifier string // 32267:<pubkey>:<app_id>
+type AppIdentifier string // 32267:<pubkey>:<app_id> or 30267:<pubkey>:<d-tag>
 
 // AppSet represents a set of app identifiers with associated platform identifiers.
 // Learn more here: https://github.com/nostr-protocol/nips/blob/master/51.md#sets
@@ -58,7 +58,7 @@ func (e AppIdentifier) Validate() error {
 	}
 	kind, pk, appID := parts[0], parts[1], parts[2]
 
-	if kind != "32267" {
+	if kind != "32267" && kind != "30267" {
 		return fmt.Errorf("invalid app set element: %s", e)
 	}
 	if !nostr.IsValidPublicKey(pk) {
