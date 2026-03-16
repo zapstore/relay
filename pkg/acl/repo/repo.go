@@ -57,8 +57,9 @@ func (v *Verifier) Verify(ctx context.Context, repoURL, eventPubkey string) (Ver
 		return VerifyResult{}, fmt.Errorf("failed to fetch zapstore.yaml from %s: %w", repoURL, err)
 	}
 
+	// Empty pubkey means zapstore.yaml is absent or has no pubkey field — not a match, not an error.
 	return VerifyResult{
-		Matched:  pubkeyHex == eventPubkey,
+		Matched:  pubkeyHex != "" && pubkeyHex == eventPubkey,
 		Platform: platform,
 		Username: username,
 		RepoURL:  repoURL,
@@ -100,6 +101,9 @@ func (v *Verifier) fetchPubkey(ctx context.Context, rawURL, platform string) (st
 		return "", fmt.Errorf("failed to decode zapstore.yaml: %w", err)
 	}
 
+	if z.Pubkey == "" {
+		return "", nil
+	}
 	return normalizePubkey(z.Pubkey)
 }
 
