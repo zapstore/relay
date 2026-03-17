@@ -176,10 +176,12 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) 
 }
 
 // recordDemandSignals records discovery misses and release requests non-blocking.
-// Only subscription IDs with the "app-updates" prefix generate release-request demand signals,
-// filtering out web scrapers, bots, and non-Zapstore clients.
+// Release-request signals are gated to known Zapstore client subscription prefixes,
+// filtering out bots and non-Zapstore clients.
 func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filters, result []nostr.Event) {
-	isAppUpdates := strings.HasPrefix(subID, "app-updates")
+	wantsReleases := strings.HasPrefix(subID, "app-updates") ||
+		strings.HasPrefix(subID, "app-search") ||
+		strings.HasPrefix(subID, "web-search")
 
 	for _, filter := range filters {
 		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results.
@@ -190,8 +192,7 @@ func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filte
 			}
 		}
 
-		// Release request: only count demand from Zapstore app clients polling for updates.
-		if !isAppUpdates {
+		if !wantsReleases {
 			continue
 		}
 

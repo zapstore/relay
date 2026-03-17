@@ -97,7 +97,7 @@ func (e *Engine) RecordReleaseRequest(appID string) {
 	if appID == "" {
 		return
 	}
-	if rand.IntN(10) != 0 {
+	if rand.IntN(2) != 0 {
 		return
 	}
 	e.releaseMu.Lock()
