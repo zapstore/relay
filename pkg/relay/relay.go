@@ -83,7 +83,7 @@ func Setup(
 	relay.Reject.Req.Append(
 		RateReqIP(limiter),
 		FiltersExceed(config.MaxReqFilters),
-		VagueFilters(),
+		VagueFilters(0),
 	)
 
 	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
@@ -270,11 +270,15 @@ func FiltersExceed(n int) func(_ rely.Client, _ string, filters nostr.Filters) e
 	}
 }
 
-// VagueFilters rejects filters that are too vague, as determined by the specificity scoring mechanism.
-func VagueFilters() func(rely.Client, string, nostr.Filters) error {
+// VagueFilters rejects filters whose specificity score is below the given minimum.
+// Set min to 0 to disable the check entirely.
+func VagueFilters(min int) func(rely.Client, string, nostr.Filters) error {
 	return func(_ rely.Client, _ string, filters nostr.Filters) error {
+		if min <= 0 {
+			return nil
+		}
 		for _, f := range filters {
-			if specificity(f) < 2 {
+			if specificity(f) < min {
 				return ErrFiltersTooVague
 			}
 		}
