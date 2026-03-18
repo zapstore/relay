@@ -33,6 +33,8 @@ var (
 		This is a precautionary measure because Android doesn't allow apps with the same identifier to be installed side by side.
 		Please use a different identifier or contact the Zapstore team for more information.`)
 
+	ErrProfileUnknownPublisher = errors.New("kind 0 profile rejected: pubkey has no events on this relay")
+
 	ErrTooManyFilters  = errors.New("number of filters exceed the maximum allowed per REQ")
 	ErrFiltersTooVague = errors.New("filters are too vague")
 
@@ -76,6 +78,7 @@ func Setup(
 		InvalidStructure(),
 		AppReactionOnly(),
 		AuthorNotAllowed(acl, config.Info.Pubkey),
+		ProfileKnownPublisher(store, config.Info.Pubkey),
 		AppOwnership(store, config.Info.Pubkey),
 	)
 
@@ -428,6 +431,37 @@ func AppReactionOnly() func(_ rely.Client, e *nostr.Event) error {
 	}
 }
 
+// ProfileKnownPublisher rejects kind 0 profile events whose pubkey has no other events
+// on this relay. This prevents arbitrary profile spam while allowing publishers who
+// already have content here to maintain their profile metadata.
+func ProfileKnownPublisher(db *sqlite.Store, operatorPubkey string) func(_ rely.Client, e *nostr.Event) error {
+	return func(_ rely.Client, e *nostr.Event) error {
+		if e.Kind != events.KindProfile {
+			return nil
+		}
+		if operatorPubkey != "" && e.PubKey == operatorPubkey {
+			return nil
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		var exists int
+		err := db.DB.QueryRowContext(ctx,
+			`SELECT 1 FROM events WHERE pubkey = ? AND kind != 0 LIMIT 1`,
+			e.PubKey,
+		).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProfileUnknownPublisher
+		}
+		if err != nil {
+			slog.Error("ProfileKnownPublisher: failed to query events", "error", err)
+			return ErrInternal
+		}
+		return nil
+	}
+}
+
 func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		// Operator pubkey is always allowed — no ACL check needed.
@@ -438,9 +472,9 @@ func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Cl
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Open kinds (1111, 9735, 30267, 30509) skip the allow-list and unknown-pubkey policy,
-		// but blocked pubkeys are still rejected.
-		if e.Kind == events.KindComment || e.Kind == events.KindZap || e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
+		// Open kinds (0, 1111, 9735, 30267, 30509) skip the allow-list and unknown-pubkey policy,
+		// but blocked pubkeys are still rejected. Kind 0 is additionally gated by ProfileKnownPublisher.
+		if e.Kind == events.KindProfile || e.Kind == events.KindComment || e.Kind == events.KindZap || e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
 			blocked, err := acl.IsBlocked(ctx, e.PubKey)
 			if err != nil {
 				slog.Error("relay: failed to check if pubkey is blocked", "error", err)

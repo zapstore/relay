@@ -11,12 +11,16 @@ import (
 )
 
 const (
-	KindComment = 1111
-	KindZap     = 9735
+	KindProfile   = 0
+	KindForumPost = 11
+	KindComment   = 1111
+	KindZap       = 9735
 )
 
 // WithValidation is a list of event kinds that have validation functions.
 var WithValidation = []int{
+	KindProfile,
+	KindForumPost,
 	KindApp,
 	KindRelease,
 	KindAsset,
