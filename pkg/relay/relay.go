@@ -134,13 +134,6 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier
 
 		analytics.RecordEvent(c, event)
 
-		// Reset demand counter when a release is stored — demand has been satisfied.
-		if idx != nil && event.Kind == events.KindRelease {
-			if appID, ok := events.Find(event.Tags, "i"); ok {
-				idx.ResetReleaseRequest(appID)
-			}
-		}
-
 		// C1 verification runs asynchronously after save
 		if c1 != nil {
 			c1.OnEvent(ctx, event)
@@ -180,8 +173,8 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) 
 // filtering out bots and non-Zapstore clients.
 func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filters, result []nostr.Event) {
 	wantsReleases := strings.HasPrefix(subID, "app-updates") ||
-		strings.HasPrefix(subID, "app-search") ||
-		strings.HasPrefix(subID, "web-search")
+		strings.HasPrefix(subID, "app-detail") ||
+		strings.HasPrefix(subID, "web-app-detail")
 
 	for _, filter := range filters {
 		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results.
