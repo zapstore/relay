@@ -445,9 +445,9 @@ func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Cl
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Open kinds (30267, 30509) skip the allow-list and unknown-pubkey policy,
+		// Open kinds (1111, 9735, 30267, 30509) skip the allow-list and unknown-pubkey policy,
 		// but blocked pubkeys are still rejected.
-		if e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
+		if e.Kind == events.KindComment || e.Kind == events.KindZap || e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
 			blocked, err := acl.IsBlocked(ctx, e.PubKey)
 			if err != nil {
 				slog.Error("relay: failed to check if pubkey is blocked", "error", err)
