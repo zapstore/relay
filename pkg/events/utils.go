@@ -78,26 +78,15 @@ func Validate(event *nostr.Event) error {
 	}
 }
 
-// ValidateAppReaction validates that a comment (1111) or zap receipt (9735) is scoped to
-// a kind 32267 app event.
-//
-// For kind 1111 (NIP-22): the root scope is indicated by an uppercase "A" tag of the form
-// "32267:<pubkey>:<d-tag>" or "30267:<pubkey>:<d-tag>", paired with a "K" tag of the referenced kind.
+// ValidateAppReaction validates that a zap receipt (9735) is scoped to a kind 32267 app event.
 //
 // For kind 9735 (NIP-57): the zap receipt carries a lowercase "a" tag set by the LNURL server
 // referencing the zapped addressable event.
+//
+// Kind 1111 comment scoping is handled at the relay layer by CommentScopedToKnownEvent,
+// which performs a live DB lookup to allow both root comments and reply threads.
 func ValidateAppReaction(event *nostr.Event) error {
-	switch event.Kind {
-	case KindComment:
-		// NIP-22: uppercase "A" tag holds the root scope address.
-		a, ok := Find(event.Tags, "A")
-		if !ok {
-			return fmt.Errorf("kind 1111 must have an 'A' tag (root scope) referencing a kind 32267 app event")
-		}
-		if err := validateAppAddress(a, "A"); err != nil {
-			return fmt.Errorf("kind 1111: %w", err)
-		}
-	case KindZap:
+	if event.Kind == KindZap {
 		// NIP-57: lowercase "a" tag is set by the LNURL server on the zap receipt.
 		a, ok := Find(event.Tags, "a")
 		if !ok {

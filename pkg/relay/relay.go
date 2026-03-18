@@ -76,7 +76,7 @@ func Setup(
 		rely.InvalidID,
 		rely.InvalidSignature,
 		InvalidStructure(),
-		AppReactionOnly(),
+		CommentScopedToKnownEvent(store),
 		AuthorNotAllowed(acl, config.Info.Pubkey),
 		ProfileKnownPublisher(store, config.Info.Pubkey),
 		AppOwnership(store, config.Info.Pubkey),
@@ -419,15 +419,65 @@ func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
 	return nil
 }
 
-// AppReactionOnly rejects kind 1111 and 9735 events that do not reference a kind 32267 app
-// via a valid "a" tag. Validation of the tag structure is handled by events.Validate; this
-// check is a belt-and-suspenders guard at the rejection layer.
-func AppReactionOnly() func(_ rely.Client, e *nostr.Event) error {
+// CommentScopedToKnownEvent rejects kind 1111 comments that are not anchored to a known event
+// in the relay store. Two cases are accepted:
+//
+//   - Root comment: has an uppercase "A" tag of the form "32267:<pubkey>:<d-tag>" or
+//     "30267:<pubkey>:<d-tag>" referencing an app event that exists in the store.
+//   - Reply: has an "e" tag referencing the event ID of a kind 1111 comment that exists
+//     in the store.
+//
+// Any other kind 1111 is rejected.
+func CommentScopedToKnownEvent(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
-		if e.Kind != events.KindComment && e.Kind != events.KindZap {
+		if e.Kind != events.KindComment {
 			return nil
 		}
-		return events.ValidateAppReaction(e)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		// Root comment: uppercase A tag must reference a known 32267/30267 app event.
+		if rootAddr, ok := events.Find(e.Tags, "A"); ok {
+			parts := strings.SplitN(rootAddr, ":", 3)
+			if len(parts) != 3 || (parts[0] != "32267" && parts[0] != "30267") {
+				return errors.New("kind 1111: 'A' tag must reference a kind 32267 or 30267 app event")
+			}
+			kind, pubkey, dTag := parts[0], parts[1], parts[2]
+			var exists int
+			err := db.DB.QueryRowContext(ctx,
+				`SELECT 1 FROM events AS e JOIN tags AS t ON t.event_id = e.id
+				 WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ? LIMIT 1`,
+				kind, pubkey, dTag,
+			).Scan(&exists)
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("kind 1111: referenced app event not found on this relay")
+			}
+			if err != nil {
+				slog.Error("CommentScopedToKnownEvent: failed to query app event", "error", err)
+				return ErrInternal
+			}
+			return nil
+		}
+
+		// Reply: e tag must reference a known kind 1111 comment by event ID.
+		if parentID, ok := events.Find(e.Tags, "e"); ok {
+			var exists int
+			err := db.DB.QueryRowContext(ctx,
+				`SELECT 1 FROM events WHERE kind = 1111 AND id = ? LIMIT 1`,
+				parentID,
+			).Scan(&exists)
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("kind 1111 reply: referenced parent comment not found on this relay")
+			}
+			if err != nil {
+				slog.Error("CommentScopedToKnownEvent: failed to query parent comment", "error", err)
+				return ErrInternal
+			}
+			return nil
+		}
+
+		return errors.New("kind 1111: must have an 'A' tag (root scope) or 'e' tag (reply to kind 1111)")
 	}
 }
 
