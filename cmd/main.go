@@ -153,6 +153,18 @@ func main() {
 		}
 	}()
 
+	if config.Analytics.Port != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			address := "localhost:" + config.Analytics.Port
+			logger.Info("analytics: API server starting", "address", address)
+			if err := analytics.StartAndServe(ctx, address); err != nil {
+				exit <- err
+			}
+		}()
+	}
+
 	select {
 	case <-ctx.Done():
 		wg.Wait()
