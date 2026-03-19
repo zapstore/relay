@@ -209,7 +209,6 @@ func (c *Controller) AllowEvent(ctx context.Context, e *nostr.Event) (bool, erro
 		if repoURL, ok := events.Find(e.Tags, "repository"); ok && repoURL != "" {
 			result, err := c.verifier.Verify(ctx, repoURL, e.PubKey)
 			if err != nil {
-				c.log.Warn("acl: repo verification failed", "repo", repoURL, "error", err)
 				// Fall through to policy — don't hard-fail on network errors
 			} else if result.Matched {
 				// Check if the platform user is blocked before whitelisting
