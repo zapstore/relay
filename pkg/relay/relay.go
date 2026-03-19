@@ -86,7 +86,7 @@ func Setup(
 	relay.Reject.Req.Append(
 		RateReqIP(limiter),
 		FiltersExceed(config.MaxReqFilters),
-		VagueFilters(0),
+		VagueFilters(3),
 	)
 
 	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
