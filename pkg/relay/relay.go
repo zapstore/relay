@@ -90,7 +90,7 @@ func Setup(
 	)
 
 	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
-	relay.On.Req = Query(store, analytics, indexingEngine)
+	relay.On.Req = Query(store, analytics, indexingEngine, config.MaxFilterLimit)
 	return relay, nil
 }
 
@@ -146,8 +146,14 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier
 	}
 }
 
-func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
+func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, maxFilterLimit int) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 	return func(ctx context.Context, client rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
+		for i := range filters {
+			if filters[i].Limit > maxFilterLimit {
+				filters[i].Limit = maxFilterLimit
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
@@ -162,7 +168,6 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) 
 
 		analytics.RecordReq(client, id, filters, result)
 
-		// Non-blocking demand signals — must not affect query latency
 		if idx != nil {
 			recordDemandSignals(idx, id, filters, result)
 		}
