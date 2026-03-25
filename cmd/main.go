@@ -2,24 +2,80 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/nbd-wtf/go-nostr"
+	sqlite "github.com/vertex-lab/nostr-sqlite"
 	"github.com/zapstore/relay/pkg/acl"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
 	blobstore "github.com/zapstore/relay/pkg/blossom/store"
 	"github.com/zapstore/relay/pkg/config"
+	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/relay/linkverify"
 	eventstore "github.com/zapstore/relay/pkg/relay/store"
 )
+
+// assetResolver implements blossom.AssetResolver by querying the relay event store
+// for kind 3063 (Software Asset) events whose "x" tag matches the requested hash.
+type assetResolver struct {
+	db *sqlite.Store
+}
+
+func (r *assetResolver) ResolveAssetURL(ctx context.Context, hash string) (string, bool, error) {
+	filter := nostr.Filter{
+		Kinds: []int{events.KindAsset},
+		Tags:  nostr.TagMap{"x": []string{hash}},
+		Limit: 1,
+	}
+	found, err := r.db.Query(ctx, filter)
+	if err != nil || len(found) == 0 {
+		return "", false, err
+	}
+	url, ok := events.Find(found[0].Tags, "url")
+	return url, ok, nil
+}
+
+// startBlossom serves handler on addr, gracefully shutting down when ctx is cancelled.
+// Timeout values mirror blossy's defaults.
+func startBlossom(ctx context.Context, addr string, handler http.Handler) error {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	exitErr := make(chan error, 1)
+	go func() {
+		slog.Info("serving the blossom server", "address", addr)
+		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			exitErr <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		slog.Info("shutting down the blossom server", "address", addr)
+		defer slog.Info("blossom server stopped")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return server.Shutdown(shutdownCtx)
+	case err := <-exitErr:
+		return err
+	}
+}
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -120,12 +176,13 @@ func main() {
 		panic(err)
 	}
 
-	blossom, err := blossom.Setup(
+	blossomHandler, err := blossom.Setup(
 		config.Blossom,
 		limiter,
 		acl,
 		bstore,
 		analytics,
+		&assetResolver{db: rstore},
 	)
 	if err != nil {
 		panic(err)
@@ -148,7 +205,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		address := "localhost:" + config.Blossom.Port
-		if err := blossom.StartAndServe(ctx, address); err != nil {
+		if err := startBlossom(ctx, address, blossomHandler); err != nil {
 			exit <- err
 		}
 	}()

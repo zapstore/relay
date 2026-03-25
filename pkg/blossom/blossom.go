@@ -29,17 +29,20 @@ var (
 	ErrRateLimited = blossom.ErrTooMany("rate-limited: slow down chief")
 )
 
+// Setup configures the Blossom server and returns an http.Handler that serves both
+// the standard Blossom endpoints (via blossy) and the asset proxy at GET /?r=<hash>.
 func Setup(
 	config Config,
 	limiter rate.Limiter,
 	acl *acl.Controller,
 	store *store.Store,
 	analytics *analytics.Engine,
-) (*blossy.Server, error) {
+	resolver AssetResolver,
+) (http.Handler, error) {
 
 	bunny := bunny.NewClient(config.Bunny)
 
-	blossom, err := blossy.NewServer(
+	blossyServer, err := blossy.NewServer(
 		blossy.WithHostname(config.Hostname),
 		blossy.WithRangeSupport(),
 	)
@@ -47,15 +50,15 @@ func Setup(
 		return nil, fmt.Errorf("failed to setup blossom server: %w", err)
 	}
 
-	blossom.Reject.Check.Append(
+	blossyServer.Reject.Check.Append(
 		RateCheckIP(limiter),
 	)
 
-	blossom.Reject.Download.Append(
+	blossyServer.Reject.Download.Append(
 		RateDownloadIP(limiter),
 	)
 
-	blossom.Reject.Upload.Append(
+	blossyServer.Reject.Upload.Append(
 		RateUploadIP(limiter),
 		MissingAuth(),
 		MissingHints(),
@@ -63,10 +66,19 @@ func Setup(
 		AuthorNotAllowed(acl),
 	)
 
-	blossom.On.Check = Check(store, analytics)
-	blossom.On.Download = Download(store, bunny, analytics)
-	blossom.On.Upload = Upload(store, bunny, limiter, config.StallTimeout, analytics)
-	return blossom, nil
+	blossyServer.On.Check = Check(store, analytics)
+	blossyServer.On.Download = Download(store, bunny, analytics)
+	blossyServer.On.Upload = Upload(store, bunny, limiter, config.StallTimeout, analytics)
+
+	proxy := Proxy(resolver, limiter, analytics)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" && r.URL.Query().Has("r") {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		blossyServer.ServeHTTP(w, r)
+	})
+	return handler, nil
 }
 
 func Check(db *store.Store, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
