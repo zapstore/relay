@@ -109,33 +109,35 @@ func Download(db *store.Store, client bunny.Client, resolver AssetResolver, anal
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
 
+		if r.Raw().URL.Query().Has("redirect") {
+			resolveCtx, resolveCancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer resolveCancel()
+
+			assetURL, found, resolveErr := resolver.ResolveAssetURL(resolveCtx, hash.Hex())
+			if resolveErr != nil {
+				slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", resolveErr)
+				return nil, ErrInternal
+			}
+			if !found || assetURL == "" {
+				return nil, ErrNotFound
+			}
+
+			analytics.RecordProxyDownload(r.Raw(), hash)
+			return blossy.Redirect(assetURL, http.StatusTemporaryRedirect), nil
+		}
+
 		meta, err := db.Query(ctx, hash)
-		if err != nil && !errors.Is(err, store.ErrBlobNotFound) && !errors.Is(err, context.Canceled) {
+		if errors.Is(err, store.ErrBlobNotFound) {
+			return nil, ErrNotFound
+		}
+		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
 			return nil, ErrInternal
 		}
 
-		if err == nil {
-			analytics.RecordDownload(r, hash)
-			url := client.CDNURL(BlobPath(hash, meta.Type))
-			return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
-		}
-
-		// Hash not in local store — check kind 3063 events for an external asset URL.
-		resolveCtx, resolveCancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer resolveCancel()
-
-		assetURL, found, resolveErr := resolver.ResolveAssetURL(resolveCtx, hash.Hex())
-		if resolveErr != nil {
-			slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", resolveErr)
-			return nil, ErrInternal
-		}
-		if !found || assetURL == "" {
-			return nil, ErrNotFound
-		}
-
-		analytics.RecordProxyDownload(r.Raw(), hash)
-		return blossy.Redirect(assetURL, http.StatusTemporaryRedirect), nil
+		analytics.RecordDownload(r, hash)
+		url := client.CDNURL(BlobPath(hash, meta.Type))
+		return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
 	}
 }
 
