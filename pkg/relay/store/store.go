@@ -3,9 +3,11 @@
 package store
 
 import (
+	"context"
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	sqlite "github.com/vertex-lab/nostr-sqlite"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/repourl"
+	"github.com/zapstore/relay/pkg/search"
 )
 
 var ErrUnsupportedREQ = errors.New("unsupported REQ")
@@ -21,6 +24,18 @@ var ErrUnsupportedREQ = errors.New("unsupported REQ")
 //go:embed schema.sql
 var schema string
 
+// searchEngine is set once at startup via SetSearchEngine.
+// nil means Typesense is disabled; all searches use FTS5.
+var searchEngine *search.Engine
+
+// SetSearchEngine wires a Typesense engine into the query builder.
+// Call once after New(), before the relay starts serving requests.
+// Passing nil disables Typesense and uses FTS5 only.
+func SetSearchEngine(engine *search.Engine) {
+	searchEngine = engine
+}
+
+// New creates a store. Call SetSearchEngine afterwards to enable Typesense search.
 func New(path string) (*sqlite.Store, error) {
 	return sqlite.New(
 		path,
@@ -33,10 +48,12 @@ func New(path string) (*sqlite.Store, error) {
 	)
 }
 
-// queryBuilder handles FTS search for apps when there's exactly one app search filter.
-// When the search term is a repository URL (any host, /:user/:repo path), it performs
-// an exact match on the `repository` tag instead of FTS. Otherwise, it delegates to
-// the default query builder.
+// queryBuilder routes NIP-50 app searches to the appropriate backend.
+// Priority order:
+//  1. Repository URL → exact tag match (no text search needed)
+//  2. Typesense enabled → Typesense handles the search, returns IDs fetched from SQLite
+//  3. Typesense down or disabled → SQLite FTS5 fallback
+
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if searchesIn(filters) == 0 {
 		return sqlite.DefaultQueryBuilder(filters...)
@@ -59,6 +76,20 @@ func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if r, ok := repourl.Parse(search.Search); ok {
 		search.Search = r.Canonical
 		return repositoryURLQuery(search)
+	}
+
+	// Typesense search: returns ordered event IDs, full events fetched from SQLite.
+	// Falls back to FTS5 only if Typesense is unreachable.
+	if searchEngine != nil {
+		ids, err := searchEngine.Search(context.Background(), search)
+		if err != nil {
+			slog.Warn("search: typesense unavailable, falling back to FTS5", "error", err)
+		} else if len(ids) > 0 {
+			return idFetchQuery(ids, search)
+		} else {
+			// Typesense returned no results — trust it, return empty.
+			return emptyQuery(), nil
+		}
 	}
 
 	return appSearchQuery(search)
@@ -177,4 +208,58 @@ func inClause(n int) string {
 		return " = ?"
 	}
 	return " IN (?" + strings.Repeat(",?", n-1) + ")"
+}
+
+// idFetchQuery fetches full events by ID list, preserving the Typesense relevance order
+// via a CASE expression. Platform and other tag filters from the original filter are
+// applied as subquery conditions so SQLite handles structured filtering.
+func idFetchQuery(ids []string, filter nostr.Filter) ([]sqlite.Query, error) {
+	if len(ids) == 0 {
+		return emptyQuery(), nil
+	}
+
+	// Build CASE WHEN e.id = ? THEN 0 WHEN e.id = ? THEN 1 ... for relevance order.
+	caseExpr := "CASE"
+	for i := range ids {
+		caseExpr += fmt.Sprintf(" WHEN e.id = ? THEN %d", i)
+	}
+	caseExpr += " ELSE 9999 END"
+
+	conditions := []string{"e.id" + inClause(len(ids))}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+
+	// Apply tag filters (e.g. platform "f") via subqueries.
+	for key, vals := range filter.Tags {
+		if len(vals) == 0 {
+			continue
+		}
+		conditions = append(conditions,
+			"EXISTS (SELECT 1 FROM tags WHERE event_id = e.id AND key = ? AND value"+inClause(len(vals))+")")
+		args = append(args, key)
+		for _, v := range vals {
+			args = append(args, v)
+		}
+	}
+
+	// Append the CASE args for ORDER BY.
+	orderArgs := make([]any, len(ids))
+	for i, id := range ids {
+		orderArgs[i] = id
+	}
+
+	query := `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
+		FROM events e
+		WHERE ` + strings.Join(conditions, " AND ") + `
+		ORDER BY ` + caseExpr
+
+	args = append(args, orderArgs...)
+	return []sqlite.Query{{SQL: query, Args: args}}, nil
+}
+
+// emptyQuery returns a query that always produces zero rows.
+func emptyQuery() []sqlite.Query {
+	return []sqlite.Query{{SQL: "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events e WHERE 0", Args: nil}}
 }

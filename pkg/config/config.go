@@ -20,6 +20,7 @@ import (
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
+	"github.com/zapstore/relay/pkg/search"
 )
 
 type Config struct {
@@ -30,6 +31,7 @@ type Config struct {
 	Indexing  indexing.Config
 	Relay     relay.Config
 	Blossom   blossom.Config
+	Search    search.Config
 }
 
 type SystemConfig struct {
@@ -74,6 +76,7 @@ func New() Config {
 		Indexing:  indexing.NewConfig(),
 		Relay:     relay.NewConfig(),
 		Blossom:   blossom.NewConfig(),
+		Search:    search.NewConfig(),
 	}
 }
 
@@ -99,6 +102,9 @@ func (c Config) Validate() error {
 	if err := c.Blossom.Validate(); err != nil {
 		return fmt.Errorf("blossom: %w", err)
 	}
+	if err := c.Search.Validate(); err != nil {
+		return fmt.Errorf("search: %w", err)
+	}
 	return nil
 }
 
@@ -117,5 +123,7 @@ func (c Config) String() string {
 	b.WriteString(c.Relay.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Blossom.String())
+	b.WriteByte('\n')
+	b.WriteString(c.Search.String())
 	return b.String()
 }

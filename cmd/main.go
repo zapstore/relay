@@ -25,6 +25,7 @@ import (
 	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/relay/linkverify"
 	eventstore "github.com/zapstore/relay/pkg/relay/store"
+	"github.com/zapstore/relay/pkg/search"
 )
 
 // assetResolver implements blossom.AssetResolver by querying the relay event store
@@ -101,11 +102,28 @@ func main() {
 		panic(err)
 	}
 
+	// Open relay store first so we have rstore.DB for the search engine backfill.
 	rstore, err := eventstore.New(filepath.Join(dataDir, "relay.db"))
 	if err != nil {
 		panic(err)
 	}
 	defer rstore.Close()
+
+	// Step 1a. Initialize search engine (optional — nil when disabled or unavailable).
+	var searchEngine *search.Engine
+	if config.Search.Enabled {
+		searchEngine, err = search.New(config.Search, rstore.DB)
+		if err != nil {
+			logger.Warn("search: failed to start Typesense engine, falling back to FTS5", "error", err)
+			searchEngine = nil
+		} else {
+			defer searchEngine.Close()
+			logger.Info("search: Typesense hybrid search enabled", "url", config.Search.URL)
+		}
+	}
+
+	// Wire the search engine into the store's query builder.
+	eventstore.SetSearchEngine(searchEngine)
 
 	bstore, err := blobstore.New(filepath.Join(dataDir, "blossom.db"))
 	if err != nil {
@@ -171,6 +189,7 @@ func main() {
 		analytics,
 		c1,
 		indexingEngine,
+		searchEngine,
 	)
 	if err != nil {
 		panic(err)

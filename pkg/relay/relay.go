@@ -23,6 +23,7 @@ import (
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay/linkverify"
 	"github.com/zapstore/relay/pkg/relay/store"
+	"github.com/zapstore/relay/pkg/search"
 )
 
 var (
@@ -54,6 +55,7 @@ func Setup(
 	analytics *analytics.Engine,
 	c1 *linkverify.Verifier,
 	indexingEngine *indexing.Engine, // nil = no demand-driven indexing
+	searchEngine *search.Engine,     // nil = FTS5 only
 ) (*rely.Relay, error) {
 
 	relay := rely.NewRelay(
@@ -90,12 +92,12 @@ func Setup(
 		VagueFilters(3),
 	)
 
-	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
+	relay.On.Event = Save(store, analytics, c1, indexingEngine, searchEngine, config.Info.Pubkey)
 	relay.On.Req = Query(store, analytics, indexingEngine, config.MaxFilterLimit)
 	return relay, nil
 }
 
-func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier, idx *indexing.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
+func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier, idx *indexing.Engine, se *search.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
 	return func(c rely.Client, event *nostr.Event) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -108,6 +110,9 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier
 					if len(tag) >= 2 && tag[0] == "e" {
 						if err := deleteEvent(ctx, db, tag[1]); err != nil {
 							slog.Error("relay: operator deletion failed", "error", err, "target_event", tag[1])
+						}
+						if se != nil {
+							se.Delete(tag[1])
 						}
 					}
 				}
@@ -133,6 +138,9 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier
 			if _, err := db.Replace(ctx, event); err != nil {
 				slog.Error("relay: failed to replace the event", "error", err, "event", event.ID)
 				return err
+			}
+			if se != nil && event.Kind == events.KindApp {
+				se.Index(event)
 			}
 		}
 
