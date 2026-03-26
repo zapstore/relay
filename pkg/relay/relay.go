@@ -45,6 +45,7 @@ var (
 // indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
 const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
 
+
 func Setup(
 	config Config,
 	limiter rate.Limiter,
@@ -157,13 +158,18 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, 
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		result, err := db.Query(ctx, filters...)
+		queryFilters, expanded := withLegacyHTagFallback(filters)
+		result, err := db.Query(ctx, queryFilters...)
 		if errors.Is(err, store.ErrUnsupportedREQ) {
 			return nil, err
 		}
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("relay: failed to query events", "error", err, "filters", filters)
 			return nil, err
+		}
+
+		if expanded {
+			result = deduplicateEvents(result)
 		}
 
 		analytics.RecordReq(client, id, filters, result)
