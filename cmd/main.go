@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/pippellia-btc/rely"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
 	"github.com/zapstore/relay/pkg/acl"
 	"github.com/zapstore/relay/pkg/analytics"
@@ -23,7 +22,7 @@ import (
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
-	relaypkg "github.com/zapstore/relay/pkg/relay"
+	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/relay/linkverify"
 	eventstore "github.com/zapstore/relay/pkg/relay/store"
 )
@@ -46,49 +45,6 @@ func (r *assetResolver) ResolveAssetURL(ctx context.Context, hash string) (strin
 	}
 	url, ok := events.Find(found[0].Tags, "url")
 	return url, ok, nil
-}
-
-// startRelay starts the relay's background goroutines and serves a combined HTTP handler
-// that forwards GET /?r=<hash> requests to the blossom proxy before falling through to
-// the relay's own ServeHTTP (which returns 400 for any non-WebSocket, non-NIP-11 request).
-func startRelay(ctx context.Context, addr string, relay *rely.Relay, blossomHandler http.Handler) error {
-	relay.Start(ctx)
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/" && r.URL.Query().Has("r") {
-			blossomHandler.ServeHTTP(w, r)
-			return
-		}
-		relay.ServeHTTP(w, r)
-	})
-
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-
-	exitErr := make(chan error, 1)
-	go func() {
-		slog.Info("serving the relay", "address", addr)
-		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			exitErr <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		slog.Info("shutting down the relay", "address", addr)
-		defer slog.Info("relay stopped")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		err := server.Shutdown(shutdownCtx)
-		relay.Wait()
-		return err
-	case err := <-exitErr:
-		return err
-	}
 }
 
 // startBlossom serves handler on addr, gracefully shutting down when ctx is cancelled.
@@ -207,7 +163,7 @@ func main() {
 	// Setup C1 verifier and relay/blossom
 	c1 := linkverify.New(rstore, acl, config.Blossom.Hostname, logger)
 
-	relay, err := relaypkg.Setup(
+	relay, err := relay.Setup(
 		config.Relay,
 		limiter,
 		acl,
@@ -241,7 +197,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		address := "localhost:" + config.Relay.Port
-		if err := startRelay(ctx, address, relay, blossomHandler); err != nil {
+		if err := relay.StartAndServe(ctx, address); err != nil {
 			exit <- err
 		}
 	}()

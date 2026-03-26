@@ -29,8 +29,14 @@ var (
 	ErrRateLimited = blossom.ErrTooMany("rate-limited: slow down chief")
 )
 
-// Setup configures the Blossom server and returns an http.Handler that serves both
-// the standard Blossom endpoints (via blossy) and the asset proxy at GET /?r=<hash>.
+// AssetResolver looks up a download URL for a kind 3063 asset by its SHA-256 hash.
+type AssetResolver interface {
+	ResolveAssetURL(ctx context.Context, hash string) (url string, found bool, err error)
+}
+
+// Setup configures the Blossom server and returns an http.Handler.
+// GET /<hash> first checks the local blossom store; if the hash is not found there,
+// it falls back to kind 3063 events via resolver and redirects to the external asset URL.
 func Setup(
 	config Config,
 	limiter rate.Limiter,
@@ -67,18 +73,10 @@ func Setup(
 	)
 
 	blossyServer.On.Check = Check(store, analytics)
-	blossyServer.On.Download = Download(store, bunny, analytics)
+	blossyServer.On.Download = Download(store, bunny, resolver, analytics)
 	blossyServer.On.Upload = Upload(store, bunny, limiter, config.StallTimeout, analytics)
 
-	proxy := Proxy(resolver, limiter, analytics)
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/" && r.URL.Query().Has("r") {
-			proxy.ServeHTTP(w, r)
-			return
-		}
-		blossyServer.ServeHTTP(w, r)
-	})
-	return handler, nil
+	return blossyServer, nil
 }
 
 func Check(db *store.Store, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
@@ -102,27 +100,42 @@ func Check(db *store.Store, analytics *analytics.Engine) func(r blossy.Request, 
 	}
 }
 
-func Download(db *store.Store, client bunny.Client, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
+func Download(db *store.Store, client bunny.Client, resolver AssetResolver, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
 	return func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
 
 		// In the Bunny CDN files are defined by their name (hash) and extension (ext).
 		// If the extension is not provided, or if it's different (e.g. .jpg instead of .jpeg), Bunny won't find the file.
-		// To find the correct extention, we check the store for that hash and use the type to get the extension.
+		// To find the correct extension, we check the store for that hash and use the type to get the extension.
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
 
 		meta, err := db.Query(ctx, hash)
-		if errors.Is(err, store.ErrBlobNotFound) {
-			return nil, ErrNotFound
-		}
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err != nil && !errors.Is(err, store.ErrBlobNotFound) && !errors.Is(err, context.Canceled) {
 			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
 			return nil, ErrInternal
 		}
 
-		analytics.RecordDownload(r, hash)
-		url := client.CDNURL(BlobPath(hash, meta.Type))
-		return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
+		if err == nil {
+			analytics.RecordDownload(r, hash)
+			url := client.CDNURL(BlobPath(hash, meta.Type))
+			return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
+		}
+
+		// Hash not in local store — check kind 3063 events for an external asset URL.
+		resolveCtx, resolveCancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer resolveCancel()
+
+		assetURL, found, resolveErr := resolver.ResolveAssetURL(resolveCtx, hash.Hex())
+		if resolveErr != nil {
+			slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", resolveErr)
+			return nil, ErrInternal
+		}
+		if !found || assetURL == "" {
+			return nil, ErrNotFound
+		}
+
+		analytics.RecordProxyDownload(r.Raw(), hash)
+		return blossy.Redirect(assetURL, http.StatusTemporaryRedirect), nil
 	}
 }
 
