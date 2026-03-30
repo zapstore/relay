@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/zapstore/relay/pkg/events"
 )
 
 // zapstoreCommunityPubkey is the value used in the `h` tag to identify events
@@ -47,6 +48,20 @@ func filterWithoutTag(f nostr.Filter, key string) nostr.Filter {
 		out.Tags = nil
 	} else {
 		out.Tags = newTags
+	}
+	return out
+}
+
+// filterPrivateAppSets removes kind 30267 events with non-empty content.
+// Non-empty content indicates a private/encrypted app set; community h-tag
+// queries should only return public (empty-content) app sets.
+func filterPrivateAppSets(evs []nostr.Event) []nostr.Event {
+	out := make([]nostr.Event, 0, len(evs))
+	for _, e := range evs {
+		if e.Kind == events.KindAppSet && e.Content != "" {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out
 }

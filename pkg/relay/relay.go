@@ -171,6 +171,7 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, 
 
 		if expanded {
 			result = deduplicateEvents(result)
+			result = filterPrivateAppSets(result)
 		}
 
 		analytics.RecordReq(client, id, filters, result)
