@@ -159,19 +159,13 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, 
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		queryFilters, expanded := withLegacyHTagFallback(filters)
-		result, err := db.Query(ctx, queryFilters...)
+		result, err := db.Query(ctx, filters...)
 		if errors.Is(err, store.ErrUnsupportedREQ) {
 			return nil, err
 		}
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("relay: failed to query events", "error", err, "filters", filters)
 			return nil, err
-		}
-
-		if expanded {
-			result = deduplicateEvents(result)
-			result = filterPrivateAppSets(result)
 		}
 
 		analytics.RecordReq(client, id, filters, result)

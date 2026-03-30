@@ -231,6 +231,101 @@ func TestStoreQueryAppSearch(t *testing.T) {
 	}
 }
 
+func TestCommunityAppSetQuery(t *testing.T) {
+	since := nostr.Timestamp(1700000000)
+	until := nostr.Timestamp(1800000000)
+
+	communityH := zapstoreCommunityPubkey
+	hTagTransition := "(e.id IN (SELECT event_id FROM tags WHERE key = 'h' AND value = ?)" +
+		" OR (NOT EXISTS (SELECT 1 FROM tags WHERE event_id = e.id AND key = 'h') AND e.content = ''))"
+
+	tests := []struct {
+		name       string
+		filter     nostr.Filter
+		wantMatch  bool
+		wantSQL    string
+		wantArgs   []any
+	}{
+		{
+			name: "basic community app set with f tag",
+			filter: nostr.Filter{
+				Kinds: []int{events.KindAppSet},
+				Tags:  nostr.TagMap{"h": {communityH}, "f": {"android-arm64-v8a"}},
+				Limit: 100,
+			},
+			wantMatch: true,
+			wantSQL: "SELECT e.* FROM events AS e WHERE e.kind = ?" +
+				" AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value = ?)" +
+				" AND " + hTagTransition +
+				" ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+			wantArgs: []any{events.KindAppSet, "f", "android-arm64-v8a", communityH, 100},
+		},
+		{
+			name: "with authors and time range",
+			filter: nostr.Filter{
+				Kinds:   []int{events.KindAppSet},
+				Authors: []string{"pk1"},
+				Tags:    nostr.TagMap{"h": {communityH}},
+				Since:   &since,
+				Until:   &until,
+				Limit:   50,
+			},
+			wantMatch: true,
+			wantSQL: "SELECT e.* FROM events AS e WHERE e.kind = ?" +
+				" AND e.pubkey = ?" +
+				" AND e.created_at >= ? AND e.created_at <= ?" +
+				" AND " + hTagTransition +
+				" ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+			wantArgs: []any{events.KindAppSet, "pk1", int64(since), int64(until), communityH, 50},
+		},
+		{
+			name: "wrong kind — not intercepted",
+			filter: nostr.Filter{
+				Kinds: []int{events.KindApp},
+				Tags:  nostr.TagMap{"h": {communityH}},
+				Limit: 100,
+			},
+			wantMatch: false,
+		},
+		{
+			name: "no h tag — not intercepted",
+			filter: nostr.Filter{
+				Kinds: []int{events.KindAppSet},
+				Tags:  nostr.TagMap{"f": {"android-arm64-v8a"}},
+				Limit: 100,
+			},
+			wantMatch: false,
+		},
+		{
+			name: "different h value — not intercepted",
+			filter: nostr.Filter{
+				Kinds: []int{events.KindAppSet},
+				Tags:  nostr.TagMap{"h": {"deadbeef"}},
+				Limit: 100,
+			},
+			wantMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := communityAppSetQuery(tt.filter)
+			if ok != tt.wantMatch {
+				t.Fatalf("match = %v, want %v", ok, tt.wantMatch)
+			}
+			if !ok {
+				return
+			}
+			if got.SQL != tt.wantSQL {
+				t.Errorf("SQL mismatch\ngot:  %q\nwant: %q", got.SQL, tt.wantSQL)
+			}
+			if !reflect.DeepEqual(got.Args, tt.wantArgs) {
+				t.Errorf("Args mismatch\ngot:  %v\nwant: %v", got.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
 // Multi-character tag keys indexed per event kind (kind-specific triggers).
 // All single-letter tags are indexed universally by single_letter_tags_ai.
 var (
