@@ -19,6 +19,7 @@ import (
 	"github.com/zapstore/relay/pkg/acl"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/events/legacy"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay/linkverify"
@@ -188,7 +189,9 @@ func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, 
 func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filters, result []nostr.Event) {
 	wantsReleases := strings.HasPrefix(subID, "app-updates") ||
 		strings.HasPrefix(subID, "app-detail") ||
-		strings.HasPrefix(subID, "web-app-detail")
+		strings.HasPrefix(subID, "app-bg") ||
+		strings.HasPrefix(subID, "web-app-detail") ||
+		strings.HasPrefix(subID, "web-releases")
 
 	for _, filter := range filters {
 		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results.
@@ -199,20 +202,21 @@ func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filte
 			}
 		}
 
-		if !wantsReleases {
-			continue
-		}
-
-		if hasReleaseKind(filter.Kinds) && len(result) > 0 {
-			if iVals, ok := filter.Tags["i"]; ok {
-				for _, appID := range iVals {
-					idx.RecordReleaseRequest(appID)
-				}
-			} else {
-				// Extract app IDs from returned events
-				for _, ev := range result {
-					if appID, ok := events.Find(ev.Tags, "i"); ok {
+		if hasReleaseKind(filter.Kinds) {
+			if !wantsReleases {
+				slog.Debug("indexing: release request skipped (subID prefix mismatch)", "sub_id", subID)
+				continue
+			}
+			if len(result) > 0 {
+				if iVals, ok := filter.Tags["i"]; ok {
+					for _, appID := range iVals {
 						idx.RecordReleaseRequest(appID)
+					}
+				} else {
+					for _, ev := range result {
+						if appID, ok := events.Find(ev.Tags, "i"); ok {
+							idx.RecordReleaseRequest(appID)
+						}
 					}
 				}
 			}
@@ -226,7 +230,7 @@ func isKindOnly(kinds []int, kind int) bool {
 
 func hasReleaseKind(kinds []int) bool {
 	for _, k := range kinds {
-		if k == events.KindRelease || k == events.KindAsset {
+		if k == events.KindRelease || k == events.KindAsset || k == legacy.KindFile {
 			return true
 		}
 	}

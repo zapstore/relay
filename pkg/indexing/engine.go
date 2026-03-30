@@ -8,7 +8,6 @@ package indexing
 import (
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -94,9 +93,6 @@ func (e *Engine) RecordDiscoveryMiss(rawSearch string) {
 // Duplicate app IDs already in the queue are silently skipped.
 func (e *Engine) RecordReleaseRequest(appID string) {
 	if appID == "" {
-		return
-	}
-	if rand.IntN(2) != 0 {
 		return
 	}
 	e.releaseMu.Lock()
