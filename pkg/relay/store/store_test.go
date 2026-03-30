@@ -231,12 +231,13 @@ func TestStoreQueryAppSearch(t *testing.T) {
 	}
 }
 
-// Indexed tag keys per event kind
+// Multi-character tag keys indexed per event kind (kind-specific triggers).
+// All single-letter tags are indexed universally by single_letter_tags_ai.
 var (
-	appIndexedKeys     = []string{"d", "name", "t", "f", "license", "url", "repository", "a"}
-	releaseIndexedKeys = []string{"d", "i", "version", "c", "e", "a", "commit"}
-	assetIndexedKeys   = []string{"i", "x", "f", "m", "url", "version", "apk_certificate_hash"}
-	fileIndexedKeys    = []string{"x", "f", "m", "url", "fallback", "version", "apk_signature_hash"}
+	appMultiCharKeys     = []string{"name", "license", "url", "repository"}
+	releaseMultiCharKeys = []string{"version", "commit"}
+	assetMultiCharKeys   = []string{"url", "version", "apk_certificate_hash"}
+	fileMultiCharKeys    = []string{"url", "fallback", "version", "apk_signature_hash"}
 )
 
 func TestAppTagsIndexing(t *testing.T) {
@@ -278,7 +279,7 @@ func TestAppTagsIndexing(t *testing.T) {
 	}
 
 	got := getIndexedTags(t, store, event.ID)
-	want := expectedTags(event, appIndexedKeys)
+	want := expectedTags(event, appMultiCharKeys)
 
 	if !equalTags(got, want) {
 		t.Errorf("indexed tags mismatch\ngot:  %v\nwant: %v", got, want)
@@ -391,7 +392,7 @@ func TestReleaseTagsIndexing(t *testing.T) {
 	}
 
 	got := getIndexedTags(t, store, event.ID)
-	want := expectedTags(event, releaseIndexedKeys)
+	want := expectedTags(event, releaseMultiCharKeys)
 
 	if !equalTags(got, want) {
 		t.Errorf("indexed tags mismatch\ngot:  %v\nwant: %v", got, want)
@@ -436,7 +437,7 @@ func TestAssetTagsIndexing(t *testing.T) {
 	}
 
 	got := getIndexedTags(t, store, event.ID)
-	want := expectedTags(event, assetIndexedKeys)
+	want := expectedTags(event, assetMultiCharKeys)
 
 	if !equalTags(got, want) {
 		t.Errorf("indexed tags mismatch\ngot:  %v\nwant: %v", got, want)
@@ -481,10 +482,128 @@ func TestFileTagsIndexing(t *testing.T) {
 	}
 
 	got := getIndexedTags(t, store, event.ID)
-	want := expectedTags(event, fileIndexedKeys)
+	want := expectedTags(event, fileMultiCharKeys)
 
 	if !equalTags(got, want) {
 		t.Errorf("indexed tags mismatch\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestCommentTagsIndexing(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	event := &nostr.Event{
+		ID:        "comment123",
+		PubKey:    "aa1f96f685d0ac3e28a52feb87a20399a91afb3ac3137afeb7698dfcc99bc454",
+		CreatedAt: nostr.Timestamp(1700000000),
+		Kind:      events.KindComment,
+		Tags: nostr.Tags{
+			{"A", "32267:963a2dca29e2ed5663a627b5289ed36d445531a3f5ef127716227d8a1aaa5166:com.mempoolapp"},
+			{"K", "32267"},
+			{"P", "963a2dca29e2ed5663a627b5289ed36d445531a3f5ef127716227d8a1aaa5166"},
+			{"e", "0d30205124547672332e64a6fa29d19a63d3ee68f62862294e17ad31caa4e341"},
+			{"k", "1111"},
+			{"p", "963a2dca29e2ed5663a627b5289ed36d445531a3f5ef127716227d8a1aaa5166"},
+			{"v", "1.0.14"},
+		},
+		Content: "great app",
+		Sig:     "sig123",
+	}
+
+	saved, err := store.Save(ctx, event)
+	if err != nil {
+		t.Fatalf("failed to save event: %v", err)
+	}
+	if !saved {
+		t.Fatal("event was not saved")
+	}
+
+	got := getIndexedTags(t, store, event.ID)
+	want := expectedTags(event, nil)
+
+	if !equalTags(got, want) {
+		t.Errorf("indexed tags mismatch\ngot:  %v\nwant: %v", got, want)
+	}
+
+	// Verify queryable by A tag
+	results, err := store.Query(ctx, nostr.Filter{
+		Kinds: []int{events.KindComment},
+		Tags:  nostr.TagMap{"A": {"32267:963a2dca29e2ed5663a627b5289ed36d445531a3f5ef127716227d8a1aaa5166:com.mempoolapp"}},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("query by A tag: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != event.ID {
+		t.Errorf("query by A tag: want 1 result with ID %q, got %d results", event.ID, len(results))
+	}
+
+	// Verify queryable by e tag
+	results, err = store.Query(ctx, nostr.Filter{
+		Kinds: []int{events.KindComment},
+		Tags:  nostr.TagMap{"e": {"0d30205124547672332e64a6fa29d19a63d3ee68f62862294e17ad31caa4e341"}},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("query by e tag: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != event.ID {
+		t.Errorf("query by e tag: want 1 result with ID %q, got %d results", event.ID, len(results))
+	}
+}
+
+func TestZapTagsIndexing(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	event := &nostr.Event{
+		ID:        "zap123",
+		PubKey:    "pubkey123",
+		CreatedAt: nostr.Timestamp(1700000000),
+		Kind:      events.KindZap,
+		Tags: nostr.Tags{
+			{"a", "32267:963a2dca29e2ed5663a627b5289ed36d445531a3f5ef127716227d8a1aaa5166:com.mempoolapp"},
+			{"p", "963a2dca29e2ed5663a627b5289ed36d445531a3f5ef127716227d8a1aaa5166"},
+			{"e", "targetid123"},
+			{"P", "senderpubkey"},
+		},
+		Content: "",
+		Sig:     "sig123",
+	}
+
+	saved, err := store.Save(ctx, event)
+	if err != nil {
+		t.Fatalf("failed to save event: %v", err)
+	}
+	if !saved {
+		t.Fatal("event was not saved")
+	}
+
+	got := getIndexedTags(t, store, event.ID)
+	want := expectedTags(event, nil)
+
+	if !equalTags(got, want) {
+		t.Errorf("indexed tags mismatch\ngot:  %v\nwant: %v", got, want)
+	}
+
+	// Verify queryable by a tag
+	results, err := store.Query(ctx, nostr.Filter{
+		Kinds: []int{events.KindZap},
+		Tags:  nostr.TagMap{"a": {"32267:963a2dca29e2ed5663a627b5289ed36d445531a3f5ef127716227d8a1aaa5166:com.mempoolapp"}},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("query by a tag: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != event.ID {
+		t.Errorf("query by a tag: want 1 result with ID %q, got %d results", event.ID, len(results))
 	}
 }
 
@@ -563,16 +682,18 @@ func BenchmarkSaveApp(b *testing.B) {
 	}
 }
 
-// expectedTags extracts tags from an event that match the given indexed keys.
+// expectedTags extracts tags from an event that should be indexed:
+// all single-letter tag keys (universal trigger) plus the given multi-char keys (kind-specific trigger).
 // Returns tags sorted in lexicographic order by key then value.
-func expectedTags(event *nostr.Event, indexedKeys []string) nostr.Tags {
+func expectedTags(event *nostr.Event, multiCharKeys []string) nostr.Tags {
 	var tags nostr.Tags
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
 			continue
 		}
 
-		if slices.Contains(indexedKeys, tag[0]) {
+		isSingleLetter := len(tag[0]) == 1
+		if isSingleLetter || slices.Contains(multiCharKeys, tag[0]) {
 			tags = append(tags, nostr.Tag{tag[0], tag[1]})
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ var ErrUnsupportedREQ = errors.New("unsupported REQ")
 var schema string
 
 func New(path string) (*sqlite.Store, error) {
-	return sqlite.New(
+	store, err := sqlite.New(
 		path,
 		sqlite.WithAdditionalSchema(schema),
 		sqlite.WithQueryBuilder(queryBuilder),
@@ -31,6 +32,46 @@ func New(path string) (*sqlite.Store, error) {
 		sqlite.WithoutEventPolicy(),  // events have been validated by the relay
 		sqlite.WithoutFilterPolicy(), // filters have been validated by the relay
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := migrate(store); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("migration failed: %w", err)
+	}
+
+	return store, nil
+}
+
+//go:embed migrate.sql
+var migrateSingleLetterTags string
+
+// migrate applies one-time data migrations tracked by a version table.
+func migrate(store *sqlite.Store) error {
+	_, err := store.DB.Exec(`CREATE TABLE IF NOT EXISTS migrations (version INTEGER PRIMARY KEY)`)
+	if err != nil {
+		return fmt.Errorf("create migrations table: %w", err)
+	}
+
+	var exists int
+	err = store.DB.QueryRow(`SELECT 1 FROM migrations WHERE version = 1`).Scan(&exists)
+	if err == nil {
+		return nil // already applied
+	}
+
+	slog.Info("store: backfilling single-letter tags for existing events (migration 1)")
+
+	if _, err := store.DB.Exec(migrateSingleLetterTags); err != nil {
+		return fmt.Errorf("backfill single-letter tags: %w", err)
+	}
+
+	if _, err := store.DB.Exec(`INSERT INTO migrations (version) VALUES (1)`); err != nil {
+		return fmt.Errorf("record migration 1: %w", err)
+	}
+
+	slog.Info("store: migration 1 complete")
+	return nil
 }
 
 // queryBuilder handles FTS search for apps when there's exactly one app search filter.
