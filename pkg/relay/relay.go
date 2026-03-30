@@ -151,7 +151,7 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier
 func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, maxFilterLimit int) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 	return func(ctx context.Context, client rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 		for i := range filters {
-			if filters[i].Limit > maxFilterLimit {
+			if filters[i].Limit == 0 || filters[i].Limit > maxFilterLimit {
 				filters[i].Limit = maxFilterLimit
 			}
 		}
