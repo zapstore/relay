@@ -88,7 +88,7 @@ func Setup(
 	relay.Reject.Req.Append(
 		RateReqIP(limiter),
 		FiltersExceed(config.MaxReqFilters),
-		VagueFilters(3),
+		VagueFilters(3, config.MaxFilterLimit),
 	)
 
 	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
@@ -279,13 +279,14 @@ func FiltersExceed(n int) func(_ rely.Client, _ string, filters nostr.Filters) e
 
 // VagueFilters rejects filters whose specificity score is below the given minimum.
 // Set min to 0 to disable the check entirely.
-func VagueFilters(min int) func(rely.Client, string, nostr.Filters) error {
+// maxFilterLimit should match RELAY_MAX_FILTER_LIMIT (used for the "tight limit" specificity bonus).
+func VagueFilters(min int, maxFilterLimit int) func(rely.Client, string, nostr.Filters) error {
 	return func(_ rely.Client, _ string, filters nostr.Filters) error {
 		if min <= 0 {
 			return nil
 		}
 		for _, f := range filters {
-			if specificity(f) < min {
+			if specificity(f, maxFilterLimit) < min {
 				return ErrFiltersTooVague
 			}
 		}
@@ -295,7 +296,7 @@ func VagueFilters(min int) func(rely.Client, string, nostr.Filters) error {
 
 // specificity estimates how specific a filter is, based on the presence of conditions.
 // TODO: make it more accurate by considering what the conditions are (e.g. 1 kind vs 10 kinds).
-func specificity(filter nostr.Filter) int {
+func specificity(filter nostr.Filter, maxFilterLimit int) int {
 	points := 0
 	if len(filter.IDs) > 0 {
 		points += 10
@@ -321,7 +322,7 @@ func specificity(filter nostr.Filter) int {
 	if filter.LimitZero {
 		points += 3
 	}
-	if filter.Limit != 0 && filter.Limit < 100 {
+	if maxFilterLimit > 0 && filter.Limit != 0 && filter.Limit < maxFilterLimit {
 		points += 1
 	}
 	return points
