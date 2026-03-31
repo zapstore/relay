@@ -14,49 +14,54 @@ import (
 	eventPkg "github.com/zapstore/relay/pkg/events"
 )
 
-// --- ImpressionType ---
+// --- IsDetailFilter ---
 
-func TestImpressionType(t *testing.T) {
+func TestIsDetailFilter(t *testing.T) {
 	tests := []struct {
 		name   string
 		filter nostr.Filter
-		want   Type
+		want   bool
 	}{
 		{
-			name:   "stack filter",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindAppSet}},
-			want:   TypeStack,
+			name:   "detail filter (kind + author + d)",
+			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
+			want:   true,
 		},
 		{
-			name:   "feed filter",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}},
-			want:   TypeFeed,
-		},
-		{
-			name:   "search filter",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Search: "signal"},
-			want:   TypeSearch,
-		},
-		{
-			name:   "detail filter",
+			name:   "missing author",
 			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
-			want:   TypeDetail,
+			want:   false,
+		},
+		{
+			name:   "missing d tag",
+			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}},
+			want:   false,
+		},
+		{
+			name:   "search filter (no d tag)",
+			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Search: "signal"},
+			want:   false,
+		},
+		{
+			name:   "wrong kind",
+			filter: nostr.Filter{Kinds: []int{eventPkg.KindAppSet}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
+			want:   false,
 		},
 		{
 			name:   "empty filter",
 			filter: nostr.Filter{},
-			want:   TypeUndetermined,
+			want:   false,
 		},
 		{
-			name:   "undetermined filter",
-			filter: nostr.Filter{Kinds: []int{0, 1}, Tags: nostr.TagMap{"p": {"5c50da132947fa3bf4759eb978d784db12baad1c3e5b6a575410aeb654639b4b"}}},
-			want:   TypeUndetermined,
+			name:   "unrelated kind with author and d tag",
+			filter: nostr.Filter{Kinds: []int{0, 1}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"something"}}},
+			want:   false,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := ImpressionType(test.filter); got != test.want {
+			if got := IsDetailFilter(test.filter); got != test.want {
 				t.Errorf("got %v, want %v", got, test.want)
 			}
 		})
@@ -76,82 +81,114 @@ func TestNewImpressions(t *testing.T) {
 		want    []Impression
 	}{
 		{
-			name:    "feed impressions",
-			id:      "app-req-1",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}}},
+			name:    "detail impression from app source",
+			id:      "app-detail-com.example.app1",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
 			events: []nostr.Event{
-				appEvent("com.example.app1", "pk1"),
-				appEvent("com.example.app2", "pk2"),
-				appEvent("com.example.app3", "pk3"),
+				appEvent("com.example.app1", "pubkey"),
+				appEvent("com.example.app2", "pubkey"),
 			},
 			want: []Impression{
-				{AppID: "com.example.app1", AppPubkey: "pk1", Day: day, Source: SourceApp, Type: TypeFeed},
-				{AppID: "com.example.app2", AppPubkey: "pk2", Day: day, Source: SourceApp, Type: TypeFeed},
-				{AppID: "com.example.app3", AppPubkey: "pk3", Day: day, Source: SourceApp, Type: TypeFeed},
+				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceApp, Type: TypeDetail},
 			},
 		},
 		{
-			name:    "detail impressions for matching d tag",
-			id:      "web-req-1",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
+			name:    "detail impression from web source",
+			id:      "web-app-detail-123456",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
 			events: []nostr.Event{
 				appEvent("com.example.app1", "pubkey"),
-				appEvent("com.example.app2", "pubkey"), // skipped since it doesn't match the filter
 			},
 			want: []Impression{
 				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceWeb, Type: TypeDetail},
 			},
 		},
 		{
-			name:    "search impressions skip empty d",
-			id:      "app-req-2",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Search: "signal"}},
+			name:    "unknown source is ignored",
+			id:      "other-req-1",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
 			events: []nostr.Event{
 				appEvent("com.example.app1", "pubkey"),
-				appEvent("", "pubkey"),
 			},
-			want: []Impression{
-				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceApp, Type: TypeSearch},
-			},
+			want: nil,
 		},
 		{
-			name:    "stack impressions from app set",
-			id:      "web-req-2",
+			name:    "broad app- prefix is not enough",
+			id:      "app-search-results",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
+			events: []nostr.Event{
+				appEvent("com.example.app1", "pubkey"),
+			},
+			want: nil,
+		},
+		{
+			name:    "broad web- prefix is not enough",
+			id:      "web-q-999",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
+			events: []nostr.Event{
+				appEvent("com.example.app1", "pubkey"),
+			},
+			want: nil,
+		},
+		{
+			name:    "missing author is ignored",
+			id:      "app-detail-com.example.app1",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
+			events: []nostr.Event{
+				appEvent("com.example.app1", "pubkey"),
+			},
+			want: []Impression{},
+		},
+		{
+			name:    "feed filter is ignored",
+			id:      "app-detail-com.example.app1",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}}},
+			events: []nostr.Event{
+				appEvent("com.example.app1", "pubkey"),
+			},
+			want: []Impression{},
+		},
+		{
+			name:    "search filter is ignored",
+			id:      "app-detail-com.example.app1",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Search: "signal"}},
+			events: []nostr.Event{
+				appEvent("com.example.app1", "pubkey"),
+			},
+			want: []Impression{},
+		},
+		{
+			name:    "stack filter is ignored",
+			id:      "web-app-detail-789",
 			filters: nostr.Filters{{Kinds: []int{eventPkg.KindAppSet}}},
 			events: []nostr.Event{
-				appSetEvent("32267:pubkey:com.example.app1", "32267:pubkey:com.example.app2"),
-				appEvent("com.example.app1", "pubkey"), // not considered because doesn't match the filter
+				appSetEvent("32267:pubkey:com.example.app1"),
 			},
-			want: []Impression{
-				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceWeb, Type: TypeStack},
-				{AppID: "com.example.app2", AppPubkey: "pubkey", Day: day, Source: SourceWeb, Type: TypeStack},
-			},
+			want: []Impression{},
 		},
 		{
-			name: "stack impressions from app set and app",
-			id:   "web-req-2",
+			name:    "empty d tag event is skipped",
+			id:      "app-detail-com.example.app1",
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
+			events: []nostr.Event{
+				appEvent("", "pubkey"),
+			},
+			want: []Impression{},
+		},
+		{
+			name: "mixed filters: only detail filter counted",
+			id:   "web-app-detail-456",
 			filters: nostr.Filters{
 				{Kinds: []int{eventPkg.KindAppSet}},
-				{Kinds: []int{eventPkg.KindApp}, Tags: nostr.TagMap{"d": {"com.example.app3"}}},
+				{Kinds: []int{eventPkg.KindApp}, Authors: []string{"PUBKEY"}, Tags: nostr.TagMap{"d": {"com.example.app3"}}},
 			},
 			events: []nostr.Event{
 				appSetEvent("32267:pubkey:com.example.app1", "32267:pubkey:com.example.app2"),
 				appEvent("com.example.app3", "PUBKEY"),
 			},
 			want: []Impression{
-				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceWeb, Type: TypeStack},
-				{AppID: "com.example.app2", AppPubkey: "pubkey", Day: day, Source: SourceWeb, Type: TypeStack},
 				{AppID: "com.example.app3", AppPubkey: "PUBKEY", Day: day, Source: SourceWeb, Type: TypeDetail},
 			},
-		},
-		{
-			name:    "undetermined filter skipped",
-			id:      "app-req-3",
-			filters: nostr.Filters{{}},
-			events: []nostr.Event{
-				appEvent("com.example.app1", "pubkey"),
-			},
-			want: []Impression{},
 		},
 	}
 
@@ -181,32 +218,32 @@ func TestSaveImpressions(t *testing.T) {
 		{
 			name: "single impression",
 			batch: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeFeed}, 1},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 1},
 			},
 			want: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeFeed}, 1},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 1},
 			},
 		},
 		{
 			name: "count is persisted correctly",
 			batch: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeFeed}, 42},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 42},
 			},
 			want: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeFeed}, 42},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 42},
 			},
 		},
 		{
 			name: "multiple distinct impressions",
 			batch: []ImpressionCount{
-				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: TypeFeed}, 3},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 3},
 				{Impression{AppID: "com.example.app2", Day: "2024-01-01", Source: SourceWeb, Type: TypeDetail}, 7},
-				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: TypeSearch}, 1},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: TypeDetail}, 1},
 			},
 			want: []ImpressionCount{
-				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: TypeFeed}, 3},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 3},
 				{Impression{AppID: "com.example.app2", Day: "2024-01-01", Source: SourceWeb, Type: TypeDetail}, 7},
-				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: TypeSearch}, 1},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: TypeDetail}, 1},
 			},
 		},
 	}
@@ -245,7 +282,7 @@ func TestSaveImpressions_AccumulatesAcrossCalls(t *testing.T) {
 	}
 	defer s.Close()
 
-	imp := Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeFeed}
+	imp := Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}
 
 	if err := s.SaveImpressions(context.Background(), []ImpressionCount{{imp, 3}}); err != nil {
 		t.Fatalf("first SaveImpressions: %v", err)
