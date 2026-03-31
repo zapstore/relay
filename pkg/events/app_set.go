@@ -112,11 +112,13 @@ func ValidateAppSet(event *nostr.Event) error {
 		if hVal != "" {
 			return errors.New("private stacks must not include an 'h' tag")
 		}
-	} else {
-		if hVal != ZapstoreCommunityPubkey {
-			return fmt.Errorf("public stacks must include an 'h' tag with value %s", ZapstoreCommunityPubkey)
-		}
 	}
+	// TODO: re-enable once clients are updated to always include h tag on public stacks
+	// else {
+	// 	if hVal != ZapstoreCommunityPubkey {
+	// 		return fmt.Errorf("public stacks must include an 'h' tag with value %s", ZapstoreCommunityPubkey)
+	// 	}
+	// }
 
 	appSet, err := ParseAppSet(event)
 	if err != nil {
