@@ -74,9 +74,8 @@ func migrate(store *sqlite.Store) error {
 	return nil
 }
 
-// zapstoreCommunityPubkey is the h-tag value identifying the Zapstore community.
 // TODO(transition): remove when all publishers include h tags and legacy events are gone.
-const zapstoreCommunityPubkey = "acfeaea6e51420e8068fac446ca9d17d7a9ef6a5d20d93894e50fee3d4902a84"
+const zapstoreCommunityPubkey = events.ZapstoreCommunityPubkey
 
 // queryBuilder handles FTS search for apps when there's exactly one app search filter.
 // When the search term is a repository URL (any host, /:user/:repo path), it performs

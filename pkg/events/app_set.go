@@ -11,6 +11,8 @@ import (
 
 const KindAppSet = 30267
 
+const ZapstoreCommunityPubkey = "acfeaea6e51420e8068fac446ca9d17d7a9ef6a5d20d93894e50fee3d4902a84"
+
 type AppIdentifier string // 32267:<pubkey>:<app_id> or 30267:<pubkey>:<d-tag>
 
 // AppSet represents a set of app identifiers with associated platform identifiers.
@@ -97,6 +99,25 @@ func ParseAppSet(event *nostr.Event) (AppSet, error) {
 
 // ValidateAppSet parses and validates a AppSet event.
 func ValidateAppSet(event *nostr.Event) error {
+	var hVal string
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == "h" {
+			hVal = tag[1]
+			break
+		}
+	}
+
+	isPrivate := event.Content != ""
+	if isPrivate {
+		if hVal != "" {
+			return errors.New("private stacks must not include an 'h' tag")
+		}
+	} else {
+		if hVal != ZapstoreCommunityPubkey {
+			return fmt.Errorf("public stacks must include an 'h' tag with value %s", ZapstoreCommunityPubkey)
+		}
+	}
+
 	appSet, err := ParseAppSet(event)
 	if err != nil {
 		return err
