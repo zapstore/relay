@@ -46,7 +46,6 @@ var (
 // indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
 const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
 
-
 func Setup(
 	config Config,
 	limiter rate.Limiter,
@@ -191,11 +190,12 @@ func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filte
 	for _, filter := range filters {
 		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results.
 		// Not gated on subID — discovery misses are always meaningful.
-		if filter.Search != "" && len(result) == 0 {
-			if isKindOnly(filter.Kinds, events.KindApp) {
-				idx.RecordDiscoveryMiss(filter.Search)
-			}
-		}
+		// DISABLED: GitHub/user-repo indexing temporarily commented out.
+		// if filter.Search != "" && len(result) == 0 {
+		// 	if isKindOnly(filter.Kinds, events.KindApp) {
+		// 		idx.RecordDiscoveryMiss(filter.Search)
+		// 	}
+		// }
 
 		if hasReleaseKind(filter.Kinds) {
 			if !wantsReleases {
