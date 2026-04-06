@@ -74,16 +74,13 @@ func migrate(store *sqlite.Store) error {
 	return nil
 }
 
-// TODO(transition): remove when all publishers include h tags and legacy events are gone.
-const zapstoreCommunityPubkey = events.ZapstoreCommunityPubkey
-
 // queryBuilder handles FTS search for apps when there's exactly one app search filter.
 // When the search term is a repository URL (any host, /:user/:repo path), it performs
 // an exact match on the `repository` tag instead of FTS. Otherwise, it delegates to
 // the default query builder.
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if searchesIn(filters) == 0 {
-		return tagAwareQueryBuilder(filters...)
+		return sqlite.DefaultQueryBuilder(filters...)
 	}
 
 	if len(filters) > 1 {
@@ -223,103 +220,3 @@ func inClause(n int) string {
 	return " IN (?" + strings.Repeat(",?", n-1) + ")"
 }
 
-// tagAwareQueryBuilder routes each filter through the appropriate builder.
-// Community app set filters (kind 30267 with h=community_key) get special
-// handling so the SQL LIMIT applies after private-event filtering.
-// TODO(transition): collapse back to DefaultQueryBuilder when h-tag migration is complete.
-func tagAwareQueryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
-	queries := make([]sqlite.Query, 0, len(filters))
-	for _, f := range filters {
-		if q, ok := communityAppSetQuery(f); ok {
-			queries = append(queries, q)
-		} else {
-			qs, err := sqlite.DefaultQueryBuilder(f)
-			if err != nil {
-				return nil, err
-			}
-			queries = append(queries, qs...)
-		}
-	}
-	return queries, nil
-}
-
-// communityAppSetQuery detects kind 30267 filters with h=zapstoreCommunityPubkey
-// and generates a single SQL query that correctly handles the h-tag transition:
-//
-//   - Events WITH h=community_key are matched directly (new, properly tagged events).
-//   - Events WITHOUT any h tag AND with empty content are matched as legacy public events.
-//
-// By pushing both the community-membership and public-only checks into SQL, the
-// LIMIT clause applies to the already-filtered result set. This avoids the bug where
-// SQL LIMIT fetched N events and Go post-filtering removed private ones, returning
-// far fewer than N results.
-//
-// TODO(transition): remove when all publishers include h tags.
-func communityAppSetQuery(f nostr.Filter) (sqlite.Query, bool) {
-	hVals, hasH := f.Tags["h"]
-	if !hasH || !slices.Contains(hVals, zapstoreCommunityPubkey) {
-		return sqlite.Query{}, false
-	}
-	if !slices.Contains(f.Kinds, events.KindAppSet) {
-		return sqlite.Query{}, false
-	}
-
-	var conds []string
-	var args []any
-
-	if len(f.Kinds) == 1 {
-		conds = append(conds, "e.kind = ?")
-		args = append(args, f.Kinds[0])
-	} else {
-		conds = append(conds, "e.kind"+inClause(len(f.Kinds)))
-		for _, k := range f.Kinds {
-			args = append(args, k)
-		}
-	}
-
-	if len(f.IDs) > 0 {
-		conds = append(conds, "e.id"+inClause(len(f.IDs)))
-		for _, id := range f.IDs {
-			args = append(args, id)
-		}
-	}
-
-	if len(f.Authors) > 0 {
-		conds = append(conds, "e.pubkey"+inClause(len(f.Authors)))
-		for _, pk := range f.Authors {
-			args = append(args, pk)
-		}
-	}
-
-	if f.Since != nil {
-		conds = append(conds, "e.created_at >= ?")
-		args = append(args, int64(*f.Since))
-	}
-	if f.Until != nil {
-		conds = append(conds, "e.created_at <= ?")
-		args = append(args, int64(*f.Until))
-	}
-
-	for key, vals := range f.Tags {
-		if key == "h" || len(vals) == 0 {
-			continue
-		}
-		conds = append(conds, "e.id IN (SELECT event_id FROM tags WHERE key = ? AND value"+inClause(len(vals))+")")
-		args = append(args, key)
-		for _, v := range vals {
-			args = append(args, v)
-		}
-	}
-
-	// h-tag transition: events with h=community OR legacy events (no h tag, public content)
-	conds = append(conds,
-		"(e.id IN (SELECT event_id FROM tags WHERE key = 'h' AND value = ?)"+
-			" OR (NOT EXISTS (SELECT 1 FROM tags WHERE event_id = e.id AND key = 'h') AND e.content = ''))")
-	args = append(args, zapstoreCommunityPubkey)
-
-	query := "SELECT e.* FROM events AS e WHERE " + strings.Join(conds, " AND ") +
-		" ORDER BY e.created_at DESC, e.id ASC LIMIT ?"
-	args = append(args, f.Limit)
-
-	return sqlite.Query{SQL: query, Args: args}, true
-}
