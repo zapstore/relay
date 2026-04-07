@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/zapstore/relay/pkg/events/legacy"
 )
 
 const (
@@ -29,7 +28,6 @@ var WithValidation = []int{
 	KindIdentityProof,
 	KindComment,
 	KindZap,
-	legacy.KindFile,
 }
 
 // IsZapstoreEvent returns true if the event is a supported Zapstore event type.
@@ -44,22 +42,19 @@ func Validate(event *nostr.Event) error {
 	case KindApp:
 		a, ok := Find(event.Tags, "a")
 		if ok && strings.HasPrefix(a, "30063:") {
-			return legacy.ValidateApp(event)
+			return fmt.Errorf("legacy app format (a tag referencing 30063) is no longer accepted")
 		}
 		return ValidateApp(event)
 
 	case KindRelease:
 		a, ok := Find(event.Tags, "a")
 		if ok && strings.HasPrefix(a, "32267:") {
-			return legacy.ValidateRelease(event)
+			return fmt.Errorf("legacy release format (a tag referencing 32267) is no longer accepted")
 		}
 		return ValidateRelease(event)
 
 	case KindAsset:
 		return ValidateAsset(event)
-
-	case legacy.KindFile:
-		return legacy.ValidateFile(event)
 
 	case KindAppSet:
 		return ValidateAppSet(event)
