@@ -2,15 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
@@ -45,36 +42,6 @@ func (r *assetResolver) ResolveAssetURL(ctx context.Context, hash string) (strin
 	}
 	url, ok := events.Find(found[0].Tags, "url")
 	return url, ok, nil
-}
-
-// startBlossom serves handler on addr, gracefully shutting down when ctx is cancelled.
-// Timeout values mirror blossy's defaults.
-func startBlossom(ctx context.Context, addr string, handler http.Handler) error {
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	exitErr := make(chan error, 1)
-	go func() {
-		slog.Info("serving the blossom server", "address", addr)
-		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			exitErr <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		slog.Info("shutting down the blossom server", "address", addr)
-		defer slog.Info("blossom server stopped")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
-	case err := <-exitErr:
-		return err
-	}
 }
 
 func main() {
@@ -176,7 +143,7 @@ func main() {
 		panic(err)
 	}
 
-	blossomHandler, err := blossom.Setup(
+	blossom, err := blossom.Setup(
 		config.Blossom,
 		limiter,
 		acl,
@@ -205,7 +172,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		address := "localhost:" + config.Blossom.Port
-		if err := startBlossom(ctx, address, blossomHandler); err != nil {
+		if err := blossom.StartAndServe(ctx, address); err != nil {
 			exit <- err
 		}
 	}()

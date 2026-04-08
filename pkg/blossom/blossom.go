@@ -34,9 +34,6 @@ type AssetResolver interface {
 	ResolveAssetURL(ctx context.Context, hash string) (url string, found bool, err error)
 }
 
-// Setup configures the Blossom server and returns an http.Handler.
-// GET /<hash> first checks the local blossom store; if the hash is not found there,
-// it falls back to kind 3063 events via resolver and redirects to the external asset URL.
 func Setup(
 	config Config,
 	limiter rate.Limiter,
@@ -44,11 +41,11 @@ func Setup(
 	store *store.Store,
 	analytics *analytics.Engine,
 	resolver AssetResolver,
-) (http.Handler, error) {
+) (*blossy.Server, error) {
 
 	bunny := bunny.NewClient(config.Bunny)
 
-	blossyServer, err := blossy.NewServer(
+	server, err := blossy.NewServer(
 		blossy.WithHostname(config.Hostname),
 		blossy.WithRangeSupport(),
 	)
@@ -56,15 +53,15 @@ func Setup(
 		return nil, fmt.Errorf("failed to setup blossom server: %w", err)
 	}
 
-	blossyServer.Reject.Check.Append(
+	server.Reject.Check.Append(
 		RateCheckIP(limiter),
 	)
 
-	blossyServer.Reject.Download.Append(
+	server.Reject.Download.Append(
 		RateDownloadIP(limiter),
 	)
 
-	blossyServer.Reject.Upload.Append(
+	server.Reject.Upload.Append(
 		RateUploadIP(limiter),
 		MissingAuth(),
 		MissingHints(),
@@ -72,11 +69,10 @@ func Setup(
 		AuthorNotAllowed(acl),
 	)
 
-	blossyServer.On.Check = Check(store, analytics)
-	blossyServer.On.Download = Download(store, bunny, resolver, analytics)
-	blossyServer.On.Upload = Upload(store, bunny, limiter, config.StallTimeout, analytics)
-
-	return blossyServer, nil
+	server.On.Check = Check(store, analytics)
+	server.On.Download = Download(store, bunny, resolver, analytics)
+	server.On.Upload = Upload(store, bunny, limiter, config.StallTimeout, analytics)
+	return server, nil
 }
 
 func Check(db *store.Store, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
