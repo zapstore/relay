@@ -46,10 +46,19 @@ type Response struct {
 	Rank      float64 `json:"rank"`
 	Follows   int     `json:"follows"`
 	Followers int     `json:"followers"`
+
+	// present only if the profile leaked its key
+	Leak *Leak `json:"leak,omitempty"`
 }
 
-// Allow returns whether the pubkey is above the threshold.
-// It returns an error if the request to the relay fails.
+type Leak struct {
+	Status     string `json:"status"`
+	Proof      string `json:"proof,omitempty"`
+	DetectedAt int64  `json:"detected_at,omitempty"`
+}
+
+// Allow returns true if the pubkey is considered trustworthy, otherwise false.
+// It returns an error if the request to Vertex fails.
 func (f Filter) Allow(ctx context.Context, pubkey string) (bool, error) {
 	if f.config.Algorithm.Threshold <= 0 {
 		return true, nil
@@ -64,7 +73,7 @@ func (f Filter) Allow(ctx context.Context, pubkey string) (bool, error) {
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"param", "target", pubkey},
-			{"param", "limit", "5"},
+			{"param", "limit", "0"}, // don't need top followers
 			{"param", "sort", string(f.config.Algorithm.Sort)},
 			{"param", "source", f.config.Algorithm.Source},
 		},
@@ -88,6 +97,12 @@ func (f Filter) Allow(ctx context.Context, pubkey string) (bool, error) {
 	if target.Pubkey != pubkey {
 		return false, fmt.Errorf("vertex.Filter: received a response for a different pubkey: expected %s, got %s", pubkey, target.Pubkey)
 	}
+	if target.Leak != nil {
+		// a leaked key is by definition not trustworthy. We cache it to avoid repeated lookups.
+		f.cache.Add(target.Pubkey, -1)
+		return false, nil
+	}
+
 	f.cache.Add(target.Pubkey, target.Rank)
 	return target.Rank >= f.config.Algorithm.Threshold, nil
 }

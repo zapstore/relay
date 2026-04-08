@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	stranger = "34dc3acca6f7720af2948dc34a0aee4506b1366c29e8e88efab37c330e1132af"
-	fran     = "726a1e261cc6474674e8285e3951b3bb139be9a773d1acf49dc868db861a1c11"
-	pip      = "f683e87035f7ad4f44e0b98cfbd9537e16455a92cd38cefc4cb31db7557f5ef2"
+	stranger     = "34dc3acca6f7720af2948dc34a0aee4506b1366c29e8e88efab37c330e1132af"
+	fran         = "726a1e261cc6474674e8285e3951b3bb139be9a773d1acf49dc868db861a1c11"
+	pip          = "f683e87035f7ad4f44e0b98cfbd9537e16455a92cd38cefc4cb31db7557f5ef2"
+	leakedMickey = "e4b67f9f7c0a1cce1c24ca9196f8e1446fcce17fdef5d5eb46a3929433ea4d91"
 )
 
 // Run this test with:
@@ -33,6 +34,12 @@ func TestFilter_Allow(t *testing.T) {
 		{
 			name:      "stranger below threshold",
 			pubkey:    stranger,
+			algorithm: Algorithm{Sort: SortGlobal, Threshold: 0.0000001},
+			want:      false,
+		},
+		{
+			name:      "famous leaked key",
+			pubkey:    leakedMickey,
 			algorithm: Algorithm{Sort: SortGlobal, Threshold: 0.0000001},
 			want:      false,
 		},
