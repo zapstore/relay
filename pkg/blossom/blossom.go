@@ -109,30 +109,36 @@ func Download(db *store.Store, client bunny.Client, resolver AssetResolver, anal
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
 
-		if r.Raw().URL.Query().Has("redirect") {
-			resolveCtx, resolveCancel := context.WithTimeout(r.Context(), 3*time.Second)
-			defer resolveCancel()
+		meta, err := db.Query(ctx, hash)
+		if errors.Is(err, context.Canceled) {
+			return nil, nil
+		}
+		if err != nil && !errors.Is(err, store.ErrBlobNotFound) {
+			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
+			return nil, ErrInternal
+		}
 
-			assetURL, found, resolveErr := resolver.ResolveAssetURL(resolveCtx, hash.Hex())
-			if resolveErr != nil {
-				slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", resolveErr)
+		if errors.Is(err, store.ErrBlobNotFound) {
+			// blob not found locally; if the client opted in, try the nostr redirect resolver.
+			redirect := r.Raw().URL.Query().Has("redirect")
+			if !redirect {
+				return nil, ErrNotFound
+			}
+
+			ctx, cancel = context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+
+			assetURL, found, err := resolver.ResolveAssetURL(ctx, hash.Hex())
+			if err != nil {
+				slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", err)
 				return nil, ErrInternal
 			}
 			if !found || assetURL == "" {
 				return nil, ErrNotFound
 			}
 
-			analytics.RecordProxyDownload(r.Raw(), hash)
+			analytics.RecordDownload(r, hash)
 			return blossy.Redirect(assetURL, http.StatusTemporaryRedirect), nil
-		}
-
-		meta, err := db.Query(ctx, hash)
-		if errors.Is(err, store.ErrBlobNotFound) {
-			return nil, ErrNotFound
-		}
-		if err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
-			return nil, ErrInternal
 		}
 
 		analytics.RecordDownload(r, hash)

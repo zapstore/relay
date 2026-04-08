@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -177,22 +176,6 @@ func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 	default:
 		e.log.Warn("analytics: failed to record download", "error", "channel is full")
 		return
-	}
-}
-
-// RecordProxyDownload records a download of an externally-hosted asset identified by hash.
-// Unlike [RecordDownload], it accepts a plain *http.Request since proxy requests are not
-// routed through blossy.
-func (e *Engine) RecordProxyDownload(r *http.Request, hash blossom.Hash) {
-	e.blossom.downloads.Add(1)
-
-	country := e.lookupCountry(blossy.GetIP(r).Raw)
-	download := store.NewDownload(country, r.Header, hash)
-
-	select {
-	case e.downloads <- download:
-	default:
-		e.log.Warn("analytics: failed to record proxy download", "error", "channel is full")
 	}
 }
 
