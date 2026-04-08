@@ -31,13 +31,8 @@ type Config struct {
 	MaxReqFilters int `env:"RELAY_MAX_REQ_FILTERS"`
 
 	// ResponseLimit is the maximum number of responses that can be buffered and sent
-	// to a single client connection before backpressure is applied. Default is 200.
+	// to a single client connection before backpressure is applied. Default is 500.
 	ResponseLimit int `env:"RELAY_RESPONSE_LIMIT"`
-
-	// MaxFilterLimit caps the limit field on individual REQ filters.
-	// Filters requesting more than this are silently clamped. Default is 500.
-	MaxFilterLimit int `env:"RELAY_MAX_FILTER_LIMIT"`
-
 
 	// AllowedKinds is a list of event kinds that are allowed to be published to the relay.
 	// Default is all kinds.
@@ -51,10 +46,9 @@ func NewConfig() Config {
 	return Config{
 		Port:            "3334",
 		QueueCapacity:   1000,
-		MaxMessageBytes:   500_000,
-		MaxReqFilters:     50,
-		ResponseLimit:     200,
-		MaxFilterLimit:    100,
+		MaxMessageBytes: 500_000,
+		MaxReqFilters:   50,
+		ResponseLimit:   500,
 		AllowedKinds:    append(events.WithValidation, nostr.KindDeletion),
 	}
 }
@@ -89,9 +83,6 @@ func (c Config) Validate() error {
 	}
 	if c.ResponseLimit <= 0 {
 		return errors.New("response limit must be greater than 0")
-	}
-	if c.MaxFilterLimit <= 0 {
-		return errors.New("max filter limit must be greater than 0")
 	}
 	if len(c.AllowedKinds) == 0 {
 		slog.Warn("relay allowed kinds is empty. No events will be accepted.")
@@ -168,9 +159,8 @@ func (c Config) String() string {
 		"\tMax Message Bytes: %d\n"+
 		"\tMax REQ Filters: %d\n"+
 		"\tResponse Limit: %d\n"+
-		"\tMax Filter Limit: %d\n"+
 		"\tAllowed Kinds: %v\n"+
 		c.Info.String(),
-		c.Hostname, c.Port, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.MaxFilterLimit, c.AllowedKinds,
+		c.Hostname, c.Port, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.AllowedKinds,
 	)
 }
