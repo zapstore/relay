@@ -52,6 +52,9 @@ func Validate(event *nostr.Event) error {
 	case KindIdentityProof:
 		return ValidateIdentityProof(event)
 
+	case KindCommunityCreation:
+		return ValidateCommunityCreation(event)
+
 	default:
 		return nil
 	}
