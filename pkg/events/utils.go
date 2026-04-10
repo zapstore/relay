@@ -27,6 +27,7 @@ var WithValidation = []int{
 	KindStack,
 	KindAppRelays,
 	KindIdentityProof,
+	KindCommunityCreation,
 }
 
 // Validate validates an event by routing to the appropriate
