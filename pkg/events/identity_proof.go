@@ -39,7 +39,6 @@ func (p IdentityProof) Validate(event *nostr.Event) error {
 	if p.Expiry <= event.CreatedAt.Time().Unix() {
 		return fmt.Errorf("'expiry' must be greater than 'created_at'")
 	}
-
 	return nil
 }
 
@@ -62,7 +61,11 @@ func ParseIdentityProof(event *nostr.Event) (IdentityProof, error) {
 		case "signature":
 			proof.Signature = tag[1]
 		case "expiry":
-			proof.Expiry, _ = strconv.ParseInt(tag[1], 10, 64)
+			expiry, err := strconv.ParseInt(tag[1], 10, 64)
+			if err != nil {
+				return IdentityProof{}, fmt.Errorf("invalid 'expiry' tag: %w", err)
+			}
+			proof.Expiry = expiry
 		}
 	}
 	return proof, nil
