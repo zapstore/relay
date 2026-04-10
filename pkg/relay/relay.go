@@ -520,7 +520,7 @@ func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Cl
 
 		// Open kinds (0, 1111, 9735, 30267, 30509) skip the allow-list and unknown-pubkey policy,
 		// but blocked pubkeys are still rejected. Kind 0 is additionally gated by ProfileKnownPublisher.
-		if e.Kind == events.KindProfile || e.Kind == events.KindComment || e.Kind == events.KindZap || e.Kind == events.KindAppSet || e.Kind == events.KindIdentityProof {
+		if e.Kind == events.KindProfile || e.Kind == events.KindComment || e.Kind == events.KindZap || e.Kind == events.KindStack || e.Kind == events.KindIdentityProof {
 			blocked, err := acl.IsBlocked(ctx, e.PubKey)
 			if err != nil {
 				slog.Error("relay: failed to check if pubkey is blocked", "error", err)

@@ -16,9 +16,9 @@ func TestParseApp_UnknownFTagsIgnored(t *testing.T) {
 		Tags: nostr.Tags{
 			{"d", "com.example.app"},
 			{"name", "Example App"},
-			{"f", "android-armeabi"},       // unknown — should be ignored
-			{"f", "android-arm64-v8a"},     // known — should be kept
-			{"f", "android-unknown-arch"},  // unknown — should be ignored
+			{"f", "android-armeabi"},      // unknown — should be ignored
+			{"f", "android-arm64-v8a"},    // known — should be kept
+			{"f", "android-unknown-arch"}, // unknown — should be ignored
 		},
 	}
 
@@ -57,8 +57,8 @@ func TestParseAsset_UnknownFTagsIgnored(t *testing.T) {
 			{"i", "com.example.app"},
 			{"x", validHash},
 			{"version", "1.0.0"},
-			{"f", "android-armeabi"},      // unknown — should be ignored
-			{"f", "android-armeabi-v7a"},  // known — should be kept
+			{"f", "android-armeabi"},     // unknown — should be ignored
+			{"f", "android-armeabi-v7a"}, // known — should be kept
 			{"version_code", "100"},
 			{"apk_certificate_hash", validHash},
 		},
@@ -95,37 +95,37 @@ func TestValidateAsset_OnlyUnknownFTags_Rejected(t *testing.T) {
 	}
 }
 
-func TestParseAppSet_UnknownFTagsIgnored(t *testing.T) {
+func TestParseStack_UnknownFTagsIgnored(t *testing.T) {
 	pk := "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 	event := &nostr.Event{
-		Kind: KindAppSet,
+		Kind: KindStack,
 		Tags: nostr.Tags{
 			{"a", "32267:" + pk + ":com.example.app"},
-			{"f", "android-armeabi"},      // unknown — should be ignored
-			{"f", "android-arm64-v8a"},    // known — should be kept
+			{"f", "android-armeabi"},   // unknown — should be ignored
+			{"f", "android-arm64-v8a"}, // known — should be kept
 		},
 	}
 
-	appSet, err := ParseAppSet(event)
+	stack, err := ParseStack(event)
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
-	if len(appSet.Platforms) != 1 || appSet.Platforms[0] != "android-arm64-v8a" {
-		t.Errorf("expected [android-arm64-v8a], got %v", appSet.Platforms)
+	if len(stack.Platforms) != 1 || stack.Platforms[0] != "android-arm64-v8a" {
+		t.Errorf("expected [android-arm64-v8a], got %v", stack.Platforms)
 	}
 }
 
-func TestValidateAppSet_OnlyUnknownFTags_Rejected(t *testing.T) {
+func TestValidateStack_OnlyUnknownFTags_Rejected(t *testing.T) {
 	pk := "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 	event := &nostr.Event{
-		Kind: KindAppSet,
+		Kind: KindStack,
 		Tags: nostr.Tags{
 			{"a", "32267:" + pk + ":com.example.app"},
 			{"f", "android-armeabi"},
 		},
 	}
 
-	err := ValidateAppSet(event)
+	err := ValidateStack(event)
 	if err == nil {
 		t.Fatal("expected validation error for all-unknown f tags, got nil")
 	}

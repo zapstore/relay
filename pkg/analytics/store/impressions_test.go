@@ -44,7 +44,7 @@ func TestIsDetailFilter(t *testing.T) {
 		},
 		{
 			name:   "wrong kind",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindAppSet}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
+			filter: nostr.Filter{Kinds: []int{eventPkg.KindStack}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
 			want:   false,
 		},
 		{
@@ -160,9 +160,9 @@ func TestNewImpressions(t *testing.T) {
 		{
 			name:    "stack filter is ignored",
 			id:      "web-app-detail-789",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindAppSet}}},
+			filters: nostr.Filters{{Kinds: []int{eventPkg.KindStack}}},
 			events: []nostr.Event{
-				appSetEvent("32267:pubkey:com.example.app1"),
+				stackEvent("32267:pubkey:com.example.app1"),
 			},
 			want: []Impression{},
 		},
@@ -179,11 +179,11 @@ func TestNewImpressions(t *testing.T) {
 			name: "mixed filters: only detail filter counted",
 			id:   "web-app-detail-456",
 			filters: nostr.Filters{
-				{Kinds: []int{eventPkg.KindAppSet}},
+				{Kinds: []int{eventPkg.KindStack}},
 				{Kinds: []int{eventPkg.KindApp}, Authors: []string{"PUBKEY"}, Tags: nostr.TagMap{"d": {"com.example.app3"}}},
 			},
 			events: []nostr.Event{
-				appSetEvent("32267:pubkey:com.example.app1", "32267:pubkey:com.example.app2"),
+				stackEvent("32267:pubkey:com.example.app1", "32267:pubkey:com.example.app2"),
 				appEvent("com.example.app3", "PUBKEY"),
 			},
 			want: []Impression{
@@ -372,13 +372,13 @@ func appEvent(appID string, pubkey string) nostr.Event {
 	}
 }
 
-func appSetEvent(aTags ...string) nostr.Event {
+func stackEvent(aTags ...string) nostr.Event {
 	tags := nostr.Tags{}
 	for _, aTag := range aTags {
 		tags = append(tags, nostr.Tag{"a", aTag})
 	}
 	return nostr.Event{
-		Kind: eventPkg.KindAppSet,
+		Kind: eventPkg.KindStack,
 		Tags: tags,
 	}
 }

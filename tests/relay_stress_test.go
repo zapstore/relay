@@ -96,19 +96,19 @@ var ZapstoreFilters = []nostr.Filters{
 	{
 		// Multiple filters, each looking for one set
 		{
-			Kinds:   []int{events.KindAppSet},
+			Kinds:   []int{events.KindStack},
 			Authors: []string{"78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"},
 			Tags:    nostr.TagMap{"i": []string{"com.quietmobile"}},
 			Limit:   1,
 		},
 		{
-			Kinds:   []int{events.KindAppSet},
+			Kinds:   []int{events.KindStack},
 			Authors: []string{"78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"},
 			Tags:    nostr.TagMap{"i": []string{"fr.mobdev.peertubelive"}},
 			Limit:   1,
 		},
 		{
-			Kinds:   []int{events.KindAppSet},
+			Kinds:   []int{events.KindStack},
 			Authors: []string{"78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"},
 			Tags:    nostr.TagMap{"i": []string{"com.rekna.knocky"}},
 			Limit:   1,

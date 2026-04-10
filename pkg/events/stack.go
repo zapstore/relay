@@ -9,21 +9,21 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-const KindAppSet = 30267
+const KindStack = 30267
 
-const ZapstoreCommunityPubkey = "acfeaea6e51420e8068fac446ca9d17d7a9ef6a5d20d93894e50fee3d4902a84"
+type AppIdentifier string // 32267:<pubkey>:<app_id>
 
-type AppIdentifier string // 32267:<pubkey>:<app_id> or 30267:<pubkey>:<d-tag>
+// const ZapstoreCommunityPubkey = "acfeaea6e51420e8068fac446ca9d17d7a9ef6a5d20d93894e50fee3d4902a84"
 
-// AppSet represents a set of app identifiers with associated platform identifiers.
+// Stack represents a set of app identifiers with associated platform identifiers.
 // Learn more here: https://github.com/nostr-protocol/nips/blob/master/51.md#sets
-type AppSet struct {
+type Stack struct {
 	Apps      []AppIdentifier
 	Platforms []string
 }
 
 // Resolve resolves the app set identifiers into a list of public keys and app IDs.
-func (s AppSet) Resolve() (pubkeys []string, appIDs []string) {
+func (s Stack) Resolve() (pubkeys []string, appIDs []string) {
 	for _, app := range s.Apps {
 		parts := strings.Split(string(app), ":")
 		if len(parts) != 3 {
@@ -40,7 +40,7 @@ func (s AppSet) Resolve() (pubkeys []string, appIDs []string) {
 	return pubkeys, appIDs
 }
 
-func (s AppSet) Validate() error {
+func (s Stack) Validate() error {
 	for _, e := range s.Apps {
 		if err := e.Validate(); err != nil {
 			return err
@@ -72,14 +72,14 @@ func (e AppIdentifier) Validate() error {
 	return nil
 }
 
-// ParseAppSet extracts a AppSet from a nostr.Event.
+// ParseStack extracts a Stack from a nostr.Event.
 // Returns an error if the event kind is structurally invalid.
-func ParseAppSet(event *nostr.Event) (AppSet, error) {
-	if event.Kind != KindAppSet {
-		return AppSet{}, fmt.Errorf("invalid kind: expected %d, got %d", KindAppSet, event.Kind)
+func ParseStack(event *nostr.Event) (Stack, error) {
+	if event.Kind != KindStack {
+		return Stack{}, fmt.Errorf("invalid kind: expected %d, got %d", KindStack, event.Kind)
 	}
 
-	appSet := AppSet{}
+	stack := Stack{}
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
 			continue
@@ -87,18 +87,18 @@ func ParseAppSet(event *nostr.Event) (AppSet, error) {
 
 		switch tag[0] {
 		case "a":
-			appSet.Apps = append(appSet.Apps, AppIdentifier(tag[1]))
+			stack.Apps = append(stack.Apps, AppIdentifier(tag[1]))
 		case "f":
 			if slices.Contains(PlatformIdentifiers, tag[1]) {
-				appSet.Platforms = append(appSet.Platforms, tag[1])
+				stack.Platforms = append(stack.Platforms, tag[1])
 			}
 		}
 	}
-	return appSet, nil
+	return stack, nil
 }
 
-// ValidateAppSet parses and validates a AppSet event.
-func ValidateAppSet(event *nostr.Event) error {
+// ValidateStack parses and validates a Stack event.
+func ValidateStack(event *nostr.Event) error {
 	var hVal string
 	for _, tag := range event.Tags {
 		if len(tag) >= 2 && tag[0] == "h" {
@@ -108,10 +108,8 @@ func ValidateAppSet(event *nostr.Event) error {
 	}
 
 	isPrivate := event.Content != ""
-	if isPrivate {
-		if hVal != "" {
-			return errors.New("private stacks must not include an 'h' tag")
-		}
+	if isPrivate && hVal != "" {
+		return errors.New("private stacks must not include an 'h' tag")
 	}
 	// TODO: re-enable once clients are updated to always include h tag on public stacks
 	// else {
@@ -120,19 +118,19 @@ func ValidateAppSet(event *nostr.Event) error {
 	// 	}
 	// }
 
-	appSet, err := ParseAppSet(event)
+	stack, err := ParseStack(event)
 	if err != nil {
 		return err
 	}
-	return appSet.Validate()
+	return stack.Validate()
 }
 
-// ResolveAppSet resolves the app set identifiers into a list of public keys and app IDs.
-// It assumes the app set has already been validated.
-func ResolveAppSet(event *nostr.Event) (pubkeys []string, appIDs []string) {
-	appSet, err := ParseAppSet(event)
+// ResolveStack resolves the stack identifiers into a list of public keys and app IDs.
+// It assumes the stack has already been validated.
+func ResolveStack(event *nostr.Event) (pubkeys []string, appIDs []string) {
+	stack, err := ParseStack(event)
 	if err != nil {
 		return nil, nil
 	}
-	return appSet.Resolve()
+	return stack.Resolve()
 }

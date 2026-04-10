@@ -33,7 +33,7 @@ func TestAuthorNotAllowed_baseVsOpenKinds(t *testing.T) {
 		wantBlock bool
 	}{
 		{"kind_32267_app", events.KindApp, true},
-		{"kind_30267_appset", events.KindAppSet, false},
+		{"kind_30267_stack", events.KindStack, false},
 		{"kind_11_forum", events.KindForumPost, true},
 		{"kind_1111_comment", events.KindComment, false},
 		{"kind_9735_zap", events.KindZap, false},
@@ -60,8 +60,8 @@ func TestAuthorNotAllowed_derivedKindRespectsBlocklist(t *testing.T) {
 	dir := t.TempDir()
 	blockedPub := strings.Repeat("c", 64)
 	files := map[string]string{
-		acl.PubkeysAllowedFile: "# Allowed pubkeys\n# pubkey,reason\n",
-		acl.PubkeysBlockedFile: "# Blocked pubkeys\n# pubkey,reason\n" + blockedPub + ",test\n",
+		acl.PubkeysAllowedFile:       "# Allowed pubkeys\n# pubkey,reason\n",
+		acl.PubkeysBlockedFile:       "# Blocked pubkeys\n# pubkey,reason\n" + blockedPub + ",test\n",
 		acl.PlatformUsersBlockedFile: "# Blocked platform users\n# platform:username,reason\n",
 	}
 	for name, body := range files {
