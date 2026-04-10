@@ -21,54 +21,59 @@ type IdentityProof struct {
 	Expiry int64
 }
 
-// ValidateIdentityProof validates the structure of a kind 30509 event.
-func ValidateIdentityProof(event *nostr.Event) error {
-	if event.Kind != KindIdentityProof {
-		return fmt.Errorf("invalid kind: expected %d, got %d", KindIdentityProof, event.Kind)
-	}
-
-	certHash, ok := Find(event.Tags, "d")
-	if !ok || certHash == "" {
+func (p IdentityProof) Validate(event *nostr.Event) error {
+	if p.CertHash == "" {
 		return fmt.Errorf("missing required 'd' tag (certificate hash)")
 	}
-	if err := ValidateHash(certHash); err != nil {
+	if err := ValidateHash(p.CertHash); err != nil {
 		return fmt.Errorf("invalid 'd' tag: %w", err)
 	}
 
-	sig, ok := Find(event.Tags, "signature")
-	if !ok || sig == "" {
+	if p.Signature == "" {
 		return fmt.Errorf("missing required 'signature' tag")
 	}
 
-	expiryStr, ok := Find(event.Tags, "expiry")
-	if !ok || expiryStr == "" {
+	if p.Expiry == 0 {
 		return fmt.Errorf("missing required 'expiry' tag")
 	}
-	expiry, err := strconv.ParseInt(expiryStr, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid 'expiry' tag: %w", err)
-	}
-	if expiry <= event.CreatedAt.Time().Unix() {
+	if p.Expiry <= event.CreatedAt.Time().Unix() {
 		return fmt.Errorf("'expiry' must be greater than 'created_at'")
 	}
 
 	return nil
 }
 
-// ParseIdentityProof parses a kind 30509 event into an IdentityProof.
+// ParseIdentityProof extracts an IdentityProof from a nostr.Event.
+// Returns an error if the event kind does not match.
 func ParseIdentityProof(event *nostr.Event) (IdentityProof, error) {
-	if err := ValidateIdentityProof(event); err != nil {
-		return IdentityProof{}, err
+	if event.Kind != KindIdentityProof {
+		return IdentityProof{}, fmt.Errorf("invalid kind: expected %d, got %d", KindIdentityProof, event.Kind)
 	}
 
-	certHash, _ := Find(event.Tags, "d")
-	sig, _ := Find(event.Tags, "signature")
-	expiryStr, _ := Find(event.Tags, "expiry")
-	expiry, _ := strconv.ParseInt(expiryStr, 10, 64)
+	proof := IdentityProof{}
+	for _, tag := range event.Tags {
+		if len(tag) < 2 {
+			continue
+		}
 
-	return IdentityProof{
-		CertHash:  certHash,
-		Signature: sig,
-		Expiry:    expiry,
-	}, nil
+		switch tag[0] {
+		case "d":
+			proof.CertHash = tag[1]
+		case "signature":
+			proof.Signature = tag[1]
+		case "expiry":
+			proof.Expiry, _ = strconv.ParseInt(tag[1], 10, 64)
+		}
+	}
+	return proof, nil
+}
+
+// ValidateIdentityProof parses and validates a kind 30509 event.
+// It checks the event is structurally valid, but doesn't perform signature verification.
+func ValidateIdentityProof(event *nostr.Event) error {
+	proof, err := ParseIdentityProof(event)
+	if err != nil {
+		return err
+	}
+	return proof.Validate(event)
 }
