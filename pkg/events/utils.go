@@ -3,7 +3,6 @@ package events
 import (
 	"encoding/hex"
 	"fmt"
-	"slices"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -11,6 +10,7 @@ import (
 // other event kinds that don't have validation functions.
 const (
 	KindProfile   = 0
+	KindDeletion  = 5
 	KindForumPost = 11
 	KindComment   = 1111
 	KindZap       = 9735
@@ -24,11 +24,6 @@ var WithValidation = []int{
 	KindStack,
 	KindAppRelays,
 	KindIdentityProof,
-}
-
-// IsZapstoreEvent returns true if the event is a supported Zapstore event type.
-func IsZapstoreEvent(e *nostr.Event) bool {
-	return slices.Contains(WithValidation, e.Kind)
 }
 
 // Validate validates an event by routing to the appropriate
