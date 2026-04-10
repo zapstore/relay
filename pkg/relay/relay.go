@@ -33,7 +33,7 @@ var (
 		This is a precautionary measure because Android doesn't allow apps with the same identifier to be installed side by side.
 		Please use a different identifier or contact the Zapstore team for more information.`)
 
-	ErrProfileUnknownPublisher = errors.New("kind 0 profile rejected: pubkey has no events on this relay")
+	ErrProfileUnknown = errors.New("kind 0 profile rejected: pubkey has no events on this relay")
 
 	ErrTooManyFilters  = errors.New("number of filters exceed the maximum allowed per REQ")
 	ErrFiltersTooVague = errors.New("filters are too vague")
@@ -41,6 +41,22 @@ var (
 	ErrInternal    = errors.New("internal error, please contact the Zapstore team.")
 	ErrRateLimited = errors.New("rate-limited: slow down chief")
 )
+
+// RootKinds are the ones that can be published without referencing a parent event.
+var RootKinds = []int{
+	events.KindForumPost,
+	events.KindApp,
+	events.KindStack,
+}
+
+// RestrictedKinds are the ones that must pass the full ACL verification.
+var RestrictedKinds = []int{
+	events.KindApp,
+	events.KindRelease,
+	events.KindAsset,
+	events.KindCommunityCreation,
+	events.KindIdentityProof,
+}
 
 // indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
 const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
@@ -75,9 +91,8 @@ func Setup(
 		rely.InvalidID,
 		rely.InvalidSignature,
 		InvalidStructure(),
-		CommentScopedToKnownEvent(store),
+		NotAnchored(store),
 		AuthorNotAllowed(acl, config.Info.Pubkey),
-		ProfileKnownPublisher(store, config.Info.Pubkey),
 		AppOwnership(store, config.Info.Pubkey),
 	)
 
@@ -415,97 +430,125 @@ func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
 	return nil
 }
 
-// CommentScopedToKnownEvent rejects kind 1111 comments that are not anchored to a known event
-// in the relay store. Two cases are accepted:
-//
-//   - Root comment: has an uppercase "A" tag of the form "32267:<pubkey>:<d-tag>" or
-//     "30267:<pubkey>:<d-tag>" referencing an app event that exists in the store.
-//   - Reply: has an "e" tag referencing the event ID of a kind 1111 comment that exists
-//     in the store.
-//
-// Any other kind 1111 is rejected.
-func CommentScopedToKnownEvent(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
+// NotAnchored returns an error if the event is not "anchored" to an existing event.
+// Anchoring means simply that the event references an existing root event.
+// Check [events.IsRoot].
+func NotAnchored(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
-		if e.Kind != events.KindComment {
+		if slices.Contains(RootKinds, e.Kind) {
+			// root events do not need to be "anchored" to an existing event
 			return nil
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		// Root comment: uppercase A tag must reference a known 32267/30267 app event.
-		if rootAddr, ok := events.Find(e.Tags, "A"); ok {
-			parts := strings.SplitN(rootAddr, ":", 3)
-			if len(parts) != 3 || (parts[0] != "32267" && parts[0] != "30267") {
-				return errors.New("kind 1111: 'A' tag must reference a kind 32267 or 30267 app event")
-			}
-			kind, pubkey, dTag := parts[0], parts[1], parts[2]
-			var exists int
-			err := db.DB.QueryRowContext(ctx,
-				`SELECT 1 FROM events AS e JOIN tags AS t ON t.event_id = e.id
-				 WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ? LIMIT 1`,
-				kind, pubkey, dTag,
-			).Scan(&exists)
-			if errors.Is(err, sql.ErrNoRows) {
-				return errors.New("kind 1111: referenced app event not found on this relay")
-			}
+		switch e.Kind {
+		case events.KindProfile:
+			publisher, err := PubkeyExists(ctx, db, e.PubKey)
 			if err != nil {
-				slog.Error("CommentScopedToKnownEvent: failed to query app event", "error", err)
+				slog.Error("NotAnchored: failed to check kind:0", "err", err)
 				return ErrInternal
 			}
-			return nil
-		}
 
-		// Reply: e tag must reference a known kind 1111 comment by event ID.
-		if parentID, ok := events.Find(e.Tags, "e"); ok {
-			var exists int
-			err := db.DB.QueryRowContext(ctx,
-				`SELECT 1 FROM events WHERE kind = 1111 AND id = ? LIMIT 1`,
-				parentID,
-			).Scan(&exists)
-			if errors.Is(err, sql.ErrNoRows) {
-				return errors.New("kind 1111 reply: referenced parent comment not found on this relay")
+			if !publisher {
+				return ErrProfileUnknown
 			}
-			if err != nil {
-				slog.Error("CommentScopedToKnownEvent: failed to query parent comment", "error", err)
-				return ErrInternal
+
+		case events.KindComment, events.KindZap:
+			aTag, hasA := events.Find(e.Tags, "A")
+			eTag, hasE := events.Find(e.Tags, "e")
+			if !hasA && !hasE {
+				return errors.New("kind 1111: must have an 'A' tag (root) or 'e' tag (reply)")
 			}
-			return nil
-		}
 
-		return errors.New("kind 1111: must have an 'A' tag (root scope) or 'e' tag (reply to kind 1111)")
-	}
-}
+			if hasA {
+				// A tag must reference a known app kind:32267 or stack kind:30267 event
+				ref, err := events.ParseAddressableRef(aTag)
+				if err != nil {
+					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %w", err)
+				}
+				if ref.Kind != events.KindApp && ref.Kind != events.KindStack {
+					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
+				}
 
-// ProfileKnownPublisher rejects kind 0 profile events whose pubkey has no other events
-// on this relay. This prevents arbitrary profile spam while allowing publishers who
-// already have content here to maintain their profile metadata.
-func ProfileKnownPublisher(db *sqlite.Store, operatorPubkey string) func(_ rely.Client, e *nostr.Event) error {
-	return func(_ rely.Client, e *nostr.Event) error {
-		if e.Kind != events.KindProfile {
-			return nil
-		}
-		if operatorPubkey != "" && e.PubKey == operatorPubkey {
-			return nil
-		}
+				exists, err := AddressExists(ctx, db, ref)
+				if err != nil {
+					slog.Error("NotAnchored: failed to check kind:1111", "error", err, "tag", aTag)
+					return ErrInternal
+				}
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
+				if !exists {
+					return errors.New("kind 1111: A tag reference not found on this relay")
+				}
+			}
 
-		var exists int
-		err := db.DB.QueryRowContext(ctx,
-			`SELECT 1 FROM events WHERE pubkey = ? AND kind != 0 LIMIT 1`,
-			e.PubKey,
-		).Scan(&exists)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrProfileUnknownPublisher
-		}
-		if err != nil {
-			slog.Error("ProfileKnownPublisher: failed to query events", "error", err)
-			return ErrInternal
+			if hasE {
+				// e tag must reference a known kind:11 or kind:1111 event
+				exists, err := PostOrCommentExists(ctx, db, eTag)
+				if err != nil {
+					slog.Error("NotAnchored: failed to check kind:1111", "error", err, "tag", eTag)
+					return ErrInternal
+				}
+
+				if !exists {
+					return errors.New("kind 1111: e tag reference not found for kind:11 or kind:1111 on this relay")
+				}
+			}
 		}
 		return nil
 	}
+}
+
+// PubkeyExists checks if a pubkey has published an event before.
+func PubkeyExists(ctx context.Context, db *sqlite.Store, pubkey string) (bool, error) {
+	var exists bool
+	err := db.DB.QueryRowContext(ctx, `SELECT 1 FROM events WHERE pubkey = ? LIMIT 1`, pubkey).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// AddressExists checks if an addressable reference (kind, pubkey, d-tag) exists in the store.
+func AddressExists(ctx context.Context, db *sqlite.Store, ref events.AddressableRef) (bool, error) {
+	if err := ref.Validate(); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err := db.DB.QueryRowContext(ctx,
+		`SELECT 1 FROM events AS e JOIN tags AS t ON t.event_id = e.id
+	 WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ? LIMIT 1`,
+		ref.Kind, ref.Pubkey, ref.DTag,
+	).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// PostOrCommentExists checks if a post or comment exists in the store by event ID.
+func PostOrCommentExists(ctx context.Context, db *sqlite.Store, id string) (bool, error) {
+	if err := events.ValidateHash(id); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err := db.DB.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? AND kind IN (11, 1111) LIMIT 1`, id).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Client, e *nostr.Event) error {
@@ -515,30 +558,29 @@ func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Cl
 			return nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		if slices.Contains(RestrictedKinds, e.Kind) {
+			// full ACL check for restrictive kinds
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 
-		// Open kinds (0, 1111, 9735, 30267, 30509) skip the allow-list and unknown-pubkey policy,
-		// but blocked pubkeys are still rejected. Kind 0 is additionally gated by ProfileKnownPublisher.
-		if e.Kind == events.KindProfile || e.Kind == events.KindComment || e.Kind == events.KindZap || e.Kind == events.KindStack || e.Kind == events.KindIdentityProof {
-			blocked, err := acl.IsBlocked(ctx, e.PubKey)
+			allow, err := acl.AllowEvent(ctx, e)
 			if err != nil {
-				slog.Error("relay: failed to check if pubkey is blocked", "error", err)
+				// fail closed policy
+				slog.Error("relay: failed to check if pubkey is allowed", "error", err)
 				return ErrEventPubkeyBlocked
 			}
-			if blocked {
+			if !allow {
 				return ErrEventPubkeyBlocked
 			}
-			return nil
 		}
 
-		allow, err := acl.AllowEvent(ctx, e)
+		// other kinds just need not to be in the blocked pubkeys
+		blocked, err := acl.IsBlocked(e.PubKey)
 		if err != nil {
-			// fail closed policy
-			slog.Error("relay: failed to check if pubkey is allowed", "error", err)
+			slog.Error("relay: failed to check if pubkey is blocked", "error", err)
 			return ErrEventPubkeyBlocked
 		}
-		if !allow {
+		if blocked {
 			return ErrEventPubkeyBlocked
 		}
 		return nil
