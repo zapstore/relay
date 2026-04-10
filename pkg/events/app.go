@@ -1,5 +1,6 @@
 // Package events provides functions for validating events structures.
 // It also exposes normalized structures and parsing functions for Zapstore events.
+// Relay-specific event validation or access control MUST not be performed here, only structural validation.
 package events
 
 import (
