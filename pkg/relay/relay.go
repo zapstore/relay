@@ -22,7 +22,6 @@ import (
 	"github.com/zapstore/relay/pkg/events/legacy"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
-	"github.com/zapstore/relay/pkg/relay/linkverify"
 	"github.com/zapstore/relay/pkg/relay/store"
 )
 
@@ -52,7 +51,6 @@ func Setup(
 	acl *acl.Controller,
 	store *sqlite.Store,
 	analytics *analytics.Engine,
-	c1 *linkverify.Verifier,
 	indexingEngine *indexing.Engine, // nil = no demand-driven indexing
 ) (*rely.Relay, error) {
 
@@ -90,12 +88,12 @@ func Setup(
 		VagueFilters(3),
 	)
 
-	relay.On.Event = Save(store, analytics, c1, indexingEngine, config.Info.Pubkey)
+	relay.On.Event = Save(store, analytics, indexingEngine, config.Info.Pubkey)
 	relay.On.Req = Query(store, analytics, indexingEngine)
 	return relay, nil
 }
 
-func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier, idx *indexing.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
+func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
 	return func(c rely.Client, event *nostr.Event) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -137,12 +135,6 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, c1 *linkverify.Verifier
 		}
 
 		analytics.RecordEvent(c, event)
-
-		// C1 verification runs asynchronously after save
-		if c1 != nil {
-			c1.OnEvent(ctx, event)
-		}
-
 		return nil
 	}
 }

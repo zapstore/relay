@@ -20,7 +20,6 @@ import (
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
-	"github.com/zapstore/relay/pkg/relay/linkverify"
 	eventstore "github.com/zapstore/relay/pkg/relay/store"
 )
 
@@ -127,8 +126,7 @@ func main() {
 	}
 
 	// Step 5.
-	// Setup C1 verifier and relay/blossom
-	c1 := linkverify.New(rstore, acl, config.Blossom.Hostname, logger)
+	// Setup relay and blossom server
 
 	relay, err := relay.Setup(
 		config.Relay,
@@ -136,7 +134,6 @@ func main() {
 		acl,
 		rstore,
 		analytics,
-		c1,
 		indexingEngine,
 	)
 	if err != nil {
