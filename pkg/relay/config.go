@@ -49,7 +49,25 @@ func NewConfig() Config {
 		MaxMessageBytes: 500_000,
 		MaxReqFilters:   50,
 		ResponseLimit:   500,
-		AllowedKinds:    append(events.WithValidation, nostr.KindDeletion),
+		AllowedKinds: []int{
+			// app kinds
+			events.KindApp,
+			events.KindRelease,
+			events.KindAsset,
+			events.KindStack,
+			events.KindAppRelays,
+
+			// social and community kinds
+			events.KindProfile,
+			events.KindDeletion,
+			events.KindForumPost,
+			events.KindComment,
+			events.KindZap,
+			events.KindCommunityCreation,
+
+			// NIP-C1 identity proof kind
+			events.KindIdentityProof,
+		},
 	}
 }
 
