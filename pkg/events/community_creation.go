@@ -3,7 +3,6 @@ package events
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -21,12 +20,12 @@ type ContentSection struct {
 	Kinds []int
 
 	// Lists holds addressable references to kind-30000 profile lists
-	// (format: "30000:<pubkey>:<d-tag>") that whitelist publishers.
-	Lists []string
+	// that whitelist publishers.
+	Lists []AddressableRef
 
 	// Badges holds badge definition references (format: "30009:<pubkey>:<d-tag>")
 	// that grant publish rights. Users holding any listed badge may publish.
-	Badges []string
+	Badges []AddressableRef
 }
 
 // CommunityCreation represents a parsed kind-10222 Community Creation event.
@@ -64,12 +63,18 @@ func (s ContentSection) Validate() error {
 		return fmt.Errorf("content section %q has no 'k' tags", s.Name)
 	}
 	for _, list := range s.Lists {
-		if err := validateAddressableRef(list, 30000); err != nil {
+		if list.Kind != 30000 {
+			return fmt.Errorf("invalid list ref %q: expected kind 30000, got %d", list, list.Kind)
+		}
+		if err := list.Validate(); err != nil {
 			return fmt.Errorf("invalid list ref %q: %w", list, err)
 		}
 	}
 	for _, badge := range s.Badges {
-		if err := validateAddressableRef(badge, 30009); err != nil {
+		if badge.Kind != 30009 {
+			return fmt.Errorf("invalid badge ref %q: expected kind 30009, got %d", badge, badge.Kind)
+		}
+		if err := badge.Validate(); err != nil {
 			return fmt.Errorf("invalid badge ref %q: %w", badge, err)
 		}
 	}
@@ -93,26 +98,6 @@ func (c CommunityCreation) Validate() error {
 		if err := s.Validate(); err != nil {
 			return fmt.Errorf("content section %q: %w", s.Name, err)
 		}
-	}
-	return nil
-}
-
-// validateAddressableRef checks that a string has the form "<kind>:<pubkey>:<d-tag>"
-// and that the leading kind matches expectedKind.
-func validateAddressableRef(ref string, expectedKind int) error {
-	parts := strings.SplitN(ref, ":", 3)
-	if len(parts) != 3 {
-		return fmt.Errorf("must be <kind>:<pubkey>:<d-tag>")
-	}
-	k, err := strconv.Atoi(parts[0])
-	if err != nil || k != expectedKind {
-		return fmt.Errorf("expected kind %d, got %q", expectedKind, parts[0])
-	}
-	if !nostr.IsValidPublicKey(parts[1]) {
-		return fmt.Errorf("invalid pubkey")
-	}
-	if parts[2] == "" {
-		return fmt.Errorf("d-tag must not be empty")
 	}
 	return nil
 }
@@ -158,12 +143,16 @@ func ParseCommunityCreation(event *nostr.Event) (CommunityCreation, error) {
 
 		case "a":
 			if current != nil {
-				current.Lists = append(current.Lists, tag[1])
+				if ref, err := ParseAddressableRef(tag[1]); err == nil {
+					current.Lists = append(current.Lists, ref)
+				}
 			}
 
 		case "badge":
 			if current != nil {
-				current.Badges = append(current.Badges, tag[1])
+				if ref, err := ParseAddressableRef(tag[1]); err == nil {
+					current.Badges = append(current.Badges, ref)
+				}
 			}
 
 		case "tos":

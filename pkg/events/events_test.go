@@ -370,30 +370,56 @@ func TestValidateCommunityCreation_SectionMissingKTag(t *testing.T) {
 	}
 }
 
-// TestValidateCommunityCreation_InvalidListRef checks that a malformed "a" tag
-// reference in a content section is rejected.
+// TestValidateCommunityCreation_InvalidListRef checks that an "a" tag with the
+// wrong kind (not 30000) is rejected at validation time.
 func TestValidateCommunityCreation_InvalidListRef(t *testing.T) {
 	err := ValidateCommunityCreation(communityEvent(
-		nostr.Tag{"a", "99999:not-a-pubkey:General"},
+		nostr.Tag{"a", "99999:" + validPubkey + ":General"},
 	))
 	if err == nil {
-		t.Fatal("expected error for invalid list ref, got nil")
+		t.Fatal("expected error for wrong-kind list ref, got nil")
 	}
 	if !strings.Contains(err.Error(), "invalid list ref") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
 
-// TestValidateCommunityCreation_InvalidBadgeRef checks that a malformed "badge" tag
-// reference in a content section is rejected.
+// TestValidateCommunityCreation_InvalidBadgeRef checks that a "badge" tag with the
+// wrong kind (not 30009) is rejected at validation time.
 func TestValidateCommunityCreation_InvalidBadgeRef(t *testing.T) {
 	err := ValidateCommunityCreation(communityEvent(
-		nostr.Tag{"badge", "not-a-ref"},
+		nostr.Tag{"badge", "99999:" + validPubkey + ":member"},
 	))
 	if err == nil {
-		t.Fatal("expected error for invalid badge ref, got nil")
+		t.Fatal("expected error for wrong-kind badge ref, got nil")
 	}
 	if !strings.Contains(err.Error(), "invalid badge ref") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// TestParseCommunityCreation_MalformedRefsDropped checks that "a" and "badge" tags
+// that cannot be parsed as addressable refs are silently dropped, consistent with
+// how invalid "k" and "f" values are handled.
+func TestParseCommunityCreation_MalformedRefsDropped(t *testing.T) {
+	event := &nostr.Event{
+		Kind: KindCommunityCreation,
+		Tags: nostr.Tags{
+			{"r", validRelayURL},
+			{"content", "General"},
+			{"k", "1111"},
+			{"a", "not-a-ref"},
+			{"badge", "also-not-a-ref"},
+		},
+	}
+	c, err := ParseCommunityCreation(event)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(c.Sections[0].Lists) != 0 {
+		t.Errorf("expected no lists, got %v", c.Sections[0].Lists)
+	}
+	if len(c.Sections[0].Badges) != 0 {
+		t.Errorf("expected no badges, got %v", c.Sections[0].Badges)
 	}
 }

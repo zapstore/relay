@@ -2,7 +2,10 @@ package events
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -73,4 +76,46 @@ func Find(tags nostr.Tags, key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// AddressableRef is a parsed NIP-01 addressable coordinate in the form "<kind>:<pubkey>:<d-tag>".
+type AddressableRef struct {
+	Kind   int
+	Pubkey string
+	DTag   string
+}
+
+func (r AddressableRef) String() string {
+	return strconv.Itoa(r.Kind) + ":" + r.Pubkey + ":" + r.DTag
+}
+
+func (r AddressableRef) Validate() error {
+	if r.Kind < 0 || r.Kind > 65535 {
+		return fmt.Errorf("invalid kind: %d", r.Kind)
+	}
+	if r.Pubkey == "" || !nostr.IsValidPublicKey(r.Pubkey) {
+		return errors.New("invalid pubkey in addressable ref")
+	}
+	if r.DTag == "" {
+		return errors.New("d-tag must not be empty")
+	}
+	return nil
+}
+
+// ParseAddressableRef parses a string of the form "<kind>:<pubkey>:<d-tag>"
+// into an AddressableRef.
+func ParseAddressableRef(s string) (AddressableRef, error) {
+	parts := strings.SplitN(s, ":", 3)
+	if len(parts) != 3 {
+		return AddressableRef{}, fmt.Errorf("invalid addressable ref %q: must be <kind>:<pubkey>:<d-tag>", s)
+	}
+	kind, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return AddressableRef{}, fmt.Errorf("invalid addressable ref %q: kind is not an integer", s)
+	}
+	return AddressableRef{
+		Kind:   kind,
+		Pubkey: parts[1],
+		DTag:   parts[2],
+	}, nil
 }
