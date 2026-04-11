@@ -115,19 +115,47 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, o
 
 		switch {
 		case event.Kind == nostr.KindDeletion:
-			if event.PubKey == operatorPubkey {
-				// Operator-level deletion: bypass NIP-09 author check and delete any targeted events directly.
+			// Try regular NIP-09 deletion first (handles both e and a tags, but only for same pubkey)
+			deleted, err := db.DeleteRequest(ctx, event)
+			if err != nil {
+				slog.Error("relay: failed to fulfill the delete request", "error", err, "event", event.ID)
+				return err
+			}
+
+			// If nothing was deleted and this is the operator, fall back to operator-level deletion
+			// (bypasses NIP-09 author check and can delete any event)
+			if deleted == 0 && event.PubKey == operatorPubkey {
 				for _, tag := range event.Tags {
-					if len(tag) >= 2 && tag[0] == "e" {
+					if len(tag) < 2 {
+						continue
+					}
+
+					switch tag[0] {
+					case "e":
+						// Delete by event ID
 						if err := deleteEvent(ctx, db, tag[1]); err != nil {
 							slog.Error("relay: operator deletion failed", "error", err, "target_event", tag[1])
+						} else {
+							deleted++
+						}
+
+					case "a":
+						// Delete by addressable coordinate (kind:pubkey:d-tag)
+						ref, err := events.ParseAddressableRef(tag[1])
+						if err != nil {
+							slog.Warn("relay: invalid addressable ref in operator deletion", "ref", tag[1], "error", err)
+							continue
+						}
+						if err := deleteEventByAddress(ctx, db, ref); err != nil {
+							slog.Error("relay: operator deletion by address failed", "error", err, "ref", tag[1])
+						} else {
+							deleted++
 						}
 					}
 				}
-			} else {
-				if _, err := db.DeleteRequest(ctx, event); err != nil {
-					slog.Error("relay: failed to fulfill the delete request", "error", err, "event", event.ID)
-					return err
+
+				if deleted > 0 {
+					slog.Info("relay: operator deletion completed", "deleted_count", deleted, "event", event.ID)
 				}
 			}
 
@@ -428,6 +456,31 @@ func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
 		return fmt.Errorf("delete event: %w", err)
 	}
 	return nil
+}
+
+// deleteEventByAddress removes an addressable event and its tags from the relay store.
+// This is a relay-operator-level store management operation, not a Nostr protocol deletion.
+func deleteEventByAddress(ctx context.Context, db *sqlite.Store, ref events.AddressableRef) error {
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("invalid addressable ref: %w", err)
+	}
+
+	// Find the event ID for this addressable coordinate
+	var eventID string
+	err := db.DB.QueryRowContext(ctx,
+		`SELECT e.id FROM events AS e JOIN tags AS t ON t.event_id = e.id
+		WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ? LIMIT 1`,
+		ref.Kind, ref.Pubkey, ref.DTag,
+	).Scan(&eventID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // Event doesn't exist, nothing to delete
+		}
+		return fmt.Errorf("query addressable event: %w", err)
+	}
+
+	// Delete the event
+	return deleteEvent(ctx, db, eventID)
 }
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
