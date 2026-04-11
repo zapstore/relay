@@ -146,10 +146,12 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, o
 							slog.Warn("relay: invalid addressable ref in operator deletion", "ref", tag[1], "error", err)
 							continue
 						}
-						if err := deleteEventByAddress(ctx, db, ref); err != nil {
+						// For operator deletion, ignore pubkey in coordinate and delete by kind+d-tag only
+						count, err := deleteEventByKindAndDTag(ctx, db, ref.Kind, ref.DTag)
+						if err != nil {
 							slog.Error("relay: operator deletion by address failed", "error", err, "ref", tag[1])
 						} else {
-							deleted++
+							deleted += count
 						}
 					}
 				}
@@ -486,6 +488,46 @@ func deleteEventByAddress(ctx context.Context, db *sqlite.Store, ref events.Addr
 
 	// Delete the event
 	return deleteEvent(ctx, db, eventID)
+}
+
+// deleteEventByKindAndDTag removes all addressable events matching kind and d-tag.
+// Used for operator-level deletion where we ignore the pubkey in the coordinate.
+// Returns the number of events deleted.
+func deleteEventByKindAndDTag(ctx context.Context, db *sqlite.Store, kind int, dTag string) (int, error) {
+	// Find all event IDs matching this kind and d-tag
+	rows, err := db.DB.QueryContext(ctx,
+		`SELECT DISTINCT e.id FROM events AS e JOIN tags AS t ON t.event_id = e.id
+		WHERE e.kind = ? AND t.key = 'd' AND t.value = ?`,
+		kind, dTag,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("query events by kind and d-tag: %w", err)
+	}
+	defer rows.Close()
+
+	var eventIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, fmt.Errorf("scan event ID: %w", err)
+		}
+		eventIDs = append(eventIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate event IDs: %w", err)
+	}
+
+	// Delete each event
+	deleted := 0
+	for _, id := range eventIDs {
+		if err := deleteEvent(ctx, db, id); err != nil {
+			slog.Error("relay: failed to delete event in batch", "event_id", id, "error", err)
+		} else {
+			deleted++
+		}
+	}
+
+	return deleted, nil
 }
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
