@@ -159,6 +159,11 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, o
 				}
 			}
 
+			// Reject deletion events that didn't delete anything
+			if deleted == 0 {
+				return errors.New("kind 5 deletion event does not target any existing events on this relay")
+			}
+
 			if _, err := db.Save(ctx, event); err != nil {
 				slog.Error("relay: failed to save the delete request", "error", err, "event", event.ID)
 				return err
