@@ -1,52 +1,43 @@
-BINARY_NAME := relay
-CMD_PATH    := ./cmd
-DIST        := dist
-
+BUILD_DIR := build
 GO_TAGS := -tags fts5
-GOFLAGS := -trimpath
 LDFLAGS := -s -w
-
 TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
 
-HOST_OS   := $(shell go env GOOS)
-HOST_ARCH := $(shell go env GOARCH)
+# Build from current checkout; TAG handling happens in the recipe below.
 
-ifeq ($(HOST_OS),darwin)
-linux-arm64_CC := $(or $(CC_LINUX_ARM64),zig cc -target aarch64-linux-musl)
-linux-amd64_CC := $(or $(CC_LINUX_AMD64),zig cc -target x86_64-linux-musl)
-else
-linux-arm64_CC := $(or $(CC_LINUX_ARM64),aarch64-linux-gnu-gcc)
-linux-amd64_CC := $(or $(CC_LINUX_AMD64),x86_64-linux-gnu-gcc)
-endif
+.PHONY: all clean relay
 
-.PHONY: all build build-darwin-arm64 build-linux-amd64 build-linux-arm64 clean run
+all: relay
 
-build:
-	CGO_ENABLED=1 go build $(GO_TAGS) $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BINARY_NAME) $(CMD_PATH)
-
-all: build-darwin-arm64 build-linux-amd64 build-linux-arm64
-
-build-darwin-arm64:
-	@mkdir -p $(DIST)
-	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-		go build $(GO_TAGS) $(GOFLAGS) -ldflags '$(LDFLAGS)' \
-		-o $(DIST)/$(BINARY_NAME)-darwin-arm64 $(CMD_PATH)
-
-build-linux-amd64:
-	@mkdir -p $(DIST)
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="$(linux-amd64_CC)" \
-		go build $(GO_TAGS) $(GOFLAGS) -ldflags '$(LDFLAGS)' \
-		-o $(DIST)/$(BINARY_NAME)-linux-amd64 $(CMD_PATH)
-
-build-linux-arm64:
-	@mkdir -p $(DIST)
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="$(linux-arm64_CC)" \
-		go build $(GO_TAGS) $(GOFLAGS) -ldflags '$(LDFLAGS)' \
-		-o $(DIST)/$(BINARY_NAME)-linux-arm64 $(CMD_PATH)
-
-run: build
-	./$(BINARY_NAME)
+relay:
+	@echo "Building relay at tag $(TAG)"
+	@mkdir -p $(BUILD_DIR)
+	@set -e; \
+	if [ -z "$(TAG)" ]; then \
+		echo "No tags found" >&2; \
+		exit 1; \
+	fi; \
+	if ! git rev-parse -q --verify "refs/tags/$(TAG)" >/dev/null; then \
+		echo "Tag $(TAG) not found" >&2; \
+		exit 1; \
+	fi; \
+	if [ -n "$(TAG)" ]; then \
+		ORIG_REF="$$(git rev-parse --abbrev-ref HEAD)"; \
+		ORIG_SHA="$$(git rev-parse HEAD)"; \
+		RESTORE() { \
+			if [ "$$ORIG_REF" = "HEAD" ]; then \
+				git checkout -q "$$ORIG_SHA"; \
+			else \
+				git checkout -q "$$ORIG_REF"; \
+			fi; \
+		}; \
+		trap 'RESTORE' EXIT; \
+		git -c advice.detachedHead=false checkout -q "$(TAG)"; \
+	fi; \
+	CGO_ENABLED=1 \
+		go build $(GO_TAGS) -ldflags "$(LDFLAGS)" \
+		-o $(BUILD_DIR)/relay-$(TAG) ./cmd/; \
+	echo "Build relay commit hash $$(git rev-parse HEAD), $$(git log -1 --pretty=%s)"
 
 clean:
-	rm -f $(BINARY_NAME)
-	rm -rf $(DIST)
+	rm -rf $(BUILD_DIR)

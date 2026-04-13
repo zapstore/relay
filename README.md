@@ -68,10 +68,10 @@ cd relay
 # Build with default parameters:
 # - TAG = <latest_tag>
 # - BUILD_DIR = /build
-make build
+make
 
 # Or build with specific tag and build directory
-make build TAG=v1.2.3 BUILD_DIR=path/to/build
+make TAG=v1.2.3 BUILD_DIR=path/to/build
 
 # Create and configure .env file
 cp .env.example build/.env
