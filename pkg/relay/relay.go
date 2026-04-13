@@ -426,14 +426,14 @@ func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e 
 		existingIsIndexer := existingPubkey == indexerPubkey
 
 		switch {
-		case newIsIndexer && !existingIsIndexer:
-			// Indexer takeover: delete developer's old 32267
-			if err := deleteEvent(ctx, db, existingID); err != nil {
-				slog.Error("AppOwnership: failed to delete old app event for indexer takeover", "event_id", existingID, "error", err)
-				return ErrInternal
-			}
-			slog.Info("AppOwnership: indexer takeover", "app_id", appID, "old_pubkey", existingPubkey[:16])
-			return nil
+		// case newIsIndexer && !existingIsIndexer:
+		// 	// Indexer takeover: delete developer's old 32267
+		// 	if err := deleteEvent(ctx, db, existingID); err != nil {
+		// 		slog.Error("AppOwnership: failed to delete old app event for indexer takeover", "event_id", existingID, "error", err)
+		// 		return ErrInternal
+		// 	}
+		// 	slog.Info("AppOwnership: indexer takeover", "app_id", appID, "old_pubkey", existingPubkey[:16])
+		// 	return nil
 
 		case !newIsIndexer && existingIsIndexer:
 			// Developer reclaim: delete indexer's 32267
