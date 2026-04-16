@@ -90,7 +90,7 @@ func Setup(
 		KindNotAllowed(config.AllowedKinds),
 		rely.InvalidID,
 		rely.InvalidSignature,
-		InvalidStructure(),
+		InvalidStructure,
 		NotAnchored(store),
 		AuthorNotAllowed(acl, config.Info.Pubkey),
 		AppOwnership(store, config.Info.Pubkey),
@@ -372,10 +372,8 @@ func KindNotAllowed(kinds []int) func(_ rely.Client, e *nostr.Event) error {
 	}
 }
 
-func InvalidStructure() func(_ rely.Client, e *nostr.Event) error {
-	return func(_ rely.Client, e *nostr.Event) error {
-		return events.Validate(e)
-	}
+func InvalidStructure(_ rely.Client, e *nostr.Event) error {
+	return events.Validate(e)
 }
 
 // AppOwnership enforces one publisher per app ID (kind 32267 d-tag) with role-aware transitions.
