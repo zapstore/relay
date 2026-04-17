@@ -1,3 +1,4 @@
+// WARNING: NEEDS TO BE REWORKED. THIS IS INSECURE
 // Package linkverify implements NIP-C1 certificate link verification as a relay save hook.
 // When a kind 30509 (IdentityProof) or kind 3063 (SoftwareAsset) event is saved,
 // this package cross-checks them: if a matching pair exists, it downloads the APK
@@ -32,10 +33,10 @@ import (
 
 // Verifier performs NIP-C1 certificate verification after events are saved.
 type Verifier struct {
-	db           *sqlite.Store
-	acl          *acl.Controller
-	blossomBase  string // e.g., "https://cdn.zapstore.dev"
-	log          *slog.Logger
+	db          *sqlite.Store
+	acl         *acl.Controller
+	blossomBase string // e.g., "https://cdn.zapstore.dev"
+	log         *slog.Logger
 }
 
 // New creates a new Verifier. blossomHostname is the Blossom CDN hostname (e.g. "cdn.zapstore.dev").
