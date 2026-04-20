@@ -11,7 +11,7 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
-	"github.com/zapstore/relay/pkg/acl"
+	"github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
 	blobstore "github.com/zapstore/relay/pkg/blossom/store"
@@ -47,6 +47,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Step 0.
+	// Load and validate configuration from .env
 	config, err := config.Load()
 	if err != nil {
 		panic(err)
@@ -80,15 +82,16 @@ func main() {
 	defer bstore.Close()
 
 	// Step 2.
-	// Initialize rate limiter and ACL
+	// Initialize rate limiter and connect to the defender
 	limiter := rate.NewLimiter(config.Limiter)
-	aclDir := filepath.Join(config.Sys.Dir, "acl")
 
-	acl, err := acl.New(config.ACL, aclDir, logger)
+	defender, err := client.Default("localhost:8080")
 	if err != nil {
 		panic(err)
 	}
-	defer acl.Close()
+	if _, err := defender.Health(ctx); err != nil {
+		panic(err)
+	}
 
 	// Step 3.
 	// Initialize analytics engine
@@ -127,11 +130,10 @@ func main() {
 
 	// Step 5.
 	// Setup relay and blossom server
-
 	relay, err := relay.Setup(
 		config.Relay,
 		limiter,
-		acl,
+		defender,
 		rstore,
 		analytics,
 		indexingEngine,
@@ -143,7 +145,7 @@ func main() {
 	blossom, err := blossom.Setup(
 		config.Blossom,
 		limiter,
-		acl,
+		defender,
 		bstore,
 		analytics,
 		&assetResolver{db: rstore},

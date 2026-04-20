@@ -15,7 +15,8 @@ import (
 
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
-	"github.com/zapstore/relay/pkg/acl"
+	defender "github.com/zapstore/defender/pkg/client"
+	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom/bunny"
 	"github.com/zapstore/relay/pkg/blossom/store"
@@ -37,14 +38,13 @@ type AssetResolver interface {
 func Setup(
 	config Config,
 	limiter rate.Limiter,
-	acl *acl.Controller,
+	defender defender.T,
 	store *store.Store,
 	analytics *analytics.Engine,
 	resolver AssetResolver,
 ) (*blossy.Server, error) {
 
 	bunny := bunny.NewClient(config.Bunny)
-
 	server, err := blossy.NewServer(
 		blossy.WithHostname(config.Hostname),
 		blossy.WithRangeSupport(),
@@ -66,7 +66,7 @@ func Setup(
 		MissingAuth(),
 		MissingHints(),
 		MediaNotAllowed(config.AllowedMedia),
-		AuthorNotAllowed(acl),
+		NotAllowed(defender),
 	)
 
 	server.On.Check = Check(store, analytics)
@@ -291,18 +291,25 @@ func MissingHints() func(r blossy.Request, hints blossy.UploadHints) *blossom.Er
 	}
 }
 
-func AuthorNotAllowed(acl *acl.Controller) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
-	return func(r blossy.Request, _ blossy.UploadHints) *blossom.Error {
+func NotAllowed(defender defender.T) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
+	return func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 
-		allow, err := acl.AllowPubkey(ctx, r.Pubkey())
-		if err != nil {
-			// fail close policy;
-			slog.Error("blossom: failed to check if pubkey is allowed", "error", err)
-			return ErrNotAllowed
+		meta := models.BlobMeta{
+			Pubkey: r.Pubkey(),
+			Hash:   *hints.Hash,
+			Type:   hints.Type,
+			Size:   hints.Size,
 		}
-		if !allow {
+
+		res, err := defender.CheckBlob(ctx, meta)
+		if err != nil {
+			slog.Error("defender: failed to check blob", "err", err, "hash", hints.Hash)
+			return ErrInternal
+		}
+
+		if res.Decision == models.DecisionReject {
 			return ErrNotAllowed
 		}
 		return nil

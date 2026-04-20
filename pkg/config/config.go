@@ -14,7 +14,6 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	_ "github.com/joho/godotenv/autoload"
-	"github.com/zapstore/relay/pkg/acl"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
 	"github.com/zapstore/relay/pkg/indexing"
@@ -25,7 +24,6 @@ import (
 type Config struct {
 	Sys       SystemConfig
 	Limiter   rate.Config
-	ACL       acl.Config
 	Analytics analytics.Config
 	Indexing  indexing.Config
 	Relay     relay.Config
@@ -69,7 +67,6 @@ func New() Config {
 	return Config{
 		Sys:       NewSystemConfig(),
 		Limiter:   rate.NewConfig(),
-		ACL:       acl.NewConfig(),
 		Analytics: analytics.NewConfig(),
 		Indexing:  indexing.NewConfig(),
 		Relay:     relay.NewConfig(),
@@ -80,9 +77,6 @@ func New() Config {
 func (c Config) Validate() error {
 	if err := c.Sys.Validate(); err != nil {
 		return fmt.Errorf("system: %w", err)
-	}
-	if err := c.ACL.Validate(); err != nil {
-		return fmt.Errorf("acl: %w", err)
 	}
 	if err := c.Limiter.Validate(); err != nil {
 		return fmt.Errorf("rate: %w", err)
@@ -107,8 +101,6 @@ func (c Config) String() string {
 	b.WriteString(c.Sys.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Limiter.String())
-	b.WriteByte('\n')
-	b.WriteString(c.ACL.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Analytics.String())
 	b.WriteByte('\n')

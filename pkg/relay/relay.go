@@ -16,7 +16,8 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
-	"github.com/zapstore/relay/pkg/acl"
+	defender "github.com/zapstore/defender/pkg/client"
+	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/events/legacy"
@@ -64,10 +65,10 @@ const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a6573
 func Setup(
 	config Config,
 	limiter rate.Limiter,
-	acl *acl.Controller,
+	defender defender.T,
 	store *sqlite.Store,
 	analytics *analytics.Engine,
-	indexingEngine *indexing.Engine, // nil = no demand-driven indexing
+	indexing *indexing.Engine, // nil = no demand-driven indexing
 ) (*rely.Relay, error) {
 
 	relay := rely.NewRelay(
@@ -92,8 +93,8 @@ func Setup(
 		rely.InvalidSignature,
 		InvalidStructure,
 		NotAnchored(store),
-		AuthorNotAllowed(acl, config.Info.Pubkey),
 		AppOwnership(store, config.Info.Pubkey),
+		NotAllowed(defender),
 	)
 
 	relay.Reject.Req.Clear()
@@ -103,8 +104,8 @@ func Setup(
 		VagueFilters(3),
 	)
 
-	relay.On.Event = Save(store, analytics, indexingEngine, config.Info.Pubkey)
-	relay.On.Req = Query(store, analytics, indexingEngine)
+	relay.On.Event = Save(store, analytics, indexing, config.Info.Pubkey)
+	relay.On.Req = Query(store, analytics, indexing)
 	return relay, nil
 }
 
@@ -530,7 +531,6 @@ func deleteEventByKindAndDTag(ctx context.Context, db *sqlite.Store, kind int, d
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
 // Anchoring means simply that the event references an existing root event.
-// Check [events.IsRoot].
 func NotAnchored(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if slices.Contains(RootKinds, e.Kind) {
@@ -649,36 +649,17 @@ func PostOrCommentExists(ctx context.Context, db *sqlite.Store, id string) (bool
 	return exists, nil
 }
 
-func AuthorNotAllowed(acl *acl.Controller, operatorPubkey string) func(_ rely.Client, e *nostr.Event) error {
+func NotAllowed(defender defender.T) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
-		// Operator pubkey is always allowed — no ACL check needed.
-		if operatorPubkey != "" && e.PubKey == operatorPubkey {
-			return nil
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-		if slices.Contains(RestrictedKinds, e.Kind) {
-			// full ACL check for restrictive kinds
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			allow, err := acl.AllowEvent(ctx, e)
-			if err != nil {
-				// fail closed policy
-				slog.Error("relay: failed to check if pubkey is allowed", "error", err)
-				return ErrEventPubkeyBlocked
-			}
-			if !allow {
-				return ErrEventPubkeyBlocked
-			}
-		}
-
-		// other kinds just need not to be in the blocked pubkeys
-		blocked, err := acl.IsBlocked(e.PubKey)
+		res, err := defender.CheckEvent(ctx, e)
 		if err != nil {
-			slog.Error("relay: failed to check if pubkey is blocked", "error", err)
-			return ErrEventPubkeyBlocked
+			slog.Error("defender: failed to check event", "err", err, "event", e.ID)
+			return ErrInternal
 		}
-		if blocked {
+		if res.Decision == models.DecisionReject {
 			return ErrEventPubkeyBlocked
 		}
 		return nil
