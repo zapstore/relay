@@ -19,24 +19,9 @@ A Nostr relay and Blossom server for the Zapstore app ecosystem.
 - Deduplication: blobs are checked before upload to save bandwidth
 - Local SQLite metadata store with CDN redirect for downloads
 
-### Access Control (ACL)
-- Hot-reloadable CSV-based allow/block lists for:
-  - Pubkeys (allowed and blocked)
-  - Event IDs (blocked)
-  - Blob hashes (blocked)
-- Configurable unknown pubkey policy:
-  - `ALLOW` - allow all unknown pubkeys
-  - `BLOCK` - block all unknown pubkeys
-  - `VERTEX` - use Vertex DVM reputation filtering
-
-### Vertex DVM Integration
-- Reputation-based access control for unknown pubkeys
-- Supports multiple ranking algorithms:
-  - Global PageRank
-  - Personalized PageRank
-  - Follower count
-- Configurable reputation threshold
-- In-memory LRU cache for rank lookups
+### Access Control in Defender
+- Access control is delegated to the Zapstore [defender](https://github.com/zapstore/defender).
+- Rate-limiting, cryptographic and structural validation is kept in the relay
 
 ### Analytics
 - Privacy-preserving usage statistics for app impressions and blob downloads
