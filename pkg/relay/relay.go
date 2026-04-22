@@ -50,15 +50,6 @@ var RootKinds = []int{
 	events.KindStack,
 }
 
-// RestrictedKinds are the ones that must pass the full ACL verification.
-var RestrictedKinds = []int{
-	events.KindApp,
-	events.KindRelease,
-	events.KindAsset,
-	events.KindCommunityCreation,
-	events.KindIdentityProof,
-}
-
 // indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
 const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
 
