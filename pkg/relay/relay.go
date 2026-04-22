@@ -247,10 +247,6 @@ func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filte
 	}
 }
 
-func isKindOnly(kinds []int, kind int) bool {
-	return len(kinds) == 1 && kinds[0] == kind
-}
-
 func hasReleaseKind(kinds []int) bool {
 	for _, k := range kinds {
 		if k == events.KindRelease || k == events.KindAsset || k == legacy.KindFile {
