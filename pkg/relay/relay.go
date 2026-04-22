@@ -455,31 +455,6 @@ func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
 	return nil
 }
 
-// deleteEventByAddress removes an addressable event and its tags from the relay store.
-// This is a relay-operator-level store management operation, not a Nostr protocol deletion.
-func deleteEventByAddress(ctx context.Context, db *sqlite.Store, ref events.AddressableRef) error {
-	if err := ref.Validate(); err != nil {
-		return fmt.Errorf("invalid addressable ref: %w", err)
-	}
-
-	// Find the event ID for this addressable coordinate
-	var eventID string
-	err := db.DB.QueryRowContext(ctx,
-		`SELECT e.id FROM events AS e JOIN tags AS t ON t.event_id = e.id
-		WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ? LIMIT 1`,
-		ref.Kind, ref.Pubkey, ref.DTag,
-	).Scan(&eventID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil // Event doesn't exist, nothing to delete
-		}
-		return fmt.Errorf("query addressable event: %w", err)
-	}
-
-	// Delete the event
-	return deleteEvent(ctx, db, eventID)
-}
-
 // deleteEventByKindAndDTag removes all addressable events matching kind and d-tag.
 // Used for operator-level deletion where we ignore the pubkey in the coordinate.
 // Returns the number of events deleted.
