@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -35,6 +36,94 @@ func New(path string) (*sqlite.Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// ForceDeleteRequest forces a NIP-09 deletion request (kind 5 event), deleting all referenced events, even
+// if they have different pubkeys from the deletion request. It returns the number of events deleted.
+// This is not a normal NIP-09 deletion, and should only be used by the relay operator.
+//
+// The event is assumed to have been validated before calling this function.
+// Calling DeleteRequest with a non kind-5 event returns [ErrInvalidDeletionRequest].
+func ForceDeleteRequest(ctx context.Context, s *sqlite.Store, event *nostr.Event) (int, error) {
+	if event.Kind != nostr.KindDeletion {
+		return 0, sqlite.ErrInvalidDeletionRequest
+	}
+
+	eIDs := findAll(event.Tags, "e")
+	aTags := findAll(event.Tags, "a")
+
+	if len(eIDs) == 0 && len(aTags) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var deleted int
+
+	// e tags: single batched DELETE with an IN clause.
+	if len(eIDs) > 0 {
+		query := "DELETE FROM events WHERE id " + inClause(len(eIDs))
+		args := make([]any, 0, len(eIDs))
+		for _, id := range eIDs {
+			args = append(args, id)
+		}
+
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("failed to delete by e tags: %w", err)
+		}
+
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("failed to check rows affected: %w", err)
+		}
+		deleted += int(affected)
+	}
+
+	// a tags: one DELETE per tag, since each has a distinct kind/pubkey/d combination.
+	// Deletes all versions of the addressable event, regardless of creation time.
+	for _, a := range aTags {
+		ref, err := events.ParseAddressableRef(a)
+		if err != nil {
+			continue
+		}
+
+		query := `DELETE FROM events
+			WHERE kind = ? AND pubkey = ?
+			AND id IN (SELECT event_id FROM tags WHERE key = 'd' AND value = ?)`
+		args := []any{ref.Kind, ref.Pubkey, ref.DTag}
+
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("failed to delete by a tag %q: %w", a, err)
+		}
+
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("failed to check rows affected: %w", err)
+		}
+		deleted += int(affected)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return deleted, nil
+}
+
+// findAll returns all values of the given key in the tags.
+func findAll(tags nostr.Tags, key string) []string {
+	var values []string
+	for _, t := range tags {
+		if len(t) >= 2 && t[0] == key {
+			values = append(values, t[1])
+		}
+	}
+	return values
 }
 
 // queryBuilder handles FTS search for apps when there's exactly one app search filter.

@@ -107,49 +107,22 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, o
 
 		switch {
 		case event.Kind == nostr.KindDeletion:
-			// Try regular NIP-09 deletion first (handles both e and a tags, but only for same pubkey)
-			deleted, err := db.DeleteRequest(ctx, event)
-			if err != nil {
-				slog.Error("relay: failed to fulfill the delete request", "error", err, "event", event.ID)
-				return err
-			}
+			var deleted int
+			var err error
 
-			// If nothing was deleted and this is the operator, fall back to operator-level deletion
-			// (bypasses NIP-09 author check and can delete any event)
-			if deleted == 0 && event.PubKey == operatorPubkey {
-				for _, tag := range event.Tags {
-					if len(tag) < 2 {
-						continue
-					}
-
-					switch tag[0] {
-					case "e":
-						// Delete by event ID
-						if err := deleteEvent(ctx, db, tag[1]); err != nil {
-							slog.Error("relay: operator deletion failed", "error", err, "target_event", tag[1])
-						} else {
-							deleted++
-						}
-
-					case "a":
-						// Delete by addressable coordinate (kind:pubkey:d-tag)
-						ref, err := events.ParseAddressableRef(tag[1])
-						if err != nil {
-							slog.Warn("relay: invalid addressable ref in operator deletion", "ref", tag[1], "error", err)
-							continue
-						}
-						// For operator deletion, ignore pubkey in coordinate and delete by kind+d-tag only
-						count, err := deleteEventByKindAndDTag(ctx, db, ref.Kind, ref.DTag)
-						if err != nil {
-							slog.Error("relay: operator deletion by address failed", "error", err, "ref", tag[1])
-						} else {
-							deleted += count
-						}
-					}
+			if event.PubKey == operatorPubkey {
+				// Operator delete request
+				deleted, err = store.ForceDeleteRequest(ctx, db, event)
+				if err != nil {
+					slog.Error("relay: failed to fulfill the operator delete request", "error", err, "event", event.ID)
+					return err
 				}
-
-				if deleted > 0 {
-					slog.Info("relay: operator deletion completed", "deleted_count", deleted, "event", event.ID)
+			} else {
+				// Regular NIP-09 deletion
+				deleted, err = db.DeleteRequest(ctx, event)
+				if err != nil {
+					slog.Error("relay: failed to fulfill the delete request", "error", err, "event", event.ID)
+					return err
 				}
 			}
 
@@ -158,6 +131,7 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, o
 				return errors.New("kind 5 deletion event does not target any existing events on this relay")
 			}
 
+			// Save the delete request. Clients will fetch these to remove the deleted events from their local cache.
 			if _, err := db.Save(ctx, event); err != nil {
 				slog.Error("relay: failed to save the delete request", "error", err, "event", event.ID)
 				return err
@@ -422,12 +396,16 @@ func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e 
 		// 	return nil
 
 		case !newIsIndexer && existingIsIndexer:
-			// Developer reclaim: delete indexer's 32267
-			if err := deleteEvent(ctx, db, existingID); err != nil {
-				slog.Error("AppOwnership: failed to delete indexer app event for developer reclaim", "event_id", existingID, "error", err)
+			// Developer reclaim: delete indexer's app event
+			deleted, err := db.Delete(ctx, existingID)
+			if err != nil {
+				slog.Error("AppOwnership: failed to delete indexer app event for developer reclaim", "id", existingID, "error", err)
 				return ErrInternal
 			}
-			slog.Info("AppOwnership: developer reclaim", "app_id", appID, "new_pubkey", e.PubKey[:16])
+			if deleted {
+				slog.Info("AppOwnership: developer reclaim", "app_id", appID, "new_pubkey", e.PubKey[:16])
+				return ErrInternal
+			}
 			return nil
 
 		default:
@@ -435,60 +413,6 @@ func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e 
 			return ErrAppAlreadyExists
 		}
 	}
-}
-
-// deleteEvent removes an event and its tags from the relay store.
-// This is a relay-operator-level store management operation, not a Nostr protocol deletion.
-func deleteEvent(ctx context.Context, db *sqlite.Store, eventID string) error {
-	_, err := db.DB.ExecContext(ctx, `DELETE FROM tags WHERE event_id = ?`, eventID)
-	if err != nil {
-		return fmt.Errorf("delete tags: %w", err)
-	}
-	_, err = db.DB.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, eventID)
-	if err != nil {
-		return fmt.Errorf("delete event: %w", err)
-	}
-	return nil
-}
-
-// deleteEventByKindAndDTag removes all addressable events matching kind and d-tag.
-// Used for operator-level deletion where we ignore the pubkey in the coordinate.
-// Returns the number of events deleted.
-func deleteEventByKindAndDTag(ctx context.Context, db *sqlite.Store, kind int, dTag string) (int, error) {
-	// Find all event IDs matching this kind and d-tag
-	rows, err := db.DB.QueryContext(ctx,
-		`SELECT DISTINCT e.id FROM events AS e JOIN tags AS t ON t.event_id = e.id
-		WHERE e.kind = ? AND t.key = 'd' AND t.value = ?`,
-		kind, dTag,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("query events by kind and d-tag: %w", err)
-	}
-	defer rows.Close()
-
-	var eventIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return 0, fmt.Errorf("scan event ID: %w", err)
-		}
-		eventIDs = append(eventIDs, id)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterate event IDs: %w", err)
-	}
-
-	// Delete each event
-	deleted := 0
-	for _, id := range eventIDs {
-		if err := deleteEvent(ctx, db, id); err != nil {
-			slog.Error("relay: failed to delete event in batch", "event_id", id, "error", err)
-		} else {
-			deleted++
-		}
-	}
-
-	return deleted, nil
 }
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
