@@ -182,12 +182,12 @@ func (s *Store) SaveImpressions(ctx context.Context, batch []ImpressionCount) er
 
 // ImpressionFilter defines query parameters for QueryImpressions.
 type ImpressionFilter struct {
-	AppID     string   // optional; restricts to a specific app
-	AppPubkey string   // optional; restricts to a specific app publisher
+	AppID     string   // restricts to a specific app
+	AppPubkey string   // restricts to a specific app publisher
 	From      string   // YYYY-MM-DD, inclusive
 	To        string   // YYYY-MM-DD, inclusive
-	Source    Source   // optional; restricts to a specific source
-	Type      Type     // optional; restricts to a specific type
+	Source    Source   // restricts to a specific source
+	Type      Type     // restricts to a specific type
 	GroupBy   []string // subset of: app_id, app_pubkey, day, source, type, country_code
 }
 
@@ -248,6 +248,7 @@ func (s *Store) QueryImpressions(ctx context.Context, f ImpressionFilter) ([]Imp
 		if err := rows.Scan(targets...); err != nil {
 			return nil, fmt.Errorf("failed to scan impression row: %w", err)
 		}
+		i.Day = normalizeDay(i.Day)
 		impressions = append(impressions, i)
 	}
 
@@ -324,4 +325,14 @@ func impressionScan(row *ImpressionCount, dbCols []string) []any {
 		}
 	}
 	return append(targets, &row.Count)
+}
+
+// normalizeDay truncates the day string to 10 characters if it exceeds that length.
+// This is done because Sqlite returns the day as a string with the time included,
+// e.g. "2023-01-01 12:00:00".
+func normalizeDay(day string) string {
+	if len(day) > 10 {
+		return day[:10]
+	}
+	return day
 }

@@ -92,10 +92,10 @@ func (s *Store) SaveDownloads(ctx context.Context, batch []DownloadCount) error 
 
 // DownloadFilter defines query parameters for QueryDownloads.
 type DownloadFilter struct {
-	Hash    string   // optional; restricts to a specific blob hash
+	Hash    string   // restricts to a specific blob hash
 	From    string   // YYYY-MM-DD, inclusive
 	To      string   // YYYY-MM-DD, inclusive
-	Source  Source   // optional; restricts to a specific source
+	Source  Source   // restricts to a specific source
 	GroupBy []string // subset of: hash, day, source, country_code
 }
 
@@ -151,6 +151,7 @@ func (s *Store) QueryDownloads(ctx context.Context, f DownloadFilter) ([]Downloa
 		if err := rows.Scan(targets...); err != nil {
 			return nil, fmt.Errorf("failed to scan download row: %w", err)
 		}
+		d.Day = normalizeDay(d.Day)
 		downloads = append(downloads, d)
 	}
 	return downloads, rows.Err()

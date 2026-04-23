@@ -7,12 +7,157 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
 	eventPkg "github.com/zapstore/relay/pkg/events"
 )
+
+var (
+	ctx     = context.Background()
+	pubkey1 = "5c50da132947fa3bf4759eb978d784db12baad1c3e5b6a575410aeb654639b4b"
+	pubkey2 = "805b34f708837dfb3e7f05815ac5760564628b58d5a0ce839ccbb6ef3620fac3"
+)
+
+// --- QueryImpressions ---
+
+func TestQueryImpressions(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	seed := []ImpressionCount{
+		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-01", Source: SourceApp, Type: TypeDetail, CountryCode: "US"}, 10},
+		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-02", Source: SourceApp, Type: TypeDetail, CountryCode: "US"}, 5},
+		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-03", Source: SourceWeb, Type: TypeDetail, CountryCode: "DE"}, 3},
+		{Impression{AppID: "com.example.app2", AppPubkey: pubkey2, Day: "2024-01-01", Source: SourceApp, Type: TypeDetail, CountryCode: "US"}, 7},
+		{Impression{AppID: "com.example.app2", AppPubkey: pubkey2, Day: "2024-01-02", Source: SourceWeb, Type: TypeDetail, CountryCode: "FR"}, 4},
+	}
+	if err := s.SaveImpressions(ctx, seed); err != nil {
+		t.Fatalf("SaveImpressions: %v", err)
+	}
+
+	t.Run("total count no group by", func(t *testing.T) {
+		got, err := s.QueryImpressions(ctx, ImpressionFilter{
+			From: "2024-01-01",
+			To:   "2024-01-03",
+		})
+		if err != nil {
+			t.Fatalf("QueryImpressions: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 29 {
+			t.Errorf("got count %d, want 29", got[0].Count)
+		}
+	})
+
+	t.Run("filter by app_id", func(t *testing.T) {
+		got, err := s.QueryImpressions(ctx, ImpressionFilter{
+			AppID: "com.example.app1",
+			From:  "2024-01-01",
+			To:    "2024-01-03",
+		})
+		if err != nil {
+			t.Fatalf("QueryImpressions: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 18 {
+			t.Errorf("got count %d, want 18", got[0].Count)
+		}
+	})
+
+	t.Run("filter by app_pubkey", func(t *testing.T) {
+		got, err := s.QueryImpressions(ctx, ImpressionFilter{
+			AppPubkey: pubkey2,
+			From:      "2024-01-01",
+			To:        "2024-01-03",
+		})
+		if err != nil {
+			t.Fatalf("QueryImpressions: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 11 {
+			t.Errorf("got count %d, want 11", got[0].Count)
+		}
+	})
+
+	t.Run("filter by source", func(t *testing.T) {
+		got, err := s.QueryImpressions(ctx, ImpressionFilter{
+			Source: SourceWeb,
+			From:   "2024-01-01",
+			To:     "2024-01-03",
+		})
+		if err != nil {
+			t.Fatalf("QueryImpressions: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 7 {
+			t.Errorf("got count %d, want 7", got[0].Count)
+		}
+	})
+
+	t.Run("group by day ordered desc", func(t *testing.T) {
+		got, err := s.QueryImpressions(ctx, ImpressionFilter{
+			From:    "2024-01-01",
+			To:      "2024-01-03",
+			GroupBy: []string{"day"},
+		})
+		if err != nil {
+			t.Fatalf("QueryImpressions: %v", err)
+		}
+
+		want := []ImpressionCount{
+			{Impression{Day: "2024-01-03"}, 3},
+			{Impression{Day: "2024-01-02"}, 9},
+			{Impression{Day: "2024-01-01"}, 17},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("group by app_id and day ordered desc", func(t *testing.T) {
+		got, err := s.QueryImpressions(ctx, ImpressionFilter{
+			AppPubkey: pubkey1,
+			From:      "2024-01-01",
+			To:        "2024-01-03",
+			GroupBy:   []string{"app_id", "day"},
+		})
+		if err != nil {
+			t.Fatalf("QueryImpressions: %v", err)
+		}
+
+		want := []ImpressionCount{
+			{Impression{AppID: "com.example.app1", Day: "2024-01-03"}, 3},
+			{Impression{AppID: "com.example.app1", Day: "2024-01-02"}, 5},
+			{Impression{AppID: "com.example.app1", Day: "2024-01-01"}, 10},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("validation error invalid pubkey", func(t *testing.T) {
+		_, err := s.QueryImpressions(ctx, ImpressionFilter{
+			AppPubkey: "notahexpubkey",
+			From:      "2024-01-01",
+			To:        "2024-01-03",
+		})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
 
 // --- queryImpressionsSQL ---
 
@@ -368,7 +513,7 @@ func TestSaveImpressions(t *testing.T) {
 			}
 			defer s.Close()
 
-			if err := s.SaveImpressions(context.Background(), test.batch); err != nil {
+			if err := s.SaveImpressions(ctx, test.batch); err != nil {
 				t.Fatalf("SaveImpressions: %v", err)
 			}
 
@@ -396,10 +541,10 @@ func TestSaveImpressions_AccumulatesAcrossCalls(t *testing.T) {
 
 	imp := Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}
 
-	if err := s.SaveImpressions(context.Background(), []ImpressionCount{{imp, 3}}); err != nil {
+	if err := s.SaveImpressions(ctx, []ImpressionCount{{imp, 3}}); err != nil {
 		t.Fatalf("first SaveImpressions: %v", err)
 	}
-	if err := s.SaveImpressions(context.Background(), []ImpressionCount{{imp, 5}}); err != nil {
+	if err := s.SaveImpressions(ctx, []ImpressionCount{{imp, 5}}); err != nil {
 		t.Fatalf("second SaveImpressions: %v", err)
 	}
 
@@ -463,13 +608,6 @@ func sortImpressionCounts(rows []ImpressionCount) {
 		}
 		return cmp.Compare(string(a.Type), string(b.Type))
 	})
-}
-
-func normalizeDay(day string) string {
-	if len(day) >= 10 {
-		return day[:10]
-	}
-	return strings.TrimSpace(day)
 }
 
 func appEvent(appID string, pubkey string) nostr.Event {

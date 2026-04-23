@@ -2,7 +2,6 @@ package store
 
 import (
 	"cmp"
-	"context"
 	"database/sql"
 	"fmt"
 	"reflect"
@@ -11,8 +10,6 @@ import (
 
 	"github.com/pippellia-btc/blossom"
 )
-
-var ctx = context.Background()
 
 // --- queryDownloadsSQL ---
 
@@ -207,6 +204,116 @@ func TestSaveDownloads_AccumulatesAcrossCalls(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("mismatch\n got: %v\nwant: %v", got, want)
 	}
+}
+
+// --- QueryDownloads ---
+
+func TestQueryDownloads(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	h1 := blossom.ComputeHash([]byte("file1"))
+	h2 := blossom.ComputeHash([]byte("file2"))
+
+	seed := []DownloadCount{
+		{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp, CountryCode: "US"}, 20},
+		{Download{Hash: h1, Day: "2024-01-02", Source: SourceApp, CountryCode: "US"}, 8},
+		{Download{Hash: h1, Day: "2024-01-03", Source: SourceWeb, CountryCode: "DE"}, 4},
+		{Download{Hash: h2, Day: "2024-01-01", Source: SourceApp, CountryCode: "US"}, 6},
+		{Download{Hash: h2, Day: "2024-01-02", Source: SourceUnknown, CountryCode: "FR"}, 2},
+	}
+	if err := s.SaveDownloads(ctx, seed); err != nil {
+		t.Fatalf("SaveDownloads: %v", err)
+	}
+
+	t.Run("total count no filters", func(t *testing.T) {
+		got, err := s.QueryDownloads(ctx, DownloadFilter{})
+		if err != nil {
+			t.Fatalf("QueryDownloads: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 40 {
+			t.Errorf("got count %d, want 40", got[0].Count)
+		}
+	})
+
+	t.Run("filter by date range", func(t *testing.T) {
+		got, err := s.QueryDownloads(ctx, DownloadFilter{
+			From: "2024-01-01",
+			To:   "2024-01-02",
+		})
+		if err != nil {
+			t.Fatalf("QueryDownloads: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 36 {
+			t.Errorf("got count %d, want 36", got[0].Count)
+		}
+	})
+
+	t.Run("filter by hash", func(t *testing.T) {
+		got, err := s.QueryDownloads(ctx, DownloadFilter{Hash: h1.Hex()})
+		if err != nil {
+			t.Fatalf("QueryDownloads: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 32 {
+			t.Errorf("got count %d, want 32", got[0].Count)
+		}
+	})
+
+	t.Run("filter by source", func(t *testing.T) {
+		got, err := s.QueryDownloads(ctx, DownloadFilter{Source: SourceApp})
+		if err != nil {
+			t.Fatalf("QueryDownloads: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 34 {
+			t.Errorf("got count %d, want 34", got[0].Count)
+		}
+	})
+
+	t.Run("group by day ordered desc", func(t *testing.T) {
+		got, err := s.QueryDownloads(ctx, DownloadFilter{GroupBy: []string{"day"}})
+		if err != nil {
+			t.Fatalf("QueryDownloads: %v", err)
+		}
+		want := []DownloadCount{
+			{Download{Day: "2024-01-03"}, 4},
+			{Download{Day: "2024-01-02"}, 10},
+			{Download{Day: "2024-01-01"}, 26},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("group by hash", func(t *testing.T) {
+		got, err := s.QueryDownloads(ctx, DownloadFilter{GroupBy: []string{"hash"}})
+		if err != nil {
+			t.Fatalf("QueryDownloads: %v", err)
+		}
+		want := []DownloadCount{
+			{Download{Hash: h1}, 32},
+			{Download{Hash: h2}, 8},
+		}
+		sortDownloadCounts(got)
+		sortDownloadCounts(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
 }
 
 // --- Helpers ---
