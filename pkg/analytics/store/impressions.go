@@ -199,11 +199,15 @@ func (f ImpressionFilter) Validate() error {
 			return fmt.Errorf("invalid app pubkey: %s", f.AppPubkey)
 		}
 	}
-	if f.From == "" {
-		return fmt.Errorf("from date is required")
+	if f.From != "" {
+		if _, err := time.Parse("2006-01-02", f.From); err != nil {
+			return fmt.Errorf("invalid from: %w", err)
+		}
 	}
-	if f.To == "" {
-		return fmt.Errorf("to date is required")
+	if f.To != "" {
+		if _, err := time.Parse("2006-01-02", f.To); err != nil {
+			return fmt.Errorf("invalid to: %w", err)
+		}
 	}
 	if f.Source != "" {
 		if !f.Source.IsValid() {

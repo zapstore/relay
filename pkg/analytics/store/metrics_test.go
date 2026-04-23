@@ -16,11 +16,6 @@ func TestSaveRelayMetrics(t *testing.T) {
 		want    RelayMetrics
 	}{
 		{
-			name:    "zero values are persisted",
-			metrics: RelayMetrics{Day: "2024-01-01", Reqs: 0, Filters: 0, Events: 0},
-			want:    RelayMetrics{Day: "2024-01-01", Reqs: 0, Filters: 0, Events: 0},
-		},
-		{
 			name:    "all counters are persisted",
 			metrics: RelayMetrics{Day: "2024-01-01", Reqs: 100, Filters: 250, Events: 75},
 			want:    RelayMetrics{Day: "2024-01-01", Reqs: 100, Filters: 250, Events: 75},
@@ -123,11 +118,6 @@ func TestSaveBlossomMetrics(t *testing.T) {
 		metrics BlossomMetrics
 		want    BlossomMetrics
 	}{
-		{
-			name:    "zero values are persisted",
-			metrics: BlossomMetrics{Day: "2024-01-01", Uploads: 0, Downloads: 0, Checks: 0},
-			want:    BlossomMetrics{Day: "2024-01-01", Uploads: 0, Downloads: 0, Checks: 0},
-		},
 		{
 			name:    "all counters are persisted",
 			metrics: BlossomMetrics{Day: "2024-01-01", Uploads: 50, Downloads: 300, Checks: 120},

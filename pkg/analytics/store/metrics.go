@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // RelayMetrics holds aggregated relay counters for a single day.
@@ -63,4 +64,74 @@ func (s *Store) SaveBlossomMetrics(ctx context.Context, m BlossomMetrics) error 
 		return fmt.Errorf("failed to save blossom metrics: %w", err)
 	}
 	return nil
+}
+
+// QueryRelayMetrics returns daily relay metrics for the given date range.
+func (s *Store) QueryRelayMetrics(ctx context.Context, from, to string) ([]RelayMetrics, error) {
+	query := "SELECT day, reqs, filters, events FROM relay_metrics"
+	var conds []string
+	var args []any
+	if from != "" {
+		conds = append(conds, "day >= ?")
+		args = append(args, from)
+	}
+	if to != "" {
+		conds = append(conds, "day <= ?")
+		args = append(args, to)
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+
+	query += " ORDER BY day DESC"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query relay metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RelayMetrics
+	for rows.Next() {
+		var m RelayMetrics
+		if err := rows.Scan(&m.Day, &m.Reqs, &m.Filters, &m.Events); err != nil {
+			return nil, fmt.Errorf("failed to scan relay metrics row: %w", err)
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// QueryBlossomMetrics returns daily blossom metrics for the given date range.
+func (s *Store) QueryBlossomMetrics(ctx context.Context, from, to string) ([]BlossomMetrics, error) {
+	query := "SELECT day, checks, downloads, uploads FROM blossom_metrics"
+	var conds []string
+	var args []any
+	if from != "" {
+		conds = append(conds, "day >= ?")
+		args = append(args, from)
+	}
+	if to != "" {
+		conds = append(conds, "day <= ?")
+		args = append(args, to)
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	query += " ORDER BY day DESC"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query blossom metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var result []BlossomMetrics
+	for rows.Next() {
+		var m BlossomMetrics
+		if err := rows.Scan(&m.Day, &m.Checks, &m.Downloads, &m.Uploads); err != nil {
+			return nil, fmt.Errorf("failed to scan blossom metrics row: %w", err)
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
 }
