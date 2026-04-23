@@ -14,6 +14,100 @@ import (
 
 var ctx = context.Background()
 
+// --- queryDownloadsSQL ---
+
+func TestQueryDownloadsSQL(t *testing.T) {
+	h := blossom.ComputeHash([]byte("anything"))
+	hStr := h.Hex()
+
+	tests := []struct {
+		name     string
+		filter   DownloadFilter
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:     "no filters no group by",
+			filter:   DownloadFilter{},
+			wantSQL:  "SELECT SUM(count) AS count FROM downloads",
+			wantArgs: nil,
+		},
+		{
+			name:     "from and to filters",
+			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ?",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "hash filter",
+			filter:   DownloadFilter{Hash: hStr, From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM downloads WHERE hash = ? AND day >= ? AND day <= ?",
+			wantArgs: []any{hStr, "2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "source filter",
+			filter:   DownloadFilter{Source: SourceApp, From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? AND source = ?",
+			wantArgs: []any{"2024-01-01", "2024-01-31", SourceApp},
+		},
+		{
+			name:     "group by hash emits SELECT col and GROUP BY clause",
+			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"hash"}},
+			wantSQL:  "SELECT hash, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY hash",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "group by day emits ORDER BY day DESC",
+			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"day"}},
+			wantSQL:  "SELECT day, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY day ORDER BY day DESC",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "group by country_code",
+			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"country_code"}},
+			wantSQL:  "SELECT country_code, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY country_code",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+		{
+			name: "all filters with group by hash and day",
+			filter: DownloadFilter{
+				Hash:    hStr,
+				From:    "2024-01-01",
+				To:      "2024-01-31",
+				Source:  SourceWeb,
+				GroupBy: []string{"hash", "day"},
+			},
+			wantSQL:  "SELECT hash, day, SUM(count) AS count FROM downloads WHERE hash = ? AND day >= ? AND day <= ? AND source = ? GROUP BY hash, day ORDER BY day DESC",
+			wantArgs: []any{hStr, "2024-01-01", "2024-01-31", SourceWeb},
+		},
+		{
+			name:     "group by does not mutate caller slice",
+			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"hash"}},
+			wantSQL:  "SELECT hash, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY hash",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			origGroupBy := make([]string, len(test.filter.GroupBy))
+			copy(origGroupBy, test.filter.GroupBy)
+
+			gotSQL, gotArgs := queryDownloadsSQL(test.filter)
+
+			if gotSQL != test.wantSQL {
+				t.Errorf("SQL mismatch\n got:  %q\n want: %q", gotSQL, test.wantSQL)
+			}
+			if !reflect.DeepEqual(gotArgs, test.wantArgs) {
+				t.Errorf("args mismatch\n got:  %v\n want: %v", gotArgs, test.wantArgs)
+			}
+			if !slices.Equal(test.filter.GroupBy, origGroupBy) {
+				t.Errorf("GroupBy slice was mutated: got %v, want %v", test.filter.GroupBy, origGroupBy)
+			}
+		})
+	}
+}
+
 func TestSaveDownloads(t *testing.T) {
 	h1 := blossom.ComputeHash([]byte("anything"))
 	h2 := blossom.ComputeHash([]byte("anywhere"))
