@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -19,19 +20,23 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /v1/metrics/relay", e.handleRelayMetrics)
 	mux.HandleFunc("GET /v1/metrics/blossom", e.handleBlossomMetrics)
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	server := &http.Server{Addr: addr, Handler: mux}
+	exit := make(chan error, 1)
 
 	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
+		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			exit <- err
+		}
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	select {
+	case err := <-exit:
 		return err
+	case <-ctx.Done():
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return server.Shutdown(ctx)
 	}
-	return nil
 }
 
 // handleImpressions serves GET /v1/impressions
