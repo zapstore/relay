@@ -14,6 +14,118 @@ import (
 	eventPkg "github.com/zapstore/relay/pkg/events"
 )
 
+// --- queryImpressionsSQL ---
+
+func TestQueryImpressionsSQL(t *testing.T) {
+	tests := []struct {
+		name     string
+		filter   ImpressionFilter
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:     "no filters no group by",
+			filter:   ImpressionFilter{From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ?",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "group by only emits SELECT cols and GROUP BY clause",
+			filter:   ImpressionFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"app_id", "day"}},
+			wantSQL:  "SELECT app_id, day, SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? GROUP BY app_id, day ORDER BY day DESC",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "app_id filter",
+			filter:   ImpressionFilter{AppID: "com.example.app", From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE app_id = ? AND day >= ? AND day <= ?",
+			wantArgs: []any{"com.example.app", "2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "app_pubkey filter",
+			filter:   ImpressionFilter{AppPubkey: "deadbeef", From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE app_pubkey = ? AND day >= ? AND day <= ?",
+			wantArgs: []any{"deadbeef", "2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "source filter",
+			filter:   ImpressionFilter{Source: SourceApp, From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? AND source = ?",
+			wantArgs: []any{"2024-01-01", "2024-01-31", SourceApp},
+		},
+		{
+			name:     "type filter",
+			filter:   ImpressionFilter{Type: TypeDetail, From: "2024-01-01", To: "2024-01-31"},
+			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? AND type = ?",
+			wantArgs: []any{"2024-01-01", "2024-01-31", TypeDetail},
+		},
+		{
+			name: "all filters no group by",
+			filter: ImpressionFilter{
+				AppID:     "com.example.app",
+				AppPubkey: "deadbeef",
+				From:      "2024-01-01",
+				To:        "2024-01-31",
+				Source:    SourceWeb,
+				Type:      TypeDetail,
+			},
+			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ?",
+			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceWeb, TypeDetail},
+		},
+		{
+			name: "all filters with group by",
+			filter: ImpressionFilter{
+				AppID:     "com.example.app",
+				AppPubkey: "deadbeef",
+				From:      "2024-01-01",
+				To:        "2024-01-31",
+				Source:    SourceApp,
+				Type:      TypeDetail,
+				GroupBy:   []string{"day", "source"},
+			},
+			wantSQL:  "SELECT day, source, SUM(count) AS count FROM impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ? GROUP BY day, source ORDER BY day DESC",
+			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceApp, TypeDetail},
+		},
+		{
+			name: "pubkey filter with group by app_id and day orders by day desc",
+			filter: ImpressionFilter{
+				AppPubkey: "deadbeef",
+				From:      "2024-01-01",
+				To:        "2024-01-31",
+				GroupBy:   []string{"app_id", "day"},
+			},
+			wantSQL:  "SELECT app_id, day, SUM(count) AS count FROM impressions WHERE app_pubkey = ? AND day >= ? AND day <= ? GROUP BY app_id, day ORDER BY day DESC",
+			wantArgs: []any{"deadbeef", "2024-01-01", "2024-01-31"},
+		},
+		{
+			name:     "group by does not mutate caller slice",
+			filter:   ImpressionFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"app_id"}},
+			wantSQL:  "SELECT app_id, SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? GROUP BY app_id",
+			wantArgs: []any{"2024-01-01", "2024-01-31"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Capture the original GroupBy slice header to detect mutation.
+			origGroupBy := make([]string, len(test.filter.GroupBy))
+			copy(origGroupBy, test.filter.GroupBy)
+
+			gotSQL, gotArgs := queryImpressionsSQL(test.filter)
+
+			if gotSQL != test.wantSQL {
+				t.Errorf("SQL mismatch\n got:  %q\n want: %q", gotSQL, test.wantSQL)
+			}
+			if !reflect.DeepEqual(gotArgs, test.wantArgs) {
+				t.Errorf("args mismatch\n got:  %v\n want: %v", gotArgs, test.wantArgs)
+			}
+			if !slices.Equal(test.filter.GroupBy, origGroupBy) {
+				t.Errorf("GroupBy slice was mutated: got %v, want %v", test.filter.GroupBy, origGroupBy)
+			}
+		})
+	}
+}
+
 // --- IsDetailFilter ---
 
 func TestIsDetailFilter(t *testing.T) {

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,10 +20,28 @@ const (
 	SourceUnknown Source = "unknown"
 )
 
+func (s Source) IsValid() bool {
+	switch s {
+	case SourceApp, SourceWeb, SourceUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Type represents the type of impression, which is determined by the REQ.
 type Type string
 
 const TypeDetail Type = "detail"
+
+func (t Type) IsValid() bool {
+	switch t {
+	case TypeDetail:
+		return true
+	default:
+		return false
+	}
+}
 
 // Impression of an app.
 type Impression struct {
@@ -159,4 +178,146 @@ func (s *Store) SaveImpressions(ctx context.Context, batch []ImpressionCount) er
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	return nil
+}
+
+// ImpressionFilter defines query parameters for QueryImpressions.
+type ImpressionFilter struct {
+	AppID     string   // optional; restricts to a specific app
+	AppPubkey string   // optional; restricts to a specific app publisher
+	From      string   // YYYY-MM-DD, inclusive
+	To        string   // YYYY-MM-DD, inclusive
+	Source    Source   // optional; restricts to a specific source
+	Type      Type     // optional; restricts to a specific type
+	GroupBy   []string // subset of: app_id, app_pubkey, day, source, type, country_code
+}
+
+var impressionGroupBy = []string{"app_id", "app_pubkey", "day", "source", "type", "country_code"}
+
+func (f ImpressionFilter) Validate() error {
+	if f.AppPubkey != "" {
+		if !nostr.IsValidPublicKey(f.AppPubkey) {
+			return fmt.Errorf("invalid app pubkey: %s", f.AppPubkey)
+		}
+	}
+	if f.From == "" {
+		return fmt.Errorf("from date is required")
+	}
+	if f.To == "" {
+		return fmt.Errorf("to date is required")
+	}
+	if f.Source != "" {
+		if !f.Source.IsValid() {
+			return fmt.Errorf("invalid source: %s", f.Source)
+		}
+	}
+	if f.Type != "" {
+		if !f.Type.IsValid() {
+			return fmt.Errorf("invalid type: %s", f.Type)
+		}
+	}
+	for _, g := range f.GroupBy {
+		if !slices.Contains(impressionGroupBy, g) {
+			return fmt.Errorf("invalid group_by: %s", g)
+		}
+	}
+	return nil
+}
+
+// QueryImpressions returns aggregated impression counts matching the given filter.
+// If GroupBy is empty, a single total-count row is returned.
+func (s *Store) QueryImpressions(ctx context.Context, f ImpressionFilter) ([]ImpressionCount, error) {
+	if err := f.Validate(); err != nil {
+		return nil, err
+	}
+
+	query, args := queryImpressionsSQL(f)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query impressions: %w", err)
+	}
+	defer rows.Close()
+
+	var impressions []ImpressionCount
+	for rows.Next() {
+		var i ImpressionCount
+		targets := impressionScan(&i, f.GroupBy)
+		if err := rows.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("failed to scan impression row: %w", err)
+		}
+		impressions = append(impressions, i)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to query impressions: %w", err)
+	}
+	return impressions, nil
+}
+
+// queryImpressionsSQL returns the SQL query and arguments for the given filter.
+func queryImpressionsSQL(f ImpressionFilter) (string, []any) {
+	columns := make([]string, 0, len(f.GroupBy)+1)
+	columns = append(columns, f.GroupBy...)
+	columns = append(columns, "SUM(count) AS count")
+	query := "SELECT " + strings.Join(columns, ", ") + " FROM impressions"
+
+	var args []any
+	var conds []string
+	if f.AppID != "" {
+		conds = append(conds, "app_id = ?")
+		args = append(args, f.AppID)
+	}
+	if f.AppPubkey != "" {
+		conds = append(conds, "app_pubkey = ?")
+		args = append(args, f.AppPubkey)
+	}
+	if f.From != "" {
+		conds = append(conds, "day >= ?")
+		args = append(args, f.From)
+	}
+	if f.To != "" {
+		conds = append(conds, "day <= ?")
+		args = append(args, f.To)
+	}
+	if f.Source != "" {
+		conds = append(conds, "source = ?")
+		args = append(args, f.Source)
+	}
+	if f.Type != "" {
+		conds = append(conds, "type = ?")
+		args = append(args, f.Type)
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	if len(f.GroupBy) > 0 {
+		query += " GROUP BY " + strings.Join(f.GroupBy, ", ")
+	}
+	for _, c := range f.GroupBy {
+		if c == "day" {
+			query += " ORDER BY day DESC"
+		}
+	}
+	return query, args
+}
+
+// impressionScan returns scan destinations matching the SELECT column order.
+func impressionScan(row *ImpressionCount, dbCols []string) []any {
+	targets := make([]any, 0, len(dbCols)+1)
+	for _, col := range dbCols {
+		switch col {
+		case "app_id":
+			targets = append(targets, &row.AppID)
+		case "app_pubkey":
+			targets = append(targets, &row.AppPubkey)
+		case "day":
+			targets = append(targets, &row.Day)
+		case "source":
+			targets = append(targets, &row.Source)
+		case "type":
+			targets = append(targets, &row.Type)
+		case "country_code":
+			targets = append(targets, &row.CountryCode)
+		}
+	}
+	return append(targets, &row.Count)
 }
