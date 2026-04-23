@@ -90,7 +90,7 @@ func main() {
 		panic(err)
 	}
 	if _, err := defender.Health(ctx); err != nil {
-		panic(err)
+		slog.Error("defender health check failed", "error", err)
 	}
 
 	// Step 3.
