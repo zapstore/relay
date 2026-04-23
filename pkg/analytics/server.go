@@ -11,6 +11,40 @@ import (
 	"github.com/zapstore/relay/pkg/analytics/store"
 )
 
+// API response types
+
+type impressionResponse struct {
+	AppID       string `json:"app_id,omitempty"`
+	AppPubkey   string `json:"app_pubkey,omitempty"`
+	Day         string `json:"day,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Type        string `json:"type,omitempty"`
+	CountryCode string `json:"country_code,omitempty"`
+	Count       int    `json:"count"`
+}
+
+type downloadResponse struct {
+	Hash        string `json:"hash,omitempty"`
+	Day         string `json:"day,omitempty"`
+	Source      string `json:"source,omitempty"`
+	CountryCode string `json:"country_code,omitempty"`
+	Count       int    `json:"count"`
+}
+
+type relayMetricsResponse struct {
+	Day     string `json:"day"`
+	Reqs    int64  `json:"reqs"`
+	Filters int64  `json:"filters"`
+	Events  int64  `json:"events"`
+}
+
+type blossomMetricsResponse struct {
+	Day       string `json:"day"`
+	Checks    int64  `json:"checks"`
+	Downloads int64  `json:"downloads"`
+	Uploads   int64  `json:"uploads"`
+}
+
 // StartAndServe starts the analytics HTTP API and blocks until ctx is cancelled.
 func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
@@ -73,7 +107,19 @@ func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, rows)
+	resp := make([]impressionResponse, len(rows))
+	for i, r := range rows {
+		resp[i] = impressionResponse{
+			AppID:       r.AppID,
+			AppPubkey:   r.AppPubkey,
+			Day:         r.Day,
+			Source:      string(r.Source),
+			Type:        string(r.Type),
+			CountryCode: r.CountryCode,
+			Count:       r.Count,
+		}
+	}
+	writeJSON(w, resp)
 }
 
 // handleDownloads serves GET /v1/downloads
@@ -107,7 +153,17 @@ func (e *Engine) handleDownloads(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, rows)
+	resp := make([]downloadResponse, len(rows))
+	for i, r := range rows {
+		resp[i] = downloadResponse{
+			Hash:        r.Hash.Hex(),
+			Day:         r.Day,
+			Source:      string(r.Source),
+			CountryCode: r.CountryCode,
+			Count:       r.Count,
+		}
+	}
+	writeJSON(w, resp)
 }
 
 // handleRelayMetrics serves GET /v1/metrics/relay
@@ -140,7 +196,16 @@ func (e *Engine) handleRelayMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, rows)
+	resp := make([]relayMetricsResponse, len(rows))
+	for i, r := range rows {
+		resp[i] = relayMetricsResponse{
+			Day:     r.Day,
+			Reqs:    r.Reqs,
+			Filters: r.Filters,
+			Events:  r.Events,
+		}
+	}
+	writeJSON(w, resp)
 }
 
 // handleBlossomMetrics serves GET /v1/metrics/blossom
@@ -173,7 +238,16 @@ func (e *Engine) handleBlossomMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, rows)
+	resp := make([]blossomMetricsResponse, len(rows))
+	for i, r := range rows {
+		resp[i] = blossomMetricsResponse{
+			Day:       r.Day,
+			Checks:    r.Checks,
+			Downloads: r.Downloads,
+			Uploads:   r.Uploads,
+		}
+	}
+	writeJSON(w, resp)
 }
 
 func splitCSV(s string) []string {
