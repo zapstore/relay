@@ -75,10 +75,9 @@ func ImpressionSource(id string) (Source, bool) {
 }
 
 // IsDetailFilter reports whether the filter represents an app detail view
-// (kind 32267 + author pubkey + d tag).
 func IsDetailFilter(filter nostr.Filter) bool {
 	for _, k := range filter.Kinds {
-		if k == eventPkg.KindApp && len(filter.Authors) > 0 && len(filter.Tags["d"]) > 0 {
+		if k == eventPkg.KindApp && len(filter.Tags["d"]) > 0 {
 			return true
 		}
 	}
