@@ -73,12 +73,6 @@ On first run, the server creates the following structure:
 
 ```
 $SYSTEM_DIRECTORY_PATH/
-├── acl/
-│   ├── pubkeys_allowed.csv
-│   ├── pubkeys_blocked.csv
-│   ├── events_blocked.csv
-│   └── blobs_blocked.csv
-│
 ├── analytics/
 │   ├── analytics.db  # SQLite database for analytics
 │   └── geo.mmdb      # MaxMind database for ip geolocation
@@ -88,20 +82,56 @@ $SYSTEM_DIRECTORY_PATH/
     └── blossom.db    # SQLite database for blob metadata
 ```
 
-### ACL File Format
-
-ACL files are CSV with two columns: identifier and reason. Lines starting with `#` are comments.
-
-```csv
-# Allowed pubkeys
-# pubkey,reason
-npub1abc...,Trusted developer
-abc123...,Another trusted user
-```
-
-Files are hot-reloaded when modified - no server restart required.
-
 ### Endpoints
 
 - **Relay**: `ws://localhost:3334` (or your configured port)
 - **Blossom**: `http://localhost:3335` (or your configured port)
+- **Analytics**: `http://localhost:3336` (or your configured port)
+
+## Analytics API
+
+All endpoints return a JSON array. Date parameters use the `YYYY-MM-DD` format and are inclusive.
+
+### `GET /v1/impressions`
+
+Returns aggregated app-impression counts recorded from Nostr REQs.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `app_id` | string | Filter to a specific app identifier |
+| `app_pubkey` | string | Filter to a specific publisher pubkey |
+| `from` | date | Start of date range (inclusive) |
+| `to` | date | End of date range (inclusive) |
+| `source` | string | Filter to a specific source: `app`, `web`, or `unknown` |
+| `type` | string | Filter to a specific impression type: `detail` |
+| `group_by` | CSV | Comma-separated grouping dimensions: `app_id`, `app_pubkey`, `day`, `source`, `type`, `country_code` |
+
+### `GET /v1/downloads`
+
+Returns aggregated blob-download counts recorded from Blossom requests.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `hash` | string | Filter to a specific blob hash |
+| `from` | date | Start of date range (inclusive) |
+| `to` | date | End of date range (inclusive) |
+| `source` | string | Filter to a specific source: `app`, `web`, or `unknown` |
+| `group_by` | CSV | Comma-separated grouping dimensions: `hash`, `day`, `source`, `country_code` |
+
+### `GET /v1/metrics/relay`
+
+Returns daily relay traffic metrics (REQ count, filter count, event count).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `from` | date | Start of date range (inclusive) |
+| `to` | date | End of date range (inclusive) |
+
+### `GET /v1/metrics/blossom`
+
+Returns daily Blossom server traffic metrics (check, download, and upload counts).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `from` | date | Start of date range (inclusive) |
+| `to` | date | End of date range (inclusive) |
