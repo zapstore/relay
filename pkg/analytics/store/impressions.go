@@ -60,17 +60,14 @@ type ImpressionCount struct {
 }
 
 // ImpressionSource returns the Source derived from the REQ subscription id.
-// Only the specific detail-screen prefixes used by zapstore ("app-detail-")
-// and webapp ("web-app-detail-") are recognized. The second return value
-// is false for everything else.
-func ImpressionSource(id string) (Source, bool) {
+func ImpressionSource(id string) Source {
 	switch {
-	case strings.HasPrefix(id, "app-detail-"):
-		return SourceApp, true
-	case strings.HasPrefix(id, "web-app-detail-"):
-		return SourceWeb, true
+	case strings.HasPrefix(id, "app"):
+		return SourceApp
+	case strings.HasPrefix(id, "web-app"):
+		return SourceWeb
 	default:
-		return SourceUnknown, false
+		return SourceUnknown
 	}
 }
 
@@ -87,11 +84,7 @@ func IsDetailFilter(filter nostr.Filter) bool {
 // NewImpressions creates impressions from an app detail REQ.
 // Only known sources (app, web) and detail filters (kind 32267 + d tag) produce impressions.
 func NewImpressions(country string, id string, filters nostr.Filters, events []nostr.Event) []Impression {
-	source, known := ImpressionSource(id)
-	if !known {
-		return nil
-	}
-
+	source := ImpressionSource(id)
 	day := Today()
 	impressions := make([]Impression, 0, len(events))
 
