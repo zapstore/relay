@@ -16,6 +16,7 @@ import (
 type impressionResponse struct {
 	AppID       string `json:"app_id,omitempty"`
 	AppPubkey   string `json:"app_pubkey,omitempty"`
+	AppVersion  string `json:"app_version,omitempty"`
 	Day         string `json:"day,omitempty"`
 	Source      string `json:"source,omitempty"`
 	Type        string `json:"type,omitempty"`
@@ -85,7 +86,7 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 //   - to         — YYYY-MM-DD inclusive
 //   - source     — optional; filter to a specific source
 //   - type       — optional; filter to a specific type
-//   - group_by   — comma-separated subset of: app_id, pubkey, day, source, type, country
+//   - group_by   — comma-separated subset of: app_id, app_pubkey, app_version, day, source, type, country_code
 func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := store.ImpressionFilter{
@@ -116,6 +117,7 @@ func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 		resp[i] = impressionResponse{
 			AppID:       r.AppID,
 			AppPubkey:   r.AppPubkey,
+			AppVersion:  r.AppVersion,
 			Day:         r.Day,
 			Source:      string(r.Source),
 			Type:        string(r.Type),

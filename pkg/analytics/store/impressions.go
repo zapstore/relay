@@ -37,6 +37,7 @@ func (t ImpressionType) IsValid() bool {
 type Impression struct {
 	AppID       string
 	AppPubkey   string
+	AppVersion  string
 	Day         string // formatted as "YYYY-MM-DD"
 	Source      Source
 	Type        ImpressionType
@@ -71,50 +72,9 @@ func IsDetailFilter(filter nostr.Filter) bool {
 	return false
 }
 
-// NewImpressions creates impressions from an app detail REQ.
-// Only known sources (app, web) and detail filters (kind 32267 + d tag) produce impressions.
-func NewImpressions(country string, id string, filters nostr.Filters, events []nostr.Event) []Impression {
-	source := ParseImpressionSource(id)
-	day := Today()
-	impressions := make([]Impression, 0, len(events))
-
-	for _, f := range filters {
-		if !IsDetailFilter(f) {
-			continue
-		}
-
-		for _, event := range matchingEvents(f, events) {
-			appID := event.Tags.GetD()
-			if appID == "" {
-				continue
-			}
-			impressions = append(impressions, Impression{
-				AppID:       appID,
-				AppPubkey:   event.PubKey,
-				Day:         day,
-				Source:      source,
-				Type:        ImpressionDetail,
-				CountryCode: country,
-			})
-		}
-	}
-	return impressions
-}
-
 // Today returns the current day formatted as "YYYY-MM-DD".
 func Today() string {
 	return time.Now().UTC().Format("2006-01-02")
-}
-
-// matchingEvents returns the subset of events that match the given filter.
-func matchingEvents(f nostr.Filter, events []nostr.Event) []nostr.Event {
-	var matched []nostr.Event
-	for _, e := range events {
-		if f.Matches(&e) {
-			matched = append(matched, e)
-		}
-	}
-	return matched
 }
 
 // SaveImpressions writes the given batch of counted impressions to the database.
@@ -131,9 +91,9 @@ func (s *T) SaveImpressions(ctx context.Context, batch []ImpressionCount) error 
 	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO impressions (app_id, app_pubkey, day, source, type, country_code, count)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(app_id, app_pubkey, day, source, type, country_code)
+		INSERT INTO impressions (app_id, app_pubkey, app_version, day, source, type, country_code, count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(app_id, app_pubkey, app_version, day, source, type, country_code)
 		DO UPDATE SET count = impressions.count + excluded.count
 	`)
 	if err != nil {
@@ -146,6 +106,7 @@ func (s *T) SaveImpressions(ctx context.Context, batch []ImpressionCount) error 
 			ctx,
 			impression.AppID,
 			impression.AppPubkey,
+			impression.AppVersion,
 			impression.Day,
 			string(impression.Source),
 			string(impression.Type),
@@ -170,10 +131,10 @@ type ImpressionFilter struct {
 	To        string         // YYYY-MM-DD, inclusive
 	Source    Source         // restricts to a specific source
 	Type      ImpressionType // restricts to a specific type
-	GroupBy   []string       // subset of: app_id, app_pubkey, day, source, type, country_code
+	GroupBy   []string       // subset of: app_id, app_pubkey, app_version, day, source, type, country_code
 }
 
-var impressionGroupBy = []string{"app_id", "app_pubkey", "day", "source", "type", "country_code"}
+var impressionGroupBy = []string{"app_id", "app_pubkey", "app_version", "day", "source", "type", "country_code"}
 
 func (f ImpressionFilter) Validate() error {
 	if f.AppPubkey != "" {
@@ -296,6 +257,8 @@ func impressionScan(row *ImpressionCount, dbCols []string) []any {
 			targets = append(targets, &row.AppID)
 		case "app_pubkey":
 			targets = append(targets, &row.AppPubkey)
+		case "app_version":
+			targets = append(targets, &row.AppVersion)
 		case "day":
 			targets = append(targets, &row.Day)
 		case "source":

@@ -58,6 +58,7 @@ func migrate(db *sql.DB) error {
 		{`ALTER TABLE downloads ADD COLUMN app_id TEXT NOT NULL DEFAULT ''`, "add app_id"},
 		{`ALTER TABLE downloads ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`, "add app_version"},
 		{`ALTER TABLE downloads ADD COLUMN app_pubkey TEXT NOT NULL DEFAULT ''`, "add app_pubkey"},
+		{`ALTER TABLE impressions ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`, "add impressions app_version"},
 	} {
 		if _, err := db.Exec(m.stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("%s: %w", m.desc, err)

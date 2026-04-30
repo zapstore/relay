@@ -1,15 +1,17 @@
 CREATE TABLE IF NOT EXISTS impressions (
   app_id        TEXT NOT NULL,
   app_pubkey    TEXT NOT NULL,
+  app_version   TEXT NOT NULL DEFAULT '',
   day           DATE NOT NULL,
   source        TEXT NOT NULL,
   type          TEXT NOT NULL,
   country_code  TEXT,
   count         INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (app_id, app_pubkey, day, source, type, country_code)
+  PRIMARY KEY (app_id, app_pubkey, app_version, day, source, type, country_code)
 );
 
 CREATE INDEX IF NOT EXISTS impressions_app_pubkey ON impressions (app_pubkey);
+CREATE INDEX IF NOT EXISTS impressions_app_version ON impressions (app_version);
 CREATE INDEX IF NOT EXISTS impressions_day ON impressions (day);
 CREATE INDEX IF NOT EXISTS impressions_source ON impressions (source);
 CREATE INDEX IF NOT EXISTS impressions_type ON impressions (type);

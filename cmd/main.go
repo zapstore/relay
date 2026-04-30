@@ -105,7 +105,7 @@ func main() {
 		Geo:   filepath.Join(analyticsDir, "geo.mmdb"),
 	}
 
-	analytics, err := analytics.NewEngine(config.Analytics, paths, logger)
+	analytics, err := analytics.NewEngine(config.Analytics, paths, logger, nil /* TODO: wire relay store as Resolver */)
 	if err != nil {
 		panic(err)
 	}

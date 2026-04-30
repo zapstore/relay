@@ -34,7 +34,7 @@ type Paths struct {
 type Engine struct {
 	store    *store.T
 	geo      *geo.Locator
-	resolver AssetResolver
+	resolver Resolver
 
 	downloads          chan store.Download
 	impressions        chan store.Impression
@@ -50,12 +50,19 @@ type Engine struct {
 	done   chan struct{}
 }
 
-// AssetResolver abstracts the resolution of asset events that reference in their "x" tag a given blossom hash.
-// It's possible that multiple assets, from different apps reference the same blob hash, for example in case
-// of a fork.
+// Resolver is the interface through which the analytics engine queries the Nostr event store.
+// Both methods are always backed by the same underlying database, so they are grouped here.
 // Implementations MUST be safe for concurrent use.
-type AssetResolver interface {
+type Resolver interface {
+	// AssetsReferencing returns all kind 3063 asset events whose "x" tag matches the given
+	// blossom hash. Normally this is a single event, but multiple assets can reference the
+	// same blob in the case of a fork (different app_id, same binary).
 	AssetsReferencing(context.Context, blossom.Hash) ([]nostr.Event, error)
+
+	// LatestVersion returns the version string of the most recent kind 3063 asset published
+	// for the given app (identified by app_id and pubkey). It is used to annotate impressions
+	// with the version that was live at the time of the impression.
+	LatestVersion(ctx context.Context, appID, pubkey string) (string, error)
 }
 
 type relayMetrics struct {
@@ -71,7 +78,12 @@ type blossomMetrics struct {
 }
 
 // NewEngine starts the background goroutine and returns the engine.
-func NewEngine(c Config, paths Paths, logger *slog.Logger) (*Engine, error) {
+func NewEngine(
+	c Config,
+	paths Paths,
+	logger *slog.Logger,
+	resolver Resolver,
+) (*Engine, error) {
 	var err error
 	engine := &Engine{
 		impressions:        make(chan store.Impression, c.QueueSize),
@@ -149,16 +161,51 @@ func (e *Engine) RecordReq(client rely.Client, id string, filters nostr.Filters,
 	e.relay.reqs.Add(1)
 	e.relay.filters.Add(int64(len(filters)))
 
-	country := e.lookupCountry(client.IP().Raw)
-	impressions := store.NewImpressions(country, id, filters, events)
+	if len(events) == 0 || len(filters) == 0 {
+		return
+	}
 
-	for i, impression := range impressions {
-		select {
-		case e.impressions <- impression:
-		default:
-			dropped := len(impressions) - i
-			e.log.Warn("analytics: failed to record impressions", "error", "channel is full", "dropped", dropped)
-			return
+	source := store.ParseImpressionSource(id)
+	country := e.lookupCountry(client.IP().Raw)
+	day := store.Today()
+
+	for _, f := range filters {
+		if !store.IsDetailFilter(f) {
+			continue
+		}
+
+		for _, event := range events {
+			if !f.Matches(&event) {
+				continue
+			}
+			appID := event.Tags.GetD()
+			if appID == "" {
+				continue
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			version, err := e.resolver.LatestVersion(ctx, appID, event.PubKey)
+			cancel()
+			if err != nil {
+				e.log.Warn("analytics: failed to resolve version", "app_id", appID, "error", err)
+			}
+
+			impression := store.Impression{
+				AppID:       appID,
+				AppPubkey:   event.PubKey,
+				AppVersion:  version,
+				Day:         day,
+				Source:      source,
+				Type:        store.ImpressionDetail,
+				CountryCode: country,
+			}
+
+			select {
+			case e.impressions <- impression:
+			default:
+				e.log.Warn("analytics: failed to record impression", "error", "channel is full")
+				return
+			}
 		}
 	}
 }
@@ -185,7 +232,7 @@ func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 	}
 	if len(assets) == 0 {
 		// the blob hash is not referenced by any asset events kind:3063,
-		// so we don't care about recording this download other than the count
+		// so we don't care about recording this download
 		return
 	}
 	if len(assets) > 1 {
