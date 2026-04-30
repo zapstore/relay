@@ -129,6 +129,7 @@ func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 //   - from       — YYYY-MM-DD inclusive
 //   - to         — YYYY-MM-DD inclusive
 //   - source     — optional; filter to a specific source
+//   - type       — optional; filter to a specific download type
 //   - group_by   — comma-separated subset of: hash, day, source, country
 func (e *Engine) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -137,6 +138,7 @@ func (e *Engine) handleDownloads(w http.ResponseWriter, r *http.Request) {
 		From:    q.Get("from"),
 		To:      q.Get("to"),
 		Source:  store.Source(q.Get("source")),
+		Type:    store.DownloadType(q.Get("type")),
 		GroupBy: splitCSV(q.Get("group_by")),
 	}
 

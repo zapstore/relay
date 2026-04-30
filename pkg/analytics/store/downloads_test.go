@@ -122,32 +122,32 @@ func TestSaveDownloads(t *testing.T) {
 		{
 			name: "single download",
 			batch: []DownloadCount{
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp}, 1},
+				{Download{Hash: h1, Type: Install, Day: "2024-01-01", Source: SourceApp}, 1},
 			},
 			want: []DownloadCount{
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp}, 1},
+				{Download{Hash: h1, Type: Install, Day: "2024-01-01", Source: SourceApp}, 1},
 			},
 		},
 		{
 			name: "count is persisted correctly",
 			batch: []DownloadCount{
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp}, 42},
+				{Download{Hash: h1, Type: Install, Day: "2024-01-01", Source: SourceApp}, 42},
 			},
 			want: []DownloadCount{
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp}, 42},
+				{Download{Hash: h1, Type: Install, Day: "2024-01-01", Source: SourceApp}, 42},
 			},
 		},
 		{
 			name: "multiple distinct downloads",
 			batch: []DownloadCount{
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp}, 3},
-				{Download{Hash: h2, Day: "2024-01-01", Source: SourceApp}, 7},
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceUnknown}, 1},
+				{Download{Hash: h1, Type: Install, Day: "2024-01-01", Source: SourceApp}, 3},
+				{Download{Hash: h2, Type: Install, Day: "2024-01-01", Source: SourceApp}, 7},
+				{Download{Hash: h1, Type: Update, Day: "2024-01-01", Source: SourceUnknown}, 1},
 			},
 			want: []DownloadCount{
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp}, 3},
-				{Download{Hash: h2, Day: "2024-01-01", Source: SourceApp}, 7},
-				{Download{Hash: h1, Day: "2024-01-01", Source: SourceUnknown}, 1},
+				{Download{Hash: h1, Type: Install, Day: "2024-01-01", Source: SourceApp}, 3},
+				{Download{Hash: h2, Type: Install, Day: "2024-01-01", Source: SourceApp}, 7},
+				{Download{Hash: h1, Type: Update, Day: "2024-01-01", Source: SourceUnknown}, 1},
 			},
 		},
 	}
@@ -164,9 +164,9 @@ func TestSaveDownloads(t *testing.T) {
 				t.Fatalf("SaveDownloads: %v", err)
 			}
 
-			got, err := queryDownloads(store.db)
+			got, err := allDownloads(store.db)
 			if err != nil {
-				t.Fatalf("queryDownloads: %v", err)
+				t.Fatalf("allDownloads: %v", err)
 			}
 
 			sortDownloadCounts(got)
@@ -186,7 +186,12 @@ func TestSaveDownloads_AccumulatesAcrossCalls(t *testing.T) {
 	}
 	defer s.Close()
 
-	dl := Download{Hash: blossom.ComputeHash([]byte("anything")), Day: "2024-01-01", Source: SourceApp}
+	dl := Download{
+		Hash:   blossom.ComputeHash([]byte("anything")),
+		Day:    "2024-01-01",
+		Source: SourceApp,
+		Type:   Install,
+	}
 
 	if err := s.SaveDownloads(ctx, []DownloadCount{{dl, 3}}); err != nil {
 		t.Fatalf("first SaveDownloads: %v", err)
@@ -195,9 +200,9 @@ func TestSaveDownloads_AccumulatesAcrossCalls(t *testing.T) {
 		t.Fatalf("second SaveDownloads: %v", err)
 	}
 
-	got, err := queryDownloads(s.db)
+	got, err := allDownloads(s.db)
 	if err != nil {
-		t.Fatalf("queryDownloads: %v", err)
+		t.Fatalf("allDownloads: %v", err)
 	}
 
 	want := []DownloadCount{{dl, 8}}
@@ -219,11 +224,11 @@ func TestQueryDownloads(t *testing.T) {
 	h2 := blossom.ComputeHash([]byte("file2"))
 
 	seed := []DownloadCount{
-		{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp, CountryCode: "US"}, 20},
-		{Download{Hash: h1, Day: "2024-01-02", Source: SourceApp, CountryCode: "US"}, 8},
-		{Download{Hash: h1, Day: "2024-01-03", Source: SourceWeb, CountryCode: "DE"}, 4},
-		{Download{Hash: h2, Day: "2024-01-01", Source: SourceApp, CountryCode: "US"}, 6},
-		{Download{Hash: h2, Day: "2024-01-02", Source: SourceUnknown, CountryCode: "FR"}, 2},
+		{Download{Hash: h1, Day: "2024-01-01", Source: SourceApp, Type: Install, CountryCode: "US"}, 20},
+		{Download{Hash: h1, Day: "2024-01-02", Source: SourceApp, Type: Install, CountryCode: "US"}, 8},
+		{Download{Hash: h1, Day: "2024-01-03", Source: SourceWeb, Type: Install, CountryCode: "DE"}, 4},
+		{Download{Hash: h2, Day: "2024-01-01", Source: SourceApp, Type: Update, CountryCode: "US"}, 6},
+		{Download{Hash: h2, Day: "2024-01-02", Source: SourceUnknown, Type: Update, CountryCode: "FR"}, 2},
 	}
 	if err := s.SaveDownloads(ctx, seed); err != nil {
 		t.Fatalf("SaveDownloads: %v", err)
@@ -284,6 +289,19 @@ func TestQueryDownloads(t *testing.T) {
 		}
 	})
 
+	t.Run("filter by type", func(t *testing.T) {
+		got, err := s.QueryDownloads(ctx, DownloadFilter{Type: Install})
+		if err != nil {
+			t.Fatalf("QueryDownloads: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(got))
+		}
+		if got[0].Count != 32 {
+			t.Errorf("got count %d, want 32", got[0].Count)
+		}
+	})
+
 	t.Run("group by day ordered desc", func(t *testing.T) {
 		got, err := s.QueryDownloads(ctx, DownloadFilter{GroupBy: []string{"day"}})
 		if err != nil {
@@ -318,8 +336,8 @@ func TestQueryDownloads(t *testing.T) {
 
 // --- Helpers ---
 
-func queryDownloads(db *sql.DB) ([]DownloadCount, error) {
-	rows, err := db.Query(`SELECT hash, day, source, country_code, count FROM downloads`)
+func allDownloads(db *sql.DB) ([]DownloadCount, error) {
+	rows, err := db.Query(`SELECT hash, day, source, type, country_code, count FROM downloads`)
 	if err != nil {
 		return nil, err
 	}
@@ -328,11 +346,11 @@ func queryDownloads(db *sql.DB) ([]DownloadCount, error) {
 	var results []DownloadCount
 	for rows.Next() {
 		var (
-			hash                     blossom.Hash
-			day, source, countryCode string
-			count                    int
+			hash                          blossom.Hash
+			day, source, typ, countryCode string
+			count                         int
 		)
-		if err := rows.Scan(&hash, &day, &source, &countryCode, &count); err != nil {
+		if err := rows.Scan(&hash, &day, &source, &typ, &countryCode, &count); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		results = append(results, DownloadCount{
@@ -340,6 +358,7 @@ func queryDownloads(db *sql.DB) ([]DownloadCount, error) {
 				Hash:        hash,
 				Day:         normalizeDay(day),
 				Source:      Source(source),
+				Type:        DownloadType(typ),
 				CountryCode: countryCode,
 			},
 			Count: count,

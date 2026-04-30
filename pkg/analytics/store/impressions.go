@@ -21,12 +21,7 @@ const (
 )
 
 func (s Source) IsValid() bool {
-	switch s {
-	case SourceApp, SourceWeb, SourceUnknown:
-		return true
-	default:
-		return false
-	}
+	return s == SourceApp || s == SourceWeb || s == SourceUnknown
 }
 
 // ImpressionType represents the type of impression, which is determined by the REQ.
@@ -35,12 +30,7 @@ type ImpressionType string
 const ImpressionDetail ImpressionType = "detail"
 
 func (t ImpressionType) IsValid() bool {
-	switch t {
-	case ImpressionDetail:
-		return true
-	default:
-		return false
-	}
+	return t == ImpressionDetail
 }
 
 // Impression of an app.
@@ -59,8 +49,8 @@ type ImpressionCount struct {
 	Count int
 }
 
-// ImpressionSource returns the Source derived from the REQ subscription id.
-func ImpressionSource(id string) Source {
+// ParseImpressionSource returns the Source derived from the REQ subscription id.
+func ParseImpressionSource(id string) Source {
 	switch {
 	case strings.HasPrefix(id, "app"):
 		return SourceApp
@@ -84,7 +74,7 @@ func IsDetailFilter(filter nostr.Filter) bool {
 // NewImpressions creates impressions from an app detail REQ.
 // Only known sources (app, web) and detail filters (kind 32267 + d tag) produce impressions.
 func NewImpressions(country string, id string, filters nostr.Filters, events []nostr.Event) []Impression {
-	source := ImpressionSource(id)
+	source := ParseImpressionSource(id)
 	day := Today()
 	impressions := make([]Impression, 0, len(events))
 

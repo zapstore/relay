@@ -11,11 +11,24 @@ import (
 	"github.com/pippellia-btc/blossom"
 )
 
+type DownloadType string
+
+const (
+	Install DownloadType = "install"
+	Update  DownloadType = "update"
+	Unknown DownloadType = "unknown"
+)
+
+func (d DownloadType) IsValid() bool {
+	return d == Install || d == Update || d == Unknown
+}
+
 // Download of a blossom blob.
 type Download struct {
 	Hash        blossom.Hash
 	Day         string // formatted as "YYYY-MM-DD"
 	Source      Source
+	Type        DownloadType
 	CountryCode string // ISO 2 letter code
 }
 
@@ -25,8 +38,8 @@ type DownloadCount struct {
 	Count int
 }
 
-// DownloadSource returns the Source derived from the request headers.
-func DownloadSource(h http.Header) Source {
+// ParseDownloadSource returns the Source derived from the request headers.
+func ParseDownloadSource(h http.Header) Source {
 	switch h.Get("X-Zapstore-Client") {
 	case "app":
 		return SourceApp
@@ -37,12 +50,25 @@ func DownloadSource(h http.Header) Source {
 	}
 }
 
+// ParseDownloadType returns the DownloadType derived from the request headers.
+func ParseDownloadType(h http.Header) DownloadType {
+	switch h.Get("X-Zapstore-Download-Type") {
+	case "update":
+		return Update
+	case "install":
+		return Install
+	default:
+		return Unknown
+	}
+}
+
 // NewDownload creates a new Download record from the given request headers and hash.
 func NewDownload(country string, header http.Header, hash blossom.Hash) Download {
 	return Download{
 		Hash:        hash,
 		Day:         Today(),
-		Source:      DownloadSource(header),
+		Source:      ParseDownloadSource(header),
+		Type:        ParseDownloadType(header),
 		CountryCode: country,
 	}
 }
@@ -61,9 +87,9 @@ func (s *Store) SaveDownloads(ctx context.Context, batch []DownloadCount) error 
 	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO downloads (hash, day, source, country_code, count)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(hash, day, source, country_code)
+		INSERT INTO downloads (hash, day, source, type, country_code, count)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(hash, day, source, type, country_code)
 		DO UPDATE SET count = downloads.count + excluded.count
 	`)
 	if err != nil {
@@ -77,6 +103,7 @@ func (s *Store) SaveDownloads(ctx context.Context, batch []DownloadCount) error 
 			download.Hash,
 			download.Day,
 			string(download.Source),
+			string(download.Type),
 			download.CountryCode,
 			download.Count,
 		); err != nil {
@@ -92,19 +119,25 @@ func (s *Store) SaveDownloads(ctx context.Context, batch []DownloadCount) error 
 
 // DownloadFilter defines query parameters for QueryDownloads.
 type DownloadFilter struct {
-	Hash    string   // restricts to a specific blob hash
-	From    string   // YYYY-MM-DD, inclusive
-	To      string   // YYYY-MM-DD, inclusive
-	Source  Source   // restricts to a specific source
-	GroupBy []string // subset of: hash, day, source, country_code
+	Hash    string       // restricts to a specific blob hash
+	Type    DownloadType // restricts to a specific download type
+	From    string       // YYYY-MM-DD, inclusive
+	To      string       // YYYY-MM-DD, inclusive
+	Source  Source       // restricts to a specific source
+	GroupBy []string     // subset of: hash, day, source, country_code
 }
 
-var downloadGroupBy = []string{"hash", "day", "source", "country_code"}
+var downloadGroupBy = []string{"hash", "day", "source", "type", "country_code"}
 
 func (f DownloadFilter) Validate() error {
 	if f.Hash != "" {
 		if err := blossom.ValidateHash(f.Hash); err != nil {
 			return fmt.Errorf("invalid hash: %w", err)
+		}
+	}
+	if f.Type != "" {
+		if !f.Type.IsValid() {
+			return fmt.Errorf("invalid type: %s", f.Type)
 		}
 	}
 	if f.From != "" {
@@ -168,6 +201,10 @@ func queryDownloadsSQL(f DownloadFilter) (string, []any) {
 	if f.Hash != "" {
 		conds = append(conds, "hash = ?")
 		args = append(args, f.Hash)
+	}
+	if f.Type != "" {
+		conds = append(conds, "type = ?")
+		args = append(args, f.Type)
 	}
 	if f.From != "" {
 		conds = append(conds, "day >= ?")
