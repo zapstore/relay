@@ -337,7 +337,7 @@ func TestQueryDownloads(t *testing.T) {
 // --- Helpers ---
 
 func allDownloads(db *sql.DB) ([]DownloadCount, error) {
-	rows, err := db.Query(`SELECT hash, day, source, type, country_code, count FROM downloads`)
+	rows, err := db.Query(`SELECT hash, app_id, app_version, app_pubkey, day, source, type, country_code, count FROM downloads`)
 	if err != nil {
 		return nil, err
 	}
@@ -347,15 +347,19 @@ func allDownloads(db *sql.DB) ([]DownloadCount, error) {
 	for rows.Next() {
 		var (
 			hash                          blossom.Hash
+			appID, appVersion, appPubkey  string
 			day, source, typ, countryCode string
 			count                         int
 		)
-		if err := rows.Scan(&hash, &day, &source, &typ, &countryCode, &count); err != nil {
+		if err := rows.Scan(&hash, &appID, &appVersion, &appPubkey, &day, &source, &typ, &countryCode, &count); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		results = append(results, DownloadCount{
 			Download: Download{
 				Hash:        hash,
+				AppID:       appID,
+				AppVersion:  appVersion,
+				AppPubkey:   appPubkey,
 				Day:         normalizeDay(day),
 				Source:      Source(source),
 				Type:        DownloadType(typ),

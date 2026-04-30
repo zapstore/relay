@@ -20,6 +20,7 @@ import (
 	"github.com/pippellia-btc/rely"
 	"github.com/zapstore/relay/pkg/analytics/geo"
 	"github.com/zapstore/relay/pkg/analytics/store"
+	"github.com/zapstore/relay/pkg/events"
 )
 
 // Paths holds the file system locations for the analytics engine's files.
@@ -31,8 +32,9 @@ type Paths struct {
 // Engine is the heart of the analytics system. It's responsible for processing data
 // and saving it in the database on periodic and bounded batches.
 type Engine struct {
-	store *store.T
-	geo   *geo.Locator
+	store    *store.T
+	geo      *geo.Locator
+	resolver AssetResolver
 
 	downloads          chan store.Download
 	impressions        chan store.Impression
@@ -46,6 +48,14 @@ type Engine struct {
 	log    *slog.Logger
 	wg     sync.WaitGroup
 	done   chan struct{}
+}
+
+// AssetResolver abstracts the resolution of asset events that reference in their "x" tag a given blossom hash.
+// It's possible that multiple assets, from different apps reference the same blob hash, for example in case
+// of a fork.
+// Implementations MUST be safe for concurrent use.
+type AssetResolver interface {
+	AssetsReferencing(context.Context, blossom.Hash) ([]nostr.Event, error)
 }
 
 type relayMetrics struct {
@@ -168,14 +178,54 @@ func (e *Engine) RecordCheck(_ blossy.Request, _ blossom.Hash) {
 func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 	e.blossom.downloads.Add(1)
 
-	country := e.lookupCountry(r.IP().Raw)
-	download := store.NewDownload(country, r.Raw().Header, hash)
-
-	select {
-	case e.downloads <- download:
-	default:
-		e.log.Warn("analytics: failed to record download", "error", "channel is full")
+	assets, err := e.resolver.AssetsReferencing(r.Context(), hash)
+	if err != nil {
+		e.log.Error("analytics: failed to resolve assets", "error", err)
 		return
+	}
+	if len(assets) == 0 {
+		// the blob hash is not referenced by any asset events kind:3063,
+		// so we don't care about recording this download other than the count
+		return
+	}
+	if len(assets) > 1 {
+		e.log.Info("analytics: multiple assets referencing a blob", "hash", hash, "count", len(assets))
+	}
+
+	day := store.Today()
+	source := store.ParseDownloadSource(r.Raw().Header)
+	typ := store.ParseDownloadType(r.Raw().Header)
+	country := e.lookupCountry(r.IP().Raw)
+
+	for i, asset := range assets {
+		appID, ok := events.Find(asset.Tags, "i")
+		if !ok {
+			continue
+		}
+
+		appVersion, ok := events.Find(asset.Tags, "version")
+		if !ok {
+			continue
+		}
+
+		download := store.Download{
+			Hash:        hash,
+			AppID:       appID,
+			AppVersion:  appVersion,
+			AppPubkey:   asset.PubKey,
+			Day:         day,
+			Source:      source,
+			Type:        typ,
+			CountryCode: country,
+		}
+
+		select {
+		case e.downloads <- download:
+		default:
+			dropped := len(assets) - i
+			e.log.Warn("analytics: failed to record downloads", "error", "channel is full", "dropped", dropped)
+			return
+		}
 	}
 }
 

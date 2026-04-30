@@ -53,11 +53,15 @@ func (s *T) Close() error {
 }
 
 func migrate(db *sql.DB) error {
-	// Additive migration: add type column to existing databases.
-	// New databases get the column via schema.sql; existing rows default to 'unknown'.
-	_, err := db.Exec(`ALTER TABLE downloads ADD COLUMN type TEXT NOT NULL DEFAULT 'unknown'`)
-	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
-		return fmt.Errorf("add type column: %w", err)
+	for _, m := range []struct{ stmt, desc string }{
+		{`ALTER TABLE downloads ADD COLUMN type TEXT NOT NULL DEFAULT 'unknown'`, "add type"},
+		{`ALTER TABLE downloads ADD COLUMN app_id TEXT NOT NULL DEFAULT ''`, "add app_id"},
+		{`ALTER TABLE downloads ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`, "add app_version"},
+		{`ALTER TABLE downloads ADD COLUMN app_pubkey TEXT NOT NULL DEFAULT ''`, "add app_pubkey"},
+	} {
+		if _, err := db.Exec(m.stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("%s: %w", m.desc, err)
+		}
 	}
 	return nil
 }

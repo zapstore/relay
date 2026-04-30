@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
 )
 
@@ -26,6 +27,9 @@ func (d DownloadType) IsValid() bool {
 // Download of a blossom blob.
 type Download struct {
 	Hash        blossom.Hash
+	AppID       string
+	AppVersion  string
+	AppPubkey   string
 	Day         string // formatted as "YYYY-MM-DD"
 	Source      Source
 	Type        DownloadType
@@ -62,17 +66,6 @@ func ParseDownloadType(h http.Header) DownloadType {
 	}
 }
 
-// NewDownload creates a new Download record from the given request headers and hash.
-func NewDownload(country string, header http.Header, hash blossom.Hash) Download {
-	return Download{
-		Hash:        hash,
-		Day:         Today(),
-		Source:      ParseDownloadSource(header),
-		Type:        ParseDownloadType(header),
-		CountryCode: country,
-	}
-}
-
 // SaveDownloads writes the given batch of counted downloads to the database.
 // On conflict it increments the existing count. An empty batch is a no-op.
 func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
@@ -87,8 +80,8 @@ func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO downloads (hash, day, source, type, country_code, count)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO downloads (hash, app_id, app_version, app_pubkey, day, source, type, country_code, count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(hash, day, source, type, country_code)
 		DO UPDATE SET count = downloads.count + excluded.count
 	`)
@@ -101,6 +94,9 @@ func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 		if _, err := stmt.ExecContext(
 			ctx,
 			download.Hash,
+			download.AppID,
+			download.AppVersion,
+			download.AppPubkey,
 			download.Day,
 			string(download.Source),
 			string(download.Type),
@@ -119,20 +115,27 @@ func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 
 // DownloadFilter defines query parameters for QueryDownloads.
 type DownloadFilter struct {
-	Hash    string       // restricts to a specific blob hash
-	Type    DownloadType // restricts to a specific download type
-	From    string       // YYYY-MM-DD, inclusive
-	To      string       // YYYY-MM-DD, inclusive
-	Source  Source       // restricts to a specific source
-	GroupBy []string     // subset of: hash, day, source, country_code
+	Hash      string       // restricts to a specific blob hash
+	AppID     string       // restricts to a specific app
+	AppPubkey string       // restricts to a specific publisher
+	Type      DownloadType // restricts to a specific download type
+	From      string       // YYYY-MM-DD, inclusive
+	To        string       // YYYY-MM-DD, inclusive
+	Source    Source       // restricts to a specific source
+	GroupBy   []string     // subset of: hash, app_id, app_version, app_pubkey, day, source, type, country_code
 }
 
-var downloadGroupBy = []string{"hash", "day", "source", "type", "country_code"}
+var downloadGroupBy = []string{"hash", "app_id", "app_version", "app_pubkey", "day", "source", "type", "country_code"}
 
 func (f DownloadFilter) Validate() error {
 	if f.Hash != "" {
 		if err := blossom.ValidateHash(f.Hash); err != nil {
 			return fmt.Errorf("invalid hash: %w", err)
+		}
+	}
+	if f.AppPubkey != "" {
+		if !nostr.IsValidPublicKey(f.AppPubkey) {
+			return fmt.Errorf("invalid app_pubkey: %s", f.AppPubkey)
 		}
 	}
 	if f.Type != "" {
@@ -202,6 +205,14 @@ func queryDownloadsSQL(f DownloadFilter) (string, []any) {
 		conds = append(conds, "hash = ?")
 		args = append(args, f.Hash)
 	}
+	if f.AppID != "" {
+		conds = append(conds, "app_id = ?")
+		args = append(args, f.AppID)
+	}
+	if f.AppPubkey != "" {
+		conds = append(conds, "app_pubkey = ?")
+		args = append(args, f.AppPubkey)
+	}
 	if f.Type != "" {
 		conds = append(conds, "type = ?")
 		args = append(args, f.Type)
@@ -241,8 +252,16 @@ func downloadScanTargets(row *DownloadCount, dbCols []string) []any {
 			targets = append(targets, &row.Hash)
 		case "day":
 			targets = append(targets, &row.Day)
+		case "app_id":
+			targets = append(targets, &row.AppID)
+		case "app_version":
+			targets = append(targets, &row.AppVersion)
+		case "app_pubkey":
+			targets = append(targets, &row.AppPubkey)
 		case "source":
 			targets = append(targets, &row.Source)
+		case "type":
+			targets = append(targets, &row.Type)
 		case "country_code":
 			targets = append(targets, &row.CountryCode)
 		}

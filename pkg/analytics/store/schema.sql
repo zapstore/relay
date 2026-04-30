@@ -17,6 +17,9 @@ CREATE INDEX IF NOT EXISTS impressions_country_code ON impressions (country_code
 
 CREATE TABLE IF NOT EXISTS downloads (
   hash          TEXT NOT NULL,
+  app_id        TEXT NOT NULL DEFAULT '',
+  app_version   TEXT NOT NULL DEFAULT '',
+  app_pubkey    TEXT NOT NULL DEFAULT '',
   day           DATE NOT NULL,
   source        TEXT NOT NULL,
   type          TEXT NOT NULL,
@@ -25,6 +28,8 @@ CREATE TABLE IF NOT EXISTS downloads (
   PRIMARY KEY (hash, day, source, type, country_code)
 );
 
+CREATE INDEX IF NOT EXISTS downloads_app_id ON downloads (app_id);
+CREATE INDEX IF NOT EXISTS downloads_app_pubkey ON downloads (app_pubkey);
 CREATE INDEX IF NOT EXISTS downloads_day ON downloads (day);
 CREATE INDEX IF NOT EXISTS downloads_source ON downloads (source);
 CREATE INDEX IF NOT EXISTS downloads_type ON downloads (type);

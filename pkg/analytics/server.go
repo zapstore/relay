@@ -25,8 +25,12 @@ type impressionResponse struct {
 
 type downloadResponse struct {
 	Hash        string `json:"hash,omitempty"`
+	AppID       string `json:"app_id,omitempty"`
+	AppVersion  string `json:"app_version,omitempty"`
+	AppPubkey   string `json:"app_pubkey,omitempty"`
 	Day         string `json:"day,omitempty"`
 	Source      string `json:"source,omitempty"`
+	Type        string `json:"type,omitempty"`
 	CountryCode string `json:"country_code,omitempty"`
 	Count       int    `json:"count"`
 }
@@ -125,21 +129,25 @@ func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 // handleDownloads serves GET /v1/downloads
 //
 // Query params:
-//   - hash       — optional; filter to a specific blob hash
-//   - from       — YYYY-MM-DD inclusive
-//   - to         — YYYY-MM-DD inclusive
-//   - source     — optional; filter to a specific source
-//   - type       — optional; filter to a specific download type
-//   - group_by   — comma-separated subset of: hash, day, source, country
+//   - hash        — optional; filter to a specific blob hash
+//   - app_id      — optional; filter to a specific app
+//   - app_pubkey  — optional; filter to a specific publisher
+//   - from        — YYYY-MM-DD inclusive
+//   - to          — YYYY-MM-DD inclusive
+//   - source      — optional; filter to a specific source
+//   - type        — optional; filter to a specific download type
+//   - group_by    — comma-separated subset of: hash, app_id, app_version, app_pubkey, day, source, type, country_code
 func (e *Engine) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := store.DownloadFilter{
-		Hash:    q.Get("hash"),
-		From:    q.Get("from"),
-		To:      q.Get("to"),
-		Source:  store.Source(q.Get("source")),
-		Type:    store.DownloadType(q.Get("type")),
-		GroupBy: splitCSV(q.Get("group_by")),
+		Hash:      q.Get("hash"),
+		AppID:     q.Get("app_id"),
+		AppPubkey: q.Get("app_pubkey"),
+		From:      q.Get("from"),
+		To:        q.Get("to"),
+		Source:    store.Source(q.Get("source")),
+		Type:      store.DownloadType(q.Get("type")),
+		GroupBy:   splitCSV(q.Get("group_by")),
 	}
 
 	if err := filter.Validate(); err != nil {
@@ -159,8 +167,12 @@ func (e *Engine) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	for i, r := range rows {
 		resp[i] = downloadResponse{
 			Hash:        r.Hash.Hex(),
+			AppID:       r.AppID,
+			AppVersion:  r.AppVersion,
+			AppPubkey:   r.AppPubkey,
 			Day:         r.Day,
 			Source:      string(r.Source),
+			Type:        string(r.Type),
 			CountryCode: r.CountryCode,
 			Count:       r.Count,
 		}
