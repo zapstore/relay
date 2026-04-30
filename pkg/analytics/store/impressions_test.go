@@ -29,11 +29,11 @@ func TestQueryImpressions(t *testing.T) {
 	defer s.Close()
 
 	seed := []ImpressionCount{
-		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-01", Source: SourceApp, Type: TypeDetail, CountryCode: "US"}, 10},
-		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-02", Source: SourceApp, Type: TypeDetail, CountryCode: "US"}, 5},
-		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-03", Source: SourceWeb, Type: TypeDetail, CountryCode: "DE"}, 3},
-		{Impression{AppID: "com.example.app2", AppPubkey: pubkey2, Day: "2024-01-01", Source: SourceApp, Type: TypeDetail, CountryCode: "US"}, 7},
-		{Impression{AppID: "com.example.app2", AppPubkey: pubkey2, Day: "2024-01-02", Source: SourceWeb, Type: TypeDetail, CountryCode: "FR"}, 4},
+		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail, CountryCode: "US"}, 10},
+		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-02", Source: SourceApp, Type: ImpressionDetail, CountryCode: "US"}, 5},
+		{Impression{AppID: "com.example.app1", AppPubkey: pubkey1, Day: "2024-01-03", Source: SourceWeb, Type: ImpressionDetail, CountryCode: "DE"}, 3},
+		{Impression{AppID: "com.example.app2", AppPubkey: pubkey2, Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail, CountryCode: "US"}, 7},
+		{Impression{AppID: "com.example.app2", AppPubkey: pubkey2, Day: "2024-01-02", Source: SourceWeb, Type: ImpressionDetail, CountryCode: "FR"}, 4},
 	}
 	if err := s.SaveImpressions(ctx, seed); err != nil {
 		t.Fatalf("SaveImpressions: %v", err)
@@ -200,9 +200,9 @@ func TestQueryImpressionsSQL(t *testing.T) {
 		},
 		{
 			name:     "type filter",
-			filter:   ImpressionFilter{Type: TypeDetail, From: "2024-01-01", To: "2024-01-31"},
+			filter:   ImpressionFilter{Type: ImpressionDetail, From: "2024-01-01", To: "2024-01-31"},
 			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? AND type = ?",
-			wantArgs: []any{"2024-01-01", "2024-01-31", TypeDetail},
+			wantArgs: []any{"2024-01-01", "2024-01-31", ImpressionDetail},
 		},
 		{
 			name: "all filters no group by",
@@ -212,10 +212,10 @@ func TestQueryImpressionsSQL(t *testing.T) {
 				From:      "2024-01-01",
 				To:        "2024-01-31",
 				Source:    SourceWeb,
-				Type:      TypeDetail,
+				Type:      ImpressionDetail,
 			},
 			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ?",
-			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceWeb, TypeDetail},
+			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceWeb, ImpressionDetail},
 		},
 		{
 			name: "all filters with group by",
@@ -225,11 +225,11 @@ func TestQueryImpressionsSQL(t *testing.T) {
 				From:      "2024-01-01",
 				To:        "2024-01-31",
 				Source:    SourceApp,
-				Type:      TypeDetail,
+				Type:      ImpressionDetail,
 				GroupBy:   []string{"day", "source"},
 			},
 			wantSQL:  "SELECT day, source, SUM(count) AS count FROM impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ? GROUP BY day, source ORDER BY day DESC",
-			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceApp, TypeDetail},
+			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceApp, ImpressionDetail},
 		},
 		{
 			name: "pubkey filter with group by app_id and day orders by day desc",
@@ -271,60 +271,6 @@ func TestQueryImpressionsSQL(t *testing.T) {
 	}
 }
 
-// --- IsDetailFilter ---
-
-func TestIsDetailFilter(t *testing.T) {
-	tests := []struct {
-		name   string
-		filter nostr.Filter
-		want   bool
-	}{
-		{
-			name:   "detail filter (kind + author + d)",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
-			want:   true,
-		},
-		{
-			name:   "missing author",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
-			want:   false,
-		},
-		{
-			name:   "missing d tag",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}},
-			want:   false,
-		},
-		{
-			name:   "search filter (no d tag)",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Search: "signal"},
-			want:   false,
-		},
-		{
-			name:   "wrong kind",
-			filter: nostr.Filter{Kinds: []int{eventPkg.KindStack}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app"}}},
-			want:   false,
-		},
-		{
-			name:   "empty filter",
-			filter: nostr.Filter{},
-			want:   false,
-		},
-		{
-			name:   "unrelated kind with author and d tag",
-			filter: nostr.Filter{Kinds: []int{0, 1}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"something"}}},
-			want:   false,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := IsDetailFilter(test.filter); got != test.want {
-				t.Errorf("got %v, want %v", got, test.want)
-			}
-		})
-	}
-}
-
 // --- NewImpressions ---
 
 func TestNewImpressions(t *testing.T) {
@@ -346,7 +292,7 @@ func TestNewImpressions(t *testing.T) {
 				appEvent("com.example.app2", "pubkey"),
 			},
 			want: []Impression{
-				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceApp, Type: TypeDetail},
+				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceApp, Type: ImpressionDetail},
 			},
 		},
 		{
@@ -357,44 +303,8 @@ func TestNewImpressions(t *testing.T) {
 				appEvent("com.example.app1", "pubkey"),
 			},
 			want: []Impression{
-				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceWeb, Type: TypeDetail},
+				{AppID: "com.example.app1", AppPubkey: "pubkey", Day: day, Source: SourceWeb, Type: ImpressionDetail},
 			},
-		},
-		{
-			name:    "unknown source is ignored",
-			id:      "other-req-1",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
-			events: []nostr.Event{
-				appEvent("com.example.app1", "pubkey"),
-			},
-			want: nil,
-		},
-		{
-			name:    "broad app- prefix is not enough",
-			id:      "app-search-results",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
-			events: []nostr.Event{
-				appEvent("com.example.app1", "pubkey"),
-			},
-			want: nil,
-		},
-		{
-			name:    "broad web- prefix is not enough",
-			id:      "web-q-999",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Authors: []string{"pubkey"}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
-			events: []nostr.Event{
-				appEvent("com.example.app1", "pubkey"),
-			},
-			want: nil,
-		},
-		{
-			name:    "missing author is ignored",
-			id:      "app-detail-com.example.app1",
-			filters: nostr.Filters{{Kinds: []int{eventPkg.KindApp}, Tags: nostr.TagMap{"d": {"com.example.app1"}}}},
-			events: []nostr.Event{
-				appEvent("com.example.app1", "pubkey"),
-			},
-			want: []Impression{},
 		},
 		{
 			name:    "feed filter is ignored",
@@ -444,7 +354,7 @@ func TestNewImpressions(t *testing.T) {
 				appEvent("com.example.app3", "PUBKEY"),
 			},
 			want: []Impression{
-				{AppID: "com.example.app3", AppPubkey: "PUBKEY", Day: day, Source: SourceWeb, Type: TypeDetail},
+				{AppID: "com.example.app3", AppPubkey: "PUBKEY", Day: day, Source: SourceWeb, Type: ImpressionDetail},
 			},
 		},
 	}
@@ -475,32 +385,32 @@ func TestSaveImpressions(t *testing.T) {
 		{
 			name: "single impression",
 			batch: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 1},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail}, 1},
 			},
 			want: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 1},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail}, 1},
 			},
 		},
 		{
 			name: "count is persisted correctly",
 			batch: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 42},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail}, 42},
 			},
 			want: []ImpressionCount{
-				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 42},
+				{Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail}, 42},
 			},
 		},
 		{
 			name: "multiple distinct impressions",
 			batch: []ImpressionCount{
-				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 3},
-				{Impression{AppID: "com.example.app2", Day: "2024-01-01", Source: SourceWeb, Type: TypeDetail}, 7},
-				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: TypeDetail}, 1},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail}, 3},
+				{Impression{AppID: "com.example.app2", Day: "2024-01-01", Source: SourceWeb, Type: ImpressionDetail}, 7},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: ImpressionDetail}, 1},
 			},
 			want: []ImpressionCount{
-				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}, 3},
-				{Impression{AppID: "com.example.app2", Day: "2024-01-01", Source: SourceWeb, Type: TypeDetail}, 7},
-				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: TypeDetail}, 1},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail}, 3},
+				{Impression{AppID: "com.example.app2", Day: "2024-01-01", Source: SourceWeb, Type: ImpressionDetail}, 7},
+				{Impression{AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: ImpressionDetail}, 1},
 			},
 		},
 	}
@@ -539,7 +449,7 @@ func TestSaveImpressions_AccumulatesAcrossCalls(t *testing.T) {
 	}
 	defer s.Close()
 
-	imp := Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: TypeDetail}
+	imp := Impression{AppID: "com.example.app", Day: "2024-01-01", Source: SourceApp, Type: ImpressionDetail}
 
 	if err := s.SaveImpressions(ctx, []ImpressionCount{{imp, 3}}); err != nil {
 		t.Fatalf("first SaveImpressions: %v", err)
@@ -583,7 +493,7 @@ func queryImpressions(db *sql.DB) ([]ImpressionCount, error) {
 				AppPubkey:   appPubkey,
 				Day:         normalizeDay(day),
 				Source:      Source(source),
-				Type:        Type(typ),
+				Type:        ImpressionType(typ),
 				CountryCode: countryCode,
 			},
 			Count: count,

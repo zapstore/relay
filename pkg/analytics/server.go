@@ -90,7 +90,7 @@ func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 		From:      q.Get("from"),
 		To:        q.Get("to"),
 		Source:    store.Source(q.Get("source")),
-		Type:      store.Type(q.Get("type")),
+		Type:      store.ImpressionType(q.Get("type")),
 		GroupBy:   splitCSV(q.Get("group_by")),
 	}
 

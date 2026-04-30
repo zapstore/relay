@@ -29,14 +29,14 @@ func (s Source) IsValid() bool {
 	}
 }
 
-// Type represents the type of impression, which is determined by the REQ.
-type Type string
+// ImpressionType represents the type of impression, which is determined by the REQ.
+type ImpressionType string
 
-const TypeDetail Type = "detail"
+const ImpressionDetail ImpressionType = "detail"
 
-func (t Type) IsValid() bool {
+func (t ImpressionType) IsValid() bool {
 	switch t {
-	case TypeDetail:
+	case ImpressionDetail:
 		return true
 	default:
 		return false
@@ -49,7 +49,7 @@ type Impression struct {
 	AppPubkey   string
 	Day         string // formatted as "YYYY-MM-DD"
 	Source      Source
-	Type        Type
+	Type        ImpressionType
 	CountryCode string // ISO 2 letter code
 }
 
@@ -103,7 +103,7 @@ func NewImpressions(country string, id string, filters nostr.Filters, events []n
 				AppPubkey:   event.PubKey,
 				Day:         day,
 				Source:      source,
-				Type:        TypeDetail,
+				Type:        ImpressionDetail,
 				CountryCode: country,
 			})
 		}
@@ -174,13 +174,13 @@ func (s *Store) SaveImpressions(ctx context.Context, batch []ImpressionCount) er
 
 // ImpressionFilter defines query parameters for QueryImpressions.
 type ImpressionFilter struct {
-	AppID     string   // restricts to a specific app
-	AppPubkey string   // restricts to a specific app publisher
-	From      string   // YYYY-MM-DD, inclusive
-	To        string   // YYYY-MM-DD, inclusive
-	Source    Source   // restricts to a specific source
-	Type      Type     // restricts to a specific type
-	GroupBy   []string // subset of: app_id, app_pubkey, day, source, type, country_code
+	AppID     string         // restricts to a specific app
+	AppPubkey string         // restricts to a specific app publisher
+	From      string         // YYYY-MM-DD, inclusive
+	To        string         // YYYY-MM-DD, inclusive
+	Source    Source         // restricts to a specific source
+	Type      ImpressionType // restricts to a specific type
+	GroupBy   []string       // subset of: app_id, app_pubkey, day, source, type, country_code
 }
 
 var impressionGroupBy = []string{"app_id", "app_pubkey", "day", "source", "type", "country_code"}
