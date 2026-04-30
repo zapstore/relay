@@ -119,7 +119,7 @@ func matchingEvents(f nostr.Filter, events []nostr.Event) []nostr.Event {
 
 // SaveImpressions writes the given batch of counted impressions to the database.
 // On conflict it increments the existing count. An empty batch is a no-op.
-func (s *Store) SaveImpressions(ctx context.Context, batch []ImpressionCount) error {
+func (s *T) SaveImpressions(ctx context.Context, batch []ImpressionCount) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -211,7 +211,7 @@ func (f ImpressionFilter) Validate() error {
 
 // QueryImpressions returns aggregated impression counts matching the given filter.
 // If GroupBy is empty, a single total-count row is returned.
-func (s *Store) QueryImpressions(ctx context.Context, f ImpressionFilter) ([]ImpressionCount, error) {
+func (s *T) QueryImpressions(ctx context.Context, f ImpressionFilter) ([]ImpressionCount, error) {
 	if err := f.Validate(); err != nil {
 		return nil, err
 	}

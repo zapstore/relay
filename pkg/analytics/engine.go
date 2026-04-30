@@ -31,7 +31,7 @@ type Paths struct {
 // Engine is the heart of the analytics system. It's responsible for processing data
 // and saving it in the database on periodic and bounded batches.
 type Engine struct {
-	store *store.Store
+	store *store.T
 	geo   *geo.Locator
 
 	downloads          chan store.Download

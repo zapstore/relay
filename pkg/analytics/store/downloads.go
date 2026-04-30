@@ -75,7 +75,7 @@ func NewDownload(country string, header http.Header, hash blossom.Hash) Download
 
 // SaveDownloads writes the given batch of counted downloads to the database.
 // On conflict it increments the existing count. An empty batch is a no-op.
-func (s *Store) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
+func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -165,7 +165,7 @@ func (f DownloadFilter) Validate() error {
 
 // QueryDownloads returns aggregated download counts matching the given filter.
 // If GroupBy is empty, a single total-count row is returned.
-func (s *Store) QueryDownloads(ctx context.Context, f DownloadFilter) ([]DownloadCount, error) {
+func (s *T) QueryDownloads(ctx context.Context, f DownloadFilter) ([]DownloadCount, error) {
 	if err := f.Validate(); err != nil {
 		return nil, err
 	}

@@ -13,13 +13,13 @@ import (
 //go:embed schema.sql
 var schema string
 
-// Store manages the analytics SQLite database.
-type Store struct {
+// T is the store type that manages the analytics SQLite database.
+type T struct {
 	db *sql.DB
 }
 
 // New opens (or creates) the SQLite database at the given path and applies the schema.
-func New(path string) (*Store, error) {
+func New(path string) (*T, error) {
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to sqlite3 at %s: %w", path, err)
@@ -44,11 +44,11 @@ func New(path string) (*Store, error) {
 		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
 
-	return &Store{db: db}, nil
+	return &T{db: db}, nil
 }
 
 // Close closes the underlying database connection.
-func (s *Store) Close() error {
+func (s *T) Close() error {
 	return s.db.Close()
 }
 

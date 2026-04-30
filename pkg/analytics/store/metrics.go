@@ -24,7 +24,7 @@ type BlossomMetrics struct {
 
 // SaveRelayMetrics writes the given relay metrics to the database for the given day.
 // On conflict it increments the existing counters.
-func (s *Store) SaveRelayMetrics(ctx context.Context, m RelayMetrics) error {
+func (s *T) SaveRelayMetrics(ctx context.Context, m RelayMetrics) error {
 	if m.Reqs == 0 && m.Filters == 0 && m.Events == 0 {
 		return nil
 	}
@@ -46,7 +46,7 @@ func (s *Store) SaveRelayMetrics(ctx context.Context, m RelayMetrics) error {
 
 // SaveBlossomMetrics writes the given blossom metrics to the database for the given day.
 // On conflict it increments the existing counters.
-func (s *Store) SaveBlossomMetrics(ctx context.Context, m BlossomMetrics) error {
+func (s *T) SaveBlossomMetrics(ctx context.Context, m BlossomMetrics) error {
 	if m.Checks == 0 && m.Downloads == 0 && m.Uploads == 0 {
 		return nil
 	}
@@ -67,7 +67,7 @@ func (s *Store) SaveBlossomMetrics(ctx context.Context, m BlossomMetrics) error 
 }
 
 // QueryRelayMetrics returns daily relay metrics for the given date range.
-func (s *Store) QueryRelayMetrics(ctx context.Context, from, to string) ([]RelayMetrics, error) {
+func (s *T) QueryRelayMetrics(ctx context.Context, from, to string) ([]RelayMetrics, error) {
 	query := "SELECT day, reqs, filters, events FROM relay_metrics"
 	var conds []string
 	var args []any
@@ -102,7 +102,7 @@ func (s *Store) QueryRelayMetrics(ctx context.Context, from, to string) ([]Relay
 }
 
 // QueryBlossomMetrics returns daily blossom metrics for the given date range.
-func (s *Store) QueryBlossomMetrics(ctx context.Context, from, to string) ([]BlossomMetrics, error) {
+func (s *T) QueryBlossomMetrics(ctx context.Context, from, to string) ([]BlossomMetrics, error) {
 	query := "SELECT day, checks, downloads, uploads FROM blossom_metrics"
 	var conds []string
 	var args []any
