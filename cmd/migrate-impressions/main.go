@@ -46,6 +46,35 @@ func main() {
 	// 2. Add the new column if not already there (idempotent)
 	adb.Exec(`ALTER TABLE impressions ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`)
 
+	// 3. Recreate the impressions table with app_version in the PRIMARY KEY if needed.
+	// SQLite does not support ALTER TABLE to change primary keys.
+	var pk string
+	if err := adb.QueryRow(`SELECT pk FROM pragma_table_info('impressions') WHERE name = 'app_version'`).Scan(&pk); err != nil {
+		panic(fmt.Errorf("check impressions primary key: %w", err))
+	}
+	if pk == "0" {
+		_, err := adb.Exec(`
+			CREATE TABLE impressions_new (
+				app_id		 TEXT NOT NULL,
+				app_pubkey	 TEXT NOT NULL,
+				app_version	 TEXT NOT NULL DEFAULT '',
+				day			 DATE NOT NULL,
+				source		 TEXT NOT NULL,
+				type		 TEXT NOT NULL,
+				country_code TEXT,
+				count		 INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (app_id, app_pubkey, app_version, day, source, type, country_code)
+			);
+			INSERT INTO impressions_new SELECT app_id, app_pubkey, '', day, source, type, country_code, count FROM impressions;
+			DROP TABLE impressions;
+			ALTER TABLE impressions_new RENAME TO impressions;
+		`)
+		if err != nil {
+			panic(fmt.Errorf("recreate impressions with new primary key: %w", err))
+		}
+		fmt.Println("recreated impressions table with app_version in primary key")
+	}
+
 	// 3. Fetch all distinct (app_id, app_pubkey, day) tuples from impressions.
 	// We query per-day because the current version may have changed between days.
 	rows, err := adb.QueryContext(ctx, `SELECT DISTINCT app_id, app_pubkey, day FROM impressions`)
