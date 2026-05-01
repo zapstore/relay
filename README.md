@@ -92,9 +92,9 @@ $SYSTEM_DIRECTORY_PATH/
 
 All endpoints return a JSON array. Date parameters use the `YYYY-MM-DD` format and are inclusive.
 
-### `GET /v1/impressions`
+### `GET /v1/app/impressions`
 
-Returns aggregated app-impression counts recorded from Nostr REQs.
+Returns aggregated app impression counts recorded from Nostr REQs for kind `32267` app detail views.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -102,21 +102,24 @@ Returns aggregated app-impression counts recorded from Nostr REQs.
 | `app_pubkey` | string | Filter to a specific publisher pubkey |
 | `from` | date | Start of date range (inclusive) |
 | `to` | date | End of date range (inclusive) |
-| `source` | string | Filter to a specific source: `app`, `web`, or `unknown` |
-| `type` | string | Filter to a specific impression type: `detail` |
-| `group_by` | CSV | Comma-separated grouping dimensions: `app_id`, `app_pubkey`, `day`, `source`, `type`, `country_code` |
+| `source` | string | Filter by client source: `app`, `web`, or `unknown` |
+| `type` | string | Filter by impression type: `detail` |
+| `group_by` | CSV | Grouping dimensions: `app_id`, `app_pubkey`, `app_version`, `day`, `source`, `type`, `country_code` |
 
-### `GET /v1/downloads`
+### `GET /v1/app/downloads`
 
-Returns aggregated blob-download counts recorded from Blossom requests.
+Returns aggregated app download counts recorded from Blossom requests for kind `3063` asset blobs.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `hash` | string | Filter to a specific blob hash |
+| `app_id` | string | Filter to a specific app identifier |
+| `app_pubkey` | string | Filter to a specific publisher pubkey |
 | `from` | date | Start of date range (inclusive) |
 | `to` | date | End of date range (inclusive) |
-| `source` | string | Filter to a specific source: `app`, `web`, or `unknown` |
-| `group_by` | CSV | Comma-separated grouping dimensions: `hash`, `day`, `source`, `country_code` |
+| `source` | string | Filter by client source: `app`, `web`, or `unknown` |
+| `type` | string | Filter by download type: `install` or `update` |
+| `group_by` | CSV | Grouping dimensions: `hash`, `app_id`, `app_version`, `app_pubkey`, `day`, `source`, `type`, `country_code` |
 
 ### `GET /v1/metrics/relay`
 

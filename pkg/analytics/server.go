@@ -53,10 +53,10 @@ type blossomMetricsResponse struct {
 // StartAndServe starts the analytics HTTP API and blocks until ctx is cancelled.
 func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/impressions", e.handleImpressions)
-	mux.HandleFunc("GET /v1/downloads", e.handleDownloads)
-	mux.HandleFunc("GET /v1/metrics/relay", e.handleRelayMetrics)
-	mux.HandleFunc("GET /v1/metrics/blossom", e.handleBlossomMetrics)
+	mux.HandleFunc("GET /v1/app/impressions", e.appImpressions)
+	mux.HandleFunc("GET /v1/app/downloads", e.appDownloads)
+	mux.HandleFunc("GET /v1/metrics/relay", e.relayMetrics)
+	mux.HandleFunc("GET /v1/metrics/blossom", e.blossomMetrics)
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	exit := make(chan error, 1)
@@ -77,7 +77,7 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	}
 }
 
-// handleImpressions serves GET /v1/impressions
+// appImpressions serves GET /v1/app/impressions
 //
 // Query params:
 //   - app_id     — optional; filter to a specific app
@@ -87,7 +87,7 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 //   - source     — optional; filter to a specific source
 //   - type       — optional; filter to a specific type
 //   - group_by   — comma-separated subset of: app_id, app_pubkey, app_version, day, source, type, country_code
-func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
+func (e *Engine) appImpressions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := store.ImpressionFilter{
 		AppID:     q.Get("app_id"),
@@ -128,7 +128,7 @@ func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// handleDownloads serves GET /v1/downloads
+// appDownloads serves GET /v1/app/downloads
 //
 // Query params:
 //   - hash        — optional; filter to a specific blob hash
@@ -139,7 +139,7 @@ func (e *Engine) handleImpressions(w http.ResponseWriter, r *http.Request) {
 //   - source      — optional; filter to a specific source
 //   - type        — optional; filter to a specific download type
 //   - group_by    — comma-separated subset of: hash, app_id, app_version, app_pubkey, day, source, type, country_code
-func (e *Engine) handleDownloads(w http.ResponseWriter, r *http.Request) {
+func (e *Engine) appDownloads(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := store.DownloadFilter{
 		Hash:      q.Get("hash"),
@@ -182,12 +182,12 @@ func (e *Engine) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// handleRelayMetrics serves GET /v1/metrics/relay
+// relayMetrics serves GET /v1/metrics/relay
 //
 // Query params:
 //   - from — YYYY-MM-DD inclusive
 //   - to   — YYYY-MM-DD inclusive
-func (e *Engine) handleRelayMetrics(w http.ResponseWriter, r *http.Request) {
+func (e *Engine) relayMetrics(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from, to := q.Get("from"), q.Get("to")
 
@@ -224,12 +224,12 @@ func (e *Engine) handleRelayMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// handleBlossomMetrics serves GET /v1/metrics/blossom
+// blossomMetrics serves GET /v1/metrics/blossom
 //
 // Query params:
 //   - from — YYYY-MM-DD inclusive
 //   - to   — YYYY-MM-DD inclusive
-func (e *Engine) handleBlossomMetrics(w http.ResponseWriter, r *http.Request) {
+func (e *Engine) blossomMetrics(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from, to := q.Get("from"), q.Get("to")
 
