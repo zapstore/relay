@@ -80,10 +80,10 @@ func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO downloads (hash, app_id, app_version, app_pubkey, day, source, type, country_code, count)
+		INSERT INTO app_downloads (hash, app_id, app_version, app_pubkey, day, source, type, country_code, count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(hash, day, source, type, country_code)
-		DO UPDATE SET count = downloads.count + excluded.count
+		DO UPDATE SET count = app_downloads.count + excluded.count
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -197,7 +197,7 @@ func queryDownloadsSQL(f DownloadFilter) (string, []any) {
 	columns := make([]string, 0, len(f.GroupBy)+1)
 	columns = append(columns, f.GroupBy...)
 	columns = append(columns, "SUM(count) AS count")
-	query := "SELECT " + strings.Join(columns, ", ") + " FROM downloads"
+	query := "SELECT " + strings.Join(columns, ", ") + " FROM app_downloads"
 
 	var conds []string
 	var args []any

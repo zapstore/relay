@@ -91,10 +91,10 @@ func (s *T) SaveImpressions(ctx context.Context, batch []ImpressionCount) error 
 	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO impressions (app_id, app_pubkey, app_version, day, source, type, country_code, count)
+		INSERT INTO app_impressions (app_id, app_pubkey, app_version, day, source, type, country_code, count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(app_id, app_pubkey, app_version, day, source, type, country_code)
-		DO UPDATE SET count = impressions.count + excluded.count
+		DO UPDATE SET count = app_impressions.count + excluded.count
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -206,7 +206,7 @@ func queryImpressionsSQL(f ImpressionFilter) (string, []any) {
 	columns := make([]string, 0, len(f.GroupBy)+1)
 	columns = append(columns, f.GroupBy...)
 	columns = append(columns, "SUM(count) AS count")
-	query := "SELECT " + strings.Join(columns, ", ") + " FROM impressions"
+	query := "SELECT " + strings.Join(columns, ", ") + " FROM app_impressions"
 
 	var args []any
 	var conds []string

@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS impressions (
+CREATE TABLE IF NOT EXISTS app_impressions (
   app_id        TEXT NOT NULL,
   app_pubkey    TEXT NOT NULL,
   app_version   TEXT NOT NULL DEFAULT '',
@@ -10,14 +10,14 @@ CREATE TABLE IF NOT EXISTS impressions (
   PRIMARY KEY (app_id, app_pubkey, app_version, day, source, type, country_code)
 );
 
-CREATE INDEX IF NOT EXISTS impressions_app_pubkey ON impressions (app_pubkey);
-CREATE INDEX IF NOT EXISTS impressions_app_version ON impressions (app_version);
-CREATE INDEX IF NOT EXISTS impressions_day ON impressions (day);
-CREATE INDEX IF NOT EXISTS impressions_source ON impressions (source);
-CREATE INDEX IF NOT EXISTS impressions_type ON impressions (type);
-CREATE INDEX IF NOT EXISTS impressions_country_code ON impressions (country_code);
+CREATE INDEX IF NOT EXISTS app_impressions_app_pubkey ON app_impressions (app_pubkey);
+CREATE INDEX IF NOT EXISTS app_impressions_app_version ON app_impressions (app_version);
+CREATE INDEX IF NOT EXISTS app_impressions_day ON app_impressions (day);
+CREATE INDEX IF NOT EXISTS app_impressions_source ON app_impressions (source);
+CREATE INDEX IF NOT EXISTS app_impressions_type ON app_impressions (type);
+CREATE INDEX IF NOT EXISTS app_impressions_country_code ON app_impressions (country_code);
 
-CREATE TABLE IF NOT EXISTS downloads (
+CREATE TABLE IF NOT EXISTS app_downloads (
   hash          TEXT NOT NULL,
   app_id        TEXT NOT NULL DEFAULT '',
   app_version   TEXT NOT NULL DEFAULT '',
@@ -30,12 +30,12 @@ CREATE TABLE IF NOT EXISTS downloads (
   PRIMARY KEY (hash, day, source, type, country_code)
 );
 
-CREATE INDEX IF NOT EXISTS downloads_app_id ON downloads (app_id);
-CREATE INDEX IF NOT EXISTS downloads_app_pubkey ON downloads (app_pubkey);
-CREATE INDEX IF NOT EXISTS downloads_day ON downloads (day);
-CREATE INDEX IF NOT EXISTS downloads_source ON downloads (source);
-CREATE INDEX IF NOT EXISTS downloads_type ON downloads (type);
-CREATE INDEX IF NOT EXISTS downloads_country_code ON downloads (country_code);
+CREATE INDEX IF NOT EXISTS app_downloads_app_id ON app_downloads (app_id);
+CREATE INDEX IF NOT EXISTS app_downloads_app_pubkey ON app_downloads (app_pubkey);
+CREATE INDEX IF NOT EXISTS app_downloads_day ON app_downloads (day);
+CREATE INDEX IF NOT EXISTS app_downloads_source ON app_downloads (source);
+CREATE INDEX IF NOT EXISTS app_downloads_type ON app_downloads (type);
+CREATE INDEX IF NOT EXISTS app_downloads_country_code ON app_downloads (country_code);
 
 
 CREATE TABLE IF NOT EXISTS relay_metrics (

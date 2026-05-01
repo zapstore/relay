@@ -26,43 +26,43 @@ func TestQueryDownloadsSQL(t *testing.T) {
 		{
 			name:     "no filters no group by",
 			filter:   DownloadFilter{},
-			wantSQL:  "SELECT SUM(count) AS count FROM downloads",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_downloads",
 			wantArgs: nil,
 		},
 		{
 			name:     "from and to filters",
 			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_downloads WHERE day >= ? AND day <= ?",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "hash filter",
 			filter:   DownloadFilter{Hash: hStr, From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM downloads WHERE hash = ? AND day >= ? AND day <= ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_downloads WHERE hash = ? AND day >= ? AND day <= ?",
 			wantArgs: []any{hStr, "2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "source filter",
 			filter:   DownloadFilter{Source: SourceApp, From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? AND source = ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_downloads WHERE day >= ? AND day <= ? AND source = ?",
 			wantArgs: []any{"2024-01-01", "2024-01-31", SourceApp},
 		},
 		{
 			name:     "group by hash emits SELECT col and GROUP BY clause",
 			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"hash"}},
-			wantSQL:  "SELECT hash, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY hash",
+			wantSQL:  "SELECT hash, SUM(count) AS count FROM app_downloads WHERE day >= ? AND day <= ? GROUP BY hash",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "group by day emits ORDER BY day DESC",
 			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"day"}},
-			wantSQL:  "SELECT day, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY day ORDER BY day DESC",
+			wantSQL:  "SELECT day, SUM(count) AS count FROM app_downloads WHERE day >= ? AND day <= ? GROUP BY day ORDER BY day DESC",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "group by country_code",
 			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"country_code"}},
-			wantSQL:  "SELECT country_code, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY country_code",
+			wantSQL:  "SELECT country_code, SUM(count) AS count FROM app_downloads WHERE day >= ? AND day <= ? GROUP BY country_code",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 		{
@@ -74,13 +74,13 @@ func TestQueryDownloadsSQL(t *testing.T) {
 				Source:  SourceWeb,
 				GroupBy: []string{"hash", "day"},
 			},
-			wantSQL:  "SELECT hash, day, SUM(count) AS count FROM downloads WHERE hash = ? AND day >= ? AND day <= ? AND source = ? GROUP BY hash, day ORDER BY day DESC",
+			wantSQL:  "SELECT hash, day, SUM(count) AS count FROM app_downloads WHERE hash = ? AND day >= ? AND day <= ? AND source = ? GROUP BY hash, day ORDER BY day DESC",
 			wantArgs: []any{hStr, "2024-01-01", "2024-01-31", SourceWeb},
 		},
 		{
 			name:     "group by does not mutate caller slice",
 			filter:   DownloadFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"hash"}},
-			wantSQL:  "SELECT hash, SUM(count) AS count FROM downloads WHERE day >= ? AND day <= ? GROUP BY hash",
+			wantSQL:  "SELECT hash, SUM(count) AS count FROM app_downloads WHERE day >= ? AND day <= ? GROUP BY hash",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 	}
@@ -337,7 +337,7 @@ func TestQueryDownloads(t *testing.T) {
 // --- Helpers ---
 
 func allDownloads(db *sql.DB) ([]DownloadCount, error) {
-	rows, err := db.Query(`SELECT hash, app_id, app_version, app_pubkey, day, source, type, country_code, count FROM downloads`)
+	rows, err := db.Query(`SELECT hash, app_id, app_version, app_pubkey, day, source, type, country_code, count FROM app_downloads`)
 	if err != nil {
 		return nil, err
 	}

@@ -45,10 +45,10 @@ func main() {
 
 	// 2. Add the new columns and indexes if not already there (idempotent)
 	for _, stmt := range []string{
-		`ALTER TABLE downloads ADD COLUMN app_id      TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE downloads ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE downloads ADD COLUMN app_pubkey  TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE downloads ADD COLUMN type        TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE app_downloads ADD COLUMN app_id      TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE app_downloads ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE app_downloads ADD COLUMN app_pubkey  TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE app_downloads ADD COLUMN type        TEXT NOT NULL DEFAULT 'unknown'`,
 	} {
 		if _, err := adb.Exec(stmt); err != nil {
 			if !strings.Contains(err.Error(), "duplicate column") {
@@ -57,9 +57,9 @@ func main() {
 		}
 	}
 	for _, stmt := range []string{
-		`CREATE INDEX IF NOT EXISTS downloads_type      ON downloads (type)`,
-		`CREATE INDEX IF NOT EXISTS downloads_app_id    ON downloads (app_id)`,
-		`CREATE INDEX IF NOT EXISTS downloads_app_pubkey ON downloads (app_pubkey)`,
+		`CREATE INDEX IF NOT EXISTS app_downloads_type      ON app_downloads (type)`,
+		`CREATE INDEX IF NOT EXISTS app_downloads_app_id    ON app_downloads (app_id)`,
+		`CREATE INDEX IF NOT EXISTS app_downloads_app_pubkey ON app_downloads (app_pubkey)`,
 	} {
 		if _, err := adb.Exec(stmt); err != nil {
 			panic(err)
@@ -67,7 +67,7 @@ func main() {
 	}
 
 	// 3. Fetch all distinct hashes from downloads
-	rows, err := adb.QueryContext(ctx, `SELECT DISTINCT hash FROM downloads`)
+	rows, err := adb.QueryContext(ctx, `SELECT DISTINCT hash FROM app_downloads`)
 	if err != nil {
 		panic(err)
 	}
@@ -92,7 +92,7 @@ func main() {
 			panic(err)
 		}
 		if len(assets) == 0 {
-			if _, err = adb.ExecContext(ctx, "DELETE FROM downloads WHERE hash = ?", hash); err != nil {
+			if _, err = adb.ExecContext(ctx, "DELETE FROM app_downloads WHERE hash = ?", hash); err != nil {
 				panic(err)
 			}
 			deleted++
@@ -123,7 +123,7 @@ func main() {
 
 		// 5. Backfill all rows for this hash
 		if _, err = adb.ExecContext(ctx,
-			`UPDATE downloads SET app_id = ?, app_version = ?, app_pubkey = ? WHERE hash = ?`,
+			`UPDATE app_downloads SET app_id = ?, app_version = ?, app_pubkey = ? WHERE hash = ?`,
 			appID, appVersion, asset.PubKey, hash,
 		); err != nil {
 			panic(err)

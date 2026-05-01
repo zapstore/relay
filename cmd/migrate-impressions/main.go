@@ -44,17 +44,17 @@ func main() {
 	defer rdb.Close()
 
 	// 2. Add the new column if not already there (idempotent)
-	adb.Exec(`ALTER TABLE impressions ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`)
+	adb.Exec(`ALTER TABLE app_impressions ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`)
 
 	// 3. Recreate the impressions table with app_version in the PRIMARY KEY if needed.
 	// SQLite does not support ALTER TABLE to change primary keys.
 	var pk string
-	if err := adb.QueryRow(`SELECT pk FROM pragma_table_info('impressions') WHERE name = 'app_version'`).Scan(&pk); err != nil {
+	if err := adb.QueryRow(`SELECT pk FROM pragma_table_info('app_impressions') WHERE name = 'app_version'`).Scan(&pk); err != nil {
 		panic(fmt.Errorf("check impressions primary key: %w", err))
 	}
 	if pk == "0" {
 		_, err := adb.Exec(`
-			CREATE TABLE impressions_new (
+			CREATE TABLE app_impressions_new (
 				app_id		 TEXT NOT NULL,
 				app_pubkey	 TEXT NOT NULL,
 				app_version	 TEXT NOT NULL DEFAULT '',
@@ -65,9 +65,9 @@ func main() {
 				count		 INTEGER NOT NULL DEFAULT 0,
 				PRIMARY KEY (app_id, app_pubkey, app_version, day, source, type, country_code)
 			);
-			INSERT INTO impressions_new SELECT app_id, app_pubkey, '', day, source, type, country_code, count FROM impressions;
-			DROP TABLE impressions;
-			ALTER TABLE impressions_new RENAME TO impressions;
+			INSERT INTO app_impressions_new SELECT app_id, app_pubkey, '', day, source, type, country_code, count FROM app_impressions;
+			DROP TABLE app_impressions;
+			ALTER TABLE app_impressions_new RENAME TO app_impressions;
 		`)
 		if err != nil {
 			panic(fmt.Errorf("recreate impressions with new primary key: %w", err))
@@ -77,7 +77,7 @@ func main() {
 
 	// 3. Fetch all distinct (app_id, app_pubkey, day) tuples from impressions.
 	// We query per-day because the current version may have changed between days.
-	rows, err := adb.QueryContext(ctx, `SELECT DISTINCT app_id, app_pubkey, day FROM impressions`)
+	rows, err := adb.QueryContext(ctx, `SELECT DISTINCT app_id, app_pubkey, day FROM app_impressions`)
 	if err != nil {
 		panic(err)
 	}
@@ -129,7 +129,7 @@ func main() {
 
 		// 6. Backfill all rows for this (app_id, app_pubkey, day) tuple
 		if _, err = adb.ExecContext(ctx,
-			`UPDATE impressions SET app_version = ? WHERE app_id = ? AND app_pubkey = ? AND day = ?`,
+			`UPDATE app_impressions SET app_version = ? WHERE app_id = ? AND app_pubkey = ? AND day = ?`,
 			appVersion, appID, appPubkey, day,
 		); err != nil {
 			panic(err)

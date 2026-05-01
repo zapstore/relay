@@ -171,37 +171,37 @@ func TestQueryImpressionsSQL(t *testing.T) {
 		{
 			name:     "no filters no group by",
 			filter:   ImpressionFilter{From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_impressions WHERE day >= ? AND day <= ?",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "group by only emits SELECT cols and GROUP BY clause",
 			filter:   ImpressionFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"app_id", "day"}},
-			wantSQL:  "SELECT app_id, day, SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? GROUP BY app_id, day ORDER BY day DESC",
+			wantSQL:  "SELECT app_id, day, SUM(count) AS count FROM app_impressions WHERE day >= ? AND day <= ? GROUP BY app_id, day ORDER BY day DESC",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "app_id filter",
 			filter:   ImpressionFilter{AppID: "com.example.app", From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE app_id = ? AND day >= ? AND day <= ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_impressions WHERE app_id = ? AND day >= ? AND day <= ?",
 			wantArgs: []any{"com.example.app", "2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "app_pubkey filter",
 			filter:   ImpressionFilter{AppPubkey: "deadbeef", From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE app_pubkey = ? AND day >= ? AND day <= ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_impressions WHERE app_pubkey = ? AND day >= ? AND day <= ?",
 			wantArgs: []any{"deadbeef", "2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "source filter",
 			filter:   ImpressionFilter{Source: SourceApp, From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? AND source = ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_impressions WHERE day >= ? AND day <= ? AND source = ?",
 			wantArgs: []any{"2024-01-01", "2024-01-31", SourceApp},
 		},
 		{
 			name:     "type filter",
 			filter:   ImpressionFilter{Type: ImpressionDetail, From: "2024-01-01", To: "2024-01-31"},
-			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? AND type = ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_impressions WHERE day >= ? AND day <= ? AND type = ?",
 			wantArgs: []any{"2024-01-01", "2024-01-31", ImpressionDetail},
 		},
 		{
@@ -214,7 +214,7 @@ func TestQueryImpressionsSQL(t *testing.T) {
 				Source:    SourceWeb,
 				Type:      ImpressionDetail,
 			},
-			wantSQL:  "SELECT SUM(count) AS count FROM impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ?",
+			wantSQL:  "SELECT SUM(count) AS count FROM app_impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ?",
 			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceWeb, ImpressionDetail},
 		},
 		{
@@ -228,7 +228,7 @@ func TestQueryImpressionsSQL(t *testing.T) {
 				Type:      ImpressionDetail,
 				GroupBy:   []string{"day", "source"},
 			},
-			wantSQL:  "SELECT day, source, SUM(count) AS count FROM impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ? GROUP BY day, source ORDER BY day DESC",
+			wantSQL:  "SELECT day, source, SUM(count) AS count FROM app_impressions WHERE app_id = ? AND app_pubkey = ? AND day >= ? AND day <= ? AND source = ? AND type = ? GROUP BY day, source ORDER BY day DESC",
 			wantArgs: []any{"com.example.app", "deadbeef", "2024-01-01", "2024-01-31", SourceApp, ImpressionDetail},
 		},
 		{
@@ -239,13 +239,13 @@ func TestQueryImpressionsSQL(t *testing.T) {
 				To:        "2024-01-31",
 				GroupBy:   []string{"app_id", "day"},
 			},
-			wantSQL:  "SELECT app_id, day, SUM(count) AS count FROM impressions WHERE app_pubkey = ? AND day >= ? AND day <= ? GROUP BY app_id, day ORDER BY day DESC",
+			wantSQL:  "SELECT app_id, day, SUM(count) AS count FROM app_impressions WHERE app_pubkey = ? AND day >= ? AND day <= ? GROUP BY app_id, day ORDER BY day DESC",
 			wantArgs: []any{"deadbeef", "2024-01-01", "2024-01-31"},
 		},
 		{
 			name:     "group by does not mutate caller slice",
 			filter:   ImpressionFilter{From: "2024-01-01", To: "2024-01-31", GroupBy: []string{"app_id"}},
-			wantSQL:  "SELECT app_id, SUM(count) AS count FROM impressions WHERE day >= ? AND day <= ? GROUP BY app_id",
+			wantSQL:  "SELECT app_id, SUM(count) AS count FROM app_impressions WHERE day >= ? AND day <= ? GROUP BY app_id",
 			wantArgs: []any{"2024-01-01", "2024-01-31"},
 		},
 	}
@@ -374,7 +374,7 @@ func TestSaveImpressions_AccumulatesAcrossCalls(t *testing.T) {
 // --- Helpers ---
 
 func queryImpressions(db *sql.DB) ([]ImpressionCount, error) {
-	rows, err := db.Query(`SELECT app_id, app_pubkey, day, source, type, country_code, count FROM impressions`)
+	rows, err := db.Query(`SELECT app_id, app_pubkey, day, source, type, country_code, count FROM app_impressions`)
 	if err != nil {
 		return nil, err
 	}
