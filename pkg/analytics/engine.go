@@ -172,7 +172,7 @@ func (e *Engine) RecordReq(client rely.Client, id string, filters nostr.Filters,
 	day := store.Today()
 
 	for _, f := range filters {
-		if !store.IsDetailFilter(f) {
+		if !store.IsDetailFilter(id, f) {
 			continue
 		}
 

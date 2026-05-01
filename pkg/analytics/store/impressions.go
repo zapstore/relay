@@ -62,14 +62,12 @@ func ParseImpressionSource(id string) Source {
 	}
 }
 
-// IsDetailFilter reports whether the filter represents an app detail view
-func IsDetailFilter(filter nostr.Filter) bool {
-	for _, k := range filter.Kinds {
-		if k == eventPkg.KindApp && len(filter.Tags["d"]) > 0 {
-			return true
-		}
-	}
-	return false
+// IsDetailFilter reports whether the REQ id + filter represents an app detail view
+func IsDetailFilter(id string, f nostr.Filter) bool {
+	detailInId := strings.Contains(id, "detail")
+	hasKindApp := slices.Contains(f.Kinds, eventPkg.KindApp)
+	hasTagD := len(f.Tags["d"]) > 0
+	return detailInId && hasKindApp && hasTagD
 }
 
 // Today returns the current day formatted as "YYYY-MM-DD".
