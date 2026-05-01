@@ -20,6 +20,15 @@ func main() {
 	relayDB := flag.String("relay-db", "", "path to relay/nostr sqlite db")
 	flag.Parse()
 
+	if *analyticsDB == "" {
+		fmt.Println("analytics-db is required")
+		return
+	}
+	if *relayDB == "" {
+		fmt.Println("relay-db is required")
+		return
+	}
+
 	// 1. Open both DBs
 	adb, err := sql.Open("sqlite3", *analyticsDB)
 	if err != nil {
@@ -33,13 +42,23 @@ func main() {
 	}
 	defer rdb.Close()
 
-	// 2. Add the new columns if not already there (idempotent)
-	for _, col := range []string{
+	// 2. Add the new columns and indexes if not already there (idempotent)
+	for _, stmt := range []string{
 		`ALTER TABLE downloads ADD COLUMN app_id      TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE downloads ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE downloads ADD COLUMN app_pubkey  TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE downloads ADD COLUMN type        TEXT NOT NULL DEFAULT 'unknown'`,
 	} {
-		adb.Exec(col) // ignore "duplicate column" errors
+		adb.Exec(stmt) // ignore "duplicate column" errors
+	}
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS downloads_type      ON downloads (type)`,
+		`CREATE INDEX IF NOT EXISTS downloads_app_id    ON downloads (app_id)`,
+		`CREATE INDEX IF NOT EXISTS downloads_app_pubkey ON downloads (app_pubkey)`,
+	} {
+		if _, err := adb.Exec(stmt); err != nil {
+			panic(err)
+		}
 	}
 
 	// 3. Fetch all distinct hashes from downloads
