@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -226,12 +227,41 @@ func (r resolver) LatestVersion(ctx context.Context, appID, pubkey string) (stri
 	if err != nil {
 		return "", fmt.Errorf("failed to query: %w", err)
 	}
-	if len(assets) == 0 {
-		return "", errors.New("no assets found")
+
+	if len(assets) > 0 {
+		version, found := events.Find(assets[0].Tags, "version")
+		if !found {
+			return "", fmt.Errorf("no version tag found for app %s/%s", appID, pubkey)
+		}
+		return version, nil
+
+	} else {
+		// this is most likely caused by the app being on the old format with kind 1063,
+		// so we fall back to the version in the release kind
+		aTag := fmt.Sprintf("32267:%s:%s", pubkey, appID)
+		filter = nostr.Filter{
+			Kinds:   []int{events.KindRelease},
+			Authors: []string{pubkey},
+			Tags:    nostr.TagMap{"a": []string{aTag}},
+			Limit:   1,
+		}
+
+		assets, err = r.db.Query(ctx, filter)
+		if err != nil {
+			return "", fmt.Errorf("failed to query: %w", err)
+		}
+		if len(assets) == 0 {
+			return "", errors.New("no assets found")
+		}
+
+		dTag, found := events.Find(assets[0].Tags, "d")
+		if !found {
+			return "", fmt.Errorf("no d tag found for app %s/%s", appID, pubkey)
+		}
+		_, version, ok := strings.Cut(dTag, "@")
+		if !ok {
+			return "", fmt.Errorf("invalid d tag: %s", dTag)
+		}
+		return version, nil
 	}
-	version, found := events.Find(assets[0].Tags, "version")
-	if !found {
-		return "", fmt.Errorf("no version tag found for app %s/%s", appID, pubkey)
-	}
-	return version, nil
 }
