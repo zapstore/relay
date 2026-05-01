@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -22,26 +24,6 @@ import (
 	"github.com/zapstore/relay/pkg/relay"
 	eventstore "github.com/zapstore/relay/pkg/relay/store"
 )
-
-// assetResolver implements blossom.AssetResolver by querying the relay event store
-// for kind 3063 (Software Asset) events whose "x" tag matches the requested hash.
-type assetResolver struct {
-	db *sqlite.Store
-}
-
-func (r *assetResolver) ResolveAssetURL(ctx context.Context, hash string) (string, bool, error) {
-	filter := nostr.Filter{
-		Kinds: []int{events.KindAsset},
-		Tags:  nostr.TagMap{"x": []string{hash}},
-		Limit: 1,
-	}
-	found, err := r.db.Query(ctx, filter)
-	if err != nil || len(found) == 0 {
-		return "", false, err
-	}
-	url, ok := events.Find(found[0].Tags, "url")
-	return url, ok, nil
-}
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -100,12 +82,15 @@ func main() {
 		panic(err)
 	}
 
-	paths := analytics.Paths{
-		Store: filepath.Join(analyticsDir, "analytics.db"),
-		Geo:   filepath.Join(analyticsDir, "geo.mmdb"),
-	}
-
-	analytics, err := analytics.NewEngine(config.Analytics, paths, logger, nil /* TODO: wire relay store as Resolver */)
+	analytics, err := analytics.NewEngine(
+		config.Analytics,
+		analytics.Paths{
+			Store: filepath.Join(analyticsDir, "analytics.db"),
+			Geo:   filepath.Join(analyticsDir, "geo.mmdb"),
+		},
+		logger,
+		resolver{db: rstore},
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -148,7 +133,7 @@ func main() {
 		defender,
 		bstore,
 		analytics,
-		&assetResolver{db: rstore},
+		resolver{db: rstore},
 	)
 	if err != nil {
 		panic(err)
@@ -196,4 +181,57 @@ func main() {
 	case err := <-exit:
 		panic(err)
 	}
+}
+
+// Resolver implements [analytics.Resolver] and [blossom.AssetResolver]
+type resolver struct {
+	db *sqlite.Store
+}
+
+func (r resolver) ResolveAssetURL(ctx context.Context, hash string) (string, bool, error) {
+	filter := nostr.Filter{
+		Kinds: []int{events.KindAsset},
+		Tags:  nostr.TagMap{"x": []string{hash}},
+		Limit: 1,
+	}
+	found, err := r.db.Query(ctx, filter)
+	if err != nil || len(found) == 0 {
+		return "", false, err
+	}
+	url, ok := events.Find(found[0].Tags, "url")
+	return url, ok, nil
+}
+
+func (r resolver) AssetsReferencing(ctx context.Context, hash blossom.Hash) ([]nostr.Event, error) {
+	filter := nostr.Filter{
+		Kinds: []int{events.KindAsset},
+		Tags:  nostr.TagMap{"x": []string{hash.Hex()}},
+		Limit: 10,
+	}
+	assets, err := r.db.Query(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch assets referencing blob %s: %w", hash.Hex(), err)
+	}
+	return assets, nil
+}
+
+func (r resolver) LatestVersion(ctx context.Context, appID, pubkey string) (string, error) {
+	filter := nostr.Filter{
+		Kinds:   []int{events.KindAsset},
+		Authors: []string{pubkey},
+		Tags:    nostr.TagMap{"i": []string{appID}},
+		Limit:   10,
+	}
+	assets, err := r.db.Query(ctx, filter)
+	if err != nil {
+		return "", fmt.Errorf("failed to query: %w", err)
+	}
+	if len(assets) == 0 {
+		return "", errors.New("no assets found")
+	}
+	version, found := events.Find(assets[0].Tags, "version")
+	if !found {
+		return "", fmt.Errorf("no version tag found for app %s/%s", appID, pubkey)
+	}
+	return version, nil
 }

@@ -35,6 +35,8 @@ type AssetResolver interface {
 	ResolveAssetURL(ctx context.Context, hash string) (url string, found bool, err error)
 }
 
+type Hash = blossom.Hash
+
 func Setup(
 	config Config,
 	limiter rate.Limiter,

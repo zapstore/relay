@@ -57,7 +57,7 @@ type Resolver interface {
 	// AssetsReferencing returns all kind 3063 asset events whose "x" tag matches the given
 	// blossom hash. Normally this is a single event, but multiple assets can reference the
 	// same blob in the case of a fork (different app_id, same binary).
-	AssetsReferencing(context.Context, blossom.Hash) ([]nostr.Event, error)
+	AssetsReferencing(ctx context.Context, hash blossom.Hash) ([]nostr.Event, error)
 
 	// LatestVersion returns the version string of the most recent kind 3063 asset published
 	// for the given app (identified by app_id and pubkey). It is used to annotate impressions
@@ -84,8 +84,10 @@ func NewEngine(
 	logger *slog.Logger,
 	resolver Resolver,
 ) (*Engine, error) {
+
 	var err error
 	engine := &Engine{
+		resolver:           resolver,
 		impressions:        make(chan store.Impression, c.QueueSize),
 		downloads:          make(chan store.Download, c.QueueSize),
 		pendingImpressions: make(map[store.Impression]int),
