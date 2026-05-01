@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nbd-wtf/go-nostr"
@@ -49,7 +50,11 @@ func main() {
 		`ALTER TABLE downloads ADD COLUMN app_pubkey  TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE downloads ADD COLUMN type        TEXT NOT NULL DEFAULT 'unknown'`,
 	} {
-		adb.Exec(stmt) // ignore "duplicate column" errors
+		if _, err := adb.Exec(stmt); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				panic(err)
+			}
+		}
 	}
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS downloads_type      ON downloads (type)`,
