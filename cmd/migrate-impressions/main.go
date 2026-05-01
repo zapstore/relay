@@ -21,6 +21,15 @@ func main() {
 	relayDB := flag.String("relay-db", "", "path to relay/nostr sqlite db")
 	flag.Parse()
 
+	if *analyticsDB == "" {
+		fmt.Println("analytics-db is required")
+		return
+	}
+	if *relayDB == "" {
+		fmt.Println("relay-db is required")
+		return
+	}
+
 	// 1. Open both DBs
 	adb, err := sql.Open("sqlite3", *analyticsDB)
 	if err != nil {
@@ -51,6 +60,7 @@ func main() {
 		if err := rows.Scan(&appID, &appPubkey, &day); err != nil {
 			panic(err)
 		}
+		day = normalizeDay(day)
 
 		// 4. Parse the day and compute the end-of-day unix timestamp.
 		// We want the newest kind 3063 for this app that existed on that day,
@@ -99,4 +109,14 @@ func main() {
 	}
 
 	fmt.Printf("done: updated=%d skipped=%d\n", updated, skipped)
+}
+
+// normalizeDay truncates the day string to 10 characters if it exceeds that length.
+// This is done because Sqlite returns the day as a string with the time included,
+// e.g. "2023-01-01 12:00:00".
+func normalizeDay(day string) string {
+	if len(day) > 10 {
+		return day[:10]
+	}
+	return day
 }
