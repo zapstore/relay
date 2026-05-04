@@ -7,6 +7,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -229,7 +230,9 @@ func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 
 	assets, err := e.resolver.AssetsReferencing(r.Context(), hash)
 	if err != nil {
-		e.log.Error("analytics: failed to resolve assets", "error", err)
+		if !errors.Is(err, context.Canceled) {
+			e.log.Error("analytics: failed to resolve assets", "error", err)
+		}
 		return
 	}
 	if len(assets) == 0 {
@@ -237,20 +240,26 @@ func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 		// so we don't care about recording this download
 		return
 	}
-	if len(assets) > 1 {
-		e.log.Info("analytics: multiple assets referencing a blob", "hash", hash, "count", len(assets))
-	}
 
 	day := store.Today()
 	source := store.ParseDownloadSource(r.Raw().Header)
 	typ := store.ParseDownloadType(r.Raw().Header)
 	country := e.lookupCountry(r.IP().Raw)
 
+	seenApps := make(map[string]struct{})
 	for i, asset := range assets {
 		appID, ok := events.Find(asset.Tags, "i")
 		if !ok {
 			continue
 		}
+
+		// we don't want to record the same app multiple times,
+		// even if the blob hash is referenced by multiple assets of the same app.
+		// TODO: the client should send the app ID in the http request.
+		if _, ok := seenApps[appID]; ok {
+			continue
+		}
+		seenApps[appID] = struct{}{}
 
 		appVersion, ok := events.Find(asset.Tags, "version")
 		if !ok {
