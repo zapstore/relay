@@ -24,6 +24,7 @@ import (
 )
 
 var (
+	ErrClientGone  = &blossom.Error{Code: 499, Reason: "client request was cancelled"}
 	ErrNotFound    = blossom.ErrNotFound("blob not found")
 	ErrInternal    = blossom.ErrInternal("internal error, please contact the Zapstore team.")
 	ErrNotAllowed  = blossom.ErrForbidden("authenticated pubkey is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
@@ -109,7 +110,7 @@ func Download(db *store.Store, client bunny.Client, resolver AssetResolver, anal
 
 		meta, err := db.Query(ctx, hash)
 		if errors.Is(err, context.Canceled) {
-			return nil, nil
+			return nil, ErrClientGone
 		}
 		if err != nil && !errors.Is(err, store.ErrBlobNotFound) {
 			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
