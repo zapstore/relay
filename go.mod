@@ -13,7 +13,7 @@ require (
 	github.com/pippellia-btc/blossy v0.3.0
 	github.com/pippellia-btc/rate v0.2.1
 	github.com/pippellia-btc/rely v1.5.0
-	github.com/vertex-lab/nostr-sqlite v0.6.1
+	github.com/vertex-lab/nostr-sqlite v0.7.0
 	github.com/zapstore/defender v0.2.2
 )
 

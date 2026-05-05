@@ -29,8 +29,9 @@ func New(path string) (*sqlite.Store, error) {
 		sqlite.WithQueryBuilder(queryBuilder),
 		sqlite.WithBusyTimeout(10*time.Second),
 		sqlite.WithCacheSize(256*sqlite.MiB),
-		sqlite.WithoutEventPolicy(),  // events have been validated by the relay
-		sqlite.WithoutFilterPolicy(), // filters have been validated by the relay
+		sqlite.WithoutEventPolicy(), // events have been validated by the relay
+		sqlite.WithoutQueryPolicy(), // req queries have been validated by the relay
+		sqlite.WithoutCountPolicy(), // count queries have been validated by the relay
 	)
 	if err != nil {
 		return nil, err

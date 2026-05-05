@@ -336,11 +336,11 @@ func TestAppFTSIndexing(t *testing.T) {
 		t.Errorf("content mismatch: got %q, want %q", content, event.Content)
 	}
 
-	deleted, err := store.Delete(ctx, event.ID)
+	deleted, err := store.Delete(ctx, nostr.Filter{IDs: []string{event.ID}})
 	if err != nil {
 		t.Fatalf("failed to delete event: %v", err)
 	}
-	if !deleted {
+	if deleted == 0 {
 		t.Fatal("event was not deleted")
 	}
 

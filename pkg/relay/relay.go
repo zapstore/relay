@@ -378,7 +378,7 @@ func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e 
 		}
 
 		if existingID == "" {
-			// No conflict — new app or NIP-33 replace by same pubkey
+			// No conflict: new app or a normal replacement by the same pubkey
 			return nil
 		}
 
@@ -395,16 +395,15 @@ func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e 
 		// 	slog.Info("AppOwnership: indexer takeover", "app_id", appID, "old_pubkey", existingPubkey[:16])
 		// 	return nil
 
-		case !newIsIndexer && existingIsIndexer:
+		case existingIsIndexer && !newIsIndexer:
 			// Developer reclaim: delete indexer's app event
-			deleted, err := db.Delete(ctx, existingID)
+			deleted, err := db.Delete(ctx, nostr.Filter{IDs: []string{existingID}})
 			if err != nil {
 				slog.Error("AppOwnership: failed to delete indexer app event for developer reclaim", "id", existingID, "error", err)
 				return ErrInternal
 			}
-			if deleted {
-				slog.Info("AppOwnership: developer reclaim", "app_id", appID, "new_pubkey", e.PubKey[:16])
-				return ErrInternal
+			if deleted > 0 {
+				slog.Info("AppOwnership: developer reclaim", "app_id", appID, "new_pubkey", e.PubKey)
 			}
 			return nil
 
@@ -429,13 +428,13 @@ func NotAnchored(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
 
 		switch e.Kind {
 		case events.KindProfile:
-			publisher, err := PubkeyExists(ctx, db, e.PubKey)
+			isPublisher, err := db.Has(ctx, nostr.Filter{Authors: []string{e.PubKey}})
 			if err != nil {
 				slog.Error("NotAnchored: failed to check kind:0", "err", err)
 				return ErrInternal
 			}
 
-			if !publisher {
+			if !isPublisher {
 				return ErrProfileUnknown
 			}
 
@@ -443,96 +442,59 @@ func NotAnchored(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
 			aTag, hasA := events.Find(e.Tags, "A")
 			eTag, hasE := events.Find(e.Tags, "e")
 			if !hasA && !hasE {
-				return errors.New("kind 1111: must have an 'A' tag (root) or 'e' tag (reply)")
+				return fmt.Errorf("kind %d: must have an 'A' tag (root) or 'e' tag (reply)", e.Kind)
 			}
 
 			if hasA {
 				// A tag must reference a known app kind:32267 or stack kind:30267 event
 				ref, err := events.ParseAddressableRef(aTag)
 				if err != nil {
-					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %w", err)
+					return fmt.Errorf("kind %d: 'A' tag must reference a kind 32267 or kind 30267: %w", e.Kind, err)
+				}
+				if err := ref.Validate(); err != nil {
+					return fmt.Errorf("kind %d: 'A' tag must reference a kind 32267 or kind 30267: %w", e.Kind, err)
 				}
 				if ref.Kind != events.KindApp && ref.Kind != events.KindStack {
-					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
+					return fmt.Errorf("kind %d: 'A' tag must reference a kind 32267 or kind 30267: %d", e.Kind, ref.Kind)
 				}
 
-				exists, err := AddressExists(ctx, db, ref)
+				f := nostr.Filter{
+					Authors: []string{ref.Pubkey},
+					Kinds:   []int{ref.Kind},
+					Tags:    nostr.TagMap{"d": []string{ref.DTag}},
+				}
+
+				exists, err := db.Has(ctx, f)
 				if err != nil {
-					slog.Error("NotAnchored: failed to check kind:1111", "error", err, "tag", aTag)
+					slog.Error("NotAnchored: failed to check comment or zap", "error", err, "event", e.ID, "tag", aTag)
 					return ErrInternal
 				}
 
 				if !exists {
-					return errors.New("kind 1111: A tag reference not found on this relay")
+					return fmt.Errorf("kind %d: A tag reference not found on this relay", e.Kind)
 				}
 			}
 
 			if hasE {
 				// e tag must reference a known kind:11 or kind:1111 event
-				exists, err := PostOrCommentExists(ctx, db, eTag)
+				f := nostr.Filter{
+					IDs:   []string{eTag},
+					Kinds: []int{events.KindForumPost, events.KindComment},
+				}
+
+				exists, err := db.Has(ctx, f)
 				if err != nil {
-					slog.Error("NotAnchored: failed to check kind:1111", "error", err, "tag", eTag)
+					slog.Error("NotAnchored: failed to check comment or zap", "error", err, "event", e.ID, "tag", eTag)
 					return ErrInternal
 				}
 
 				if !exists {
-					return errors.New("kind 1111: e tag reference not found for kind:11 or kind:1111 on this relay")
+					return fmt.Errorf("kind %d: e tag reference not found on this relay", e.Kind)
 				}
 			}
 		}
 		return nil
 	}
-}
-
-// PubkeyExists checks if a pubkey has published an event before.
-func PubkeyExists(ctx context.Context, db *sqlite.Store, pubkey string) (bool, error) {
-	var exists bool
-	err := db.DB.QueryRowContext(ctx, `SELECT 1 FROM events WHERE pubkey = ? LIMIT 1`, pubkey).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
-}
-
-// AddressExists checks if an addressable reference (kind, pubkey, d-tag) exists in the store.
-func AddressExists(ctx context.Context, db *sqlite.Store, ref events.AddressableRef) (bool, error) {
-	if err := ref.Validate(); err != nil {
-		return false, err
-	}
-
-	var exists bool
-	err := db.DB.QueryRowContext(ctx,
-		`SELECT 1 FROM events AS e JOIN tags AS t ON t.event_id = e.id
-	 WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ? LIMIT 1`,
-		ref.Kind, ref.Pubkey, ref.DTag,
-	).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
-}
-
-// PostOrCommentExists checks if a post or comment exists in the store by event ID.
-func PostOrCommentExists(ctx context.Context, db *sqlite.Store, id string) (bool, error) {
-	if err := events.ValidateHash(id); err != nil {
-		return false, err
-	}
-
-	var exists bool
-	err := db.DB.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? AND kind IN (11, 1111) LIMIT 1`, id).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
 }
 
 func NotAllowed(defender defender.T) func(_ rely.Client, e *nostr.Event) error {
