@@ -105,8 +105,8 @@ func (s *Store) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) 
 	}, nil
 }
 
-// Contains checks whether a blob with the given hash exists in the database.
-func (s *Store) Contains(ctx context.Context, hash blossom.Hash) (bool, error) {
+// Has checks whether a blob with the given hash exists in the database.
+func (s *Store) Has(ctx context.Context, hash blossom.Hash) (bool, error) {
 	query := `SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?)`
 	var exists bool
 	err := s.DB.QueryRowContext(ctx, query, hash).Scan(&exists)

@@ -46,11 +46,11 @@ func TestSaveAndQuery(t *testing.T) {
 		t.Error("expected inserted=false for existing blob")
 	}
 
-	contains, err := store.Contains(ctx, want.Hash)
+	has, err := store.Has(ctx, want.Hash)
 	if err != nil {
-		t.Fatalf("Contains failed: %v", err)
+		t.Fatalf("Has failed: %v", err)
 	}
-	if !contains {
+	if !has {
 		t.Fatalf("blob should exist, but doesn't")
 	}
 
