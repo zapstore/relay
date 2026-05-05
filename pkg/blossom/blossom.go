@@ -218,7 +218,7 @@ func Upload(
 			return blossom.BlobDescriptor{}, blossom.ErrBadRequest("checksum mismatch")
 		}
 		if errors.Is(err, context.Canceled) {
-			return blossom.BlobDescriptor{}, blossom.ErrBadRequest("context canceled")
+			return blossom.BlobDescriptor{}, ErrClientGone
 		}
 		if err != nil {
 			slog.Error("blossom: failed to upload blob", "error", err, "name", name, "ctx_error", ctx.Err(), "ctx_cause", context.Cause(ctx))
