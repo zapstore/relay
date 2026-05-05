@@ -27,10 +27,12 @@ type Store struct {
 
 // BlobMeta holds metadata about a blob stored in the database.
 type BlobMeta struct {
-	Hash      blossom.Hash
-	Type      string // MIME type
-	Size      int64
-	CreatedAt time.Time
+	Hash       blossom.Hash
+	Type       string // MIME type
+	Size       int64
+	CreatedAt  time.Time
+	AuthPubkey string     // hex pubkey that authenticated the upload, empty if unknown
+	ClaimedAt  *time.Time // when first confirmed referenced by a live event, nil = unclaimed (GC candidate)
 }
 
 // New creates a new store with the given path.
@@ -87,9 +89,11 @@ func (s *Store) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) 
 	var mime string
 	var size int64
 	var createdAt int64
+	var authPubkey sql.NullString
+	var claimedAt sql.NullInt64
 
-	query := `SELECT type, size, created_at FROM blobs WHERE hash = ?`
-	err := s.DB.QueryRowContext(ctx, query, hash).Scan(&mime, &size, &createdAt)
+	query := `SELECT type, size, created_at, auth_pubkey, claimed_at FROM blobs WHERE hash = ?`
+	err := s.DB.QueryRowContext(ctx, query, hash).Scan(&mime, &size, &createdAt, &authPubkey, &claimedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BlobMeta{}, ErrBlobNotFound
 	}
@@ -97,12 +101,42 @@ func (s *Store) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) 
 		return BlobMeta{}, fmt.Errorf("failed to get blob metadata: %w", err)
 	}
 
-	return BlobMeta{
+	meta := BlobMeta{
 		Hash:      hash,
 		Type:      mime,
 		Size:      size,
 		CreatedAt: time.Unix(createdAt, 0).UTC(),
-	}, nil
+	}
+	if authPubkey.Valid {
+		meta.AuthPubkey = authPubkey.String
+	}
+	if claimedAt.Valid {
+		t := time.Unix(claimedAt.Int64, 0).UTC()
+		meta.ClaimedAt = &t
+	}
+	return meta, nil
+}
+
+// Claim marks a blob as referenced by a live event, setting claimed_at to now if not already set.
+// It is a no-op if the blob does not exist or is already claimed.
+func (s *Store) Claim(ctx context.Context, hash blossom.Hash) error {
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE blobs SET claimed_at = ? WHERE hash = ? AND claimed_at IS NULL`,
+		time.Now().UTC().Unix(), hash,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to claim blob: %w", err)
+	}
+	return nil
+}
+
+// Delete removes a blob's metadata record from the database.
+func (s *Store) Delete(ctx context.Context, hash blossom.Hash) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM blobs WHERE hash = ?`, hash)
+	if err != nil {
+		return fmt.Errorf("failed to delete blob: %w", err)
+	}
+	return nil
 }
 
 // Has checks whether a blob with the given hash exists in the database.

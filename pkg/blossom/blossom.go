@@ -243,10 +243,11 @@ func Upload(
 		}
 
 		meta = store.BlobMeta{
-			Hash:      *hints.Hash,
-			Type:      hints.Type,
-			Size:      size,
-			CreatedAt: time.Now().UTC(),
+			Hash:       *hints.Hash,
+			Type:       hints.Type,
+			Size:       size,
+			CreatedAt:  time.Now().UTC(),
+			AuthPubkey: r.Pubkey(),
 		}
 
 		_, err = db.Save(saveCtx, meta)
