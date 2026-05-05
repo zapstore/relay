@@ -608,6 +608,61 @@ func TestZapTagsIndexing(t *testing.T) {
 	}
 }
 
+func TestPendingEvents(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	makeEvent := func(id string, kind int) nostr.Event {
+		return nostr.Event{
+			ID:        id,
+			PubKey:    "pubkey",
+			CreatedAt: nostr.Timestamp(1700000000),
+			Kind:      kind,
+			Tags:      nostr.Tags{{"d", id}},
+			Content:   "content-" + id,
+			Sig:       "sig",
+		}
+	}
+
+	asset1 := makeEvent("asset1", events.KindAsset)
+	asset2 := makeEvent("asset2", events.KindAsset)
+	release1 := makeEvent("release1", events.KindRelease)
+
+	for _, e := range []nostr.Event{asset1, asset2, release1} {
+		if _, err := store.SavePending(ctx, &e); err != nil {
+			t.Fatalf("SavePending(%s): %v", e.ID, err)
+		}
+	}
+
+	got, err := store.QueryPending(ctx, events.KindAsset)
+	if err != nil {
+		t.Fatalf("QueryPending: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 pending assets, got %d", len(got))
+	}
+
+	// Index by ID for order-independent comparison.
+	byID := make(map[string]nostr.Event, len(got))
+	for _, e := range got {
+		byID[e.ID] = e
+	}
+	for _, want := range []nostr.Event{asset1, asset2} {
+		got, ok := byID[want.ID]
+		if !ok {
+			t.Errorf("missing event %s in QueryPending result", want.ID)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("event %s mismatch:\ngot:  %+v\nwant: %+v", want.ID, got, want)
+		}
+	}
+}
+
 func TestForceDeleteRequest(t *testing.T) {
 	const (
 		alice = "alice"

@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -41,6 +42,53 @@ func New(path string) (T, error) {
 		return T{}, err
 	}
 	return T{Store: store}, nil
+}
+
+// SavePending stores an event in the pending_events table in an idempotent way.
+// It returns true if the event was inserted (i.e. it was not already present), false otherwise.
+func (s T) SavePending(ctx context.Context, event *nostr.Event) (bool, error) {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal event: %w", err)
+	}
+	res, err := s.DB.ExecContext(ctx,
+		`INSERT OR IGNORE INTO pending_events (id, kind, raw, received_at) VALUES (?, ?, ?, ?)`,
+		event.ID, event.Kind, string(raw), time.Now().UTC().Unix(),
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to save pending event: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rows > 0, nil
+}
+
+// QueryPending returns all pending events of the given kind.
+func (s T) QueryPending(ctx context.Context, kind int) ([]nostr.Event, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT raw FROM pending_events WHERE kind = ?`, kind)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []nostr.Event
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("failed to scan pending event: %w", err)
+		}
+		var event nostr.Event
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal pending event: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate pending events: %w", err)
+	}
+	return events, nil
 }
 
 // ForceDeleteRequest forces a NIP-09 deletion request (kind 5 event), deleting all referenced events, even
