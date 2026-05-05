@@ -84,8 +84,8 @@ func Setup(
 		rely.InvalidSignature,
 		InvalidStructure,
 		NotAnchored(store),
-		AppOwnership(store, config.Info.Pubkey),
 		NotAllowed(defender),
+		AppOwnership(store, config.Info.Pubkey),
 	)
 
 	relay.Reject.Req.Clear()
