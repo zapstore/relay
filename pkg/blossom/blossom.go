@@ -42,7 +42,7 @@ func Setup(
 	config Config,
 	limiter rate.Limiter,
 	defender defender.T,
-	store *store.Store,
+	store *store.T,
 	analytics *analytics.Engine,
 	resolver AssetResolver,
 ) (*blossy.Server, error) {
@@ -78,7 +78,7 @@ func Setup(
 	return server, nil
 }
 
-func Check(db *store.Store, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
+func Check(db *store.T, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
 	return func(r blossy.Request, hash blossom.Hash, _ string) (blossy.MetaDelivery, *blossom.Error) {
 
 		// We can check the local store for the blob metadata instead of redirecting to Bunny.
@@ -99,7 +99,7 @@ func Check(db *store.Store, analytics *analytics.Engine) func(r blossy.Request, 
 	}
 }
 
-func Download(db *store.Store, client bunny.Client, resolver AssetResolver, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
+func Download(db *store.T, client bunny.Client, resolver AssetResolver, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
 	return func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
 
 		// In the Bunny CDN files are defined by their name (hash) and extension (ext).
@@ -162,7 +162,7 @@ func (s *stallReader) Read(p []byte) (int, error) {
 }
 
 func Upload(
-	db *store.Store,
+	db *store.T,
 	client bunny.Client,
 	limiter rate.Limiter,
 	stallTimeout time.Duration,

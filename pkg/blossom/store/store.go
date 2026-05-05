@@ -21,7 +21,7 @@ var (
 	ErrBlobNotFound = errors.New("blob not found")
 )
 
-type Store struct {
+type T struct {
 	DB *sql.DB
 }
 
@@ -36,7 +36,7 @@ type BlobMeta struct {
 }
 
 // New creates a new store with the given path.
-func New(path string) (*Store, error) {
+func New(path string) (*T, error) {
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to sqlite3 at %s: %w", path, err)
@@ -56,17 +56,17 @@ func New(path string) (*Store, error) {
 	if _, err = db.Exec("PRAGMA optimize=0x10002;"); err != nil {
 		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
-	return &Store{DB: db}, nil
+	return &T{DB: db}, nil
 }
 
-func (s *Store) Close() error {
+func (s *T) Close() error {
 	return s.DB.Close()
 }
 
 // Save saves the metadata of a blob to the database.
 // Returns true if the blob was inserted, false if it already existed.
 // If CreatedAt is zero, it defaults to the current UTC time.
-func (s *Store) Save(ctx context.Context, b BlobMeta) (inserted bool, err error) {
+func (s *T) Save(ctx context.Context, b BlobMeta) (inserted bool, err error) {
 	if b.CreatedAt.IsZero() {
 		b.CreatedAt = time.Now().UTC()
 	}
@@ -85,7 +85,7 @@ func (s *Store) Save(ctx context.Context, b BlobMeta) (inserted bool, err error)
 }
 
 // Query retrieves the metadata of a blob from the database.
-func (s *Store) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) {
+func (s *T) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) {
 	var mime string
 	var size int64
 	var createdAt int64
@@ -119,7 +119,7 @@ func (s *Store) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) 
 
 // Claim marks a blob as referenced by a live event, setting claimed_at to now if not already set.
 // It is a no-op if the blob does not exist or is already claimed.
-func (s *Store) Claim(ctx context.Context, hash blossom.Hash) error {
+func (s *T) Claim(ctx context.Context, hash blossom.Hash) error {
 	_, err := s.DB.ExecContext(ctx,
 		`UPDATE blobs SET claimed_at = ? WHERE hash = ? AND claimed_at IS NULL`,
 		time.Now().UTC().Unix(), hash,
@@ -131,7 +131,7 @@ func (s *Store) Claim(ctx context.Context, hash blossom.Hash) error {
 }
 
 // Delete removes a blob's metadata record from the database.
-func (s *Store) Delete(ctx context.Context, hash blossom.Hash) error {
+func (s *T) Delete(ctx context.Context, hash blossom.Hash) error {
 	_, err := s.DB.ExecContext(ctx, `DELETE FROM blobs WHERE hash = ?`, hash)
 	if err != nil {
 		return fmt.Errorf("failed to delete blob: %w", err)
@@ -140,7 +140,7 @@ func (s *Store) Delete(ctx context.Context, hash blossom.Hash) error {
 }
 
 // Has checks whether a blob with the given hash exists in the database.
-func (s *Store) Has(ctx context.Context, hash blossom.Hash) (bool, error) {
+func (s *T) Has(ctx context.Context, hash blossom.Hash) (bool, error) {
 	query := `SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?)`
 	var exists bool
 	err := s.DB.QueryRowContext(ctx, query, hash).Scan(&exists)
