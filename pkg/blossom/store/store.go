@@ -31,8 +31,7 @@ type BlobMeta struct {
 	Type       string // MIME type
 	Size       int64
 	CreatedAt  time.Time
-	AuthPubkey string     // hex pubkey that authenticated the upload, empty if unknown
-	ClaimedAt  *time.Time // when first confirmed referenced by a live event, nil = unclaimed (GC candidate)
+	AuthPubkey string // hex pubkey that authenticated the upload, empty if unknown
 }
 
 // New creates a new store with the given path.
@@ -71,8 +70,13 @@ func (s *T) Save(ctx context.Context, b BlobMeta) (inserted bool, err error) {
 		b.CreatedAt = time.Now().UTC()
 	}
 
-	query := `INSERT OR IGNORE INTO blobs (hash, type, size, created_at) VALUES (?, ?, ?, ?)`
-	res, err := s.DB.ExecContext(ctx, query, b.Hash, b.Type, b.Size, b.CreatedAt.Unix())
+	var authPubkey *string
+	if b.AuthPubkey != "" {
+		authPubkey = &b.AuthPubkey
+	}
+
+	query := `INSERT OR IGNORE INTO blobs (hash, type, size, created_at, auth_pubkey) VALUES (?, ?, ?, ?, ?)`
+	res, err := s.DB.ExecContext(ctx, query, b.Hash, b.Type, b.Size, b.CreatedAt.Unix(), authPubkey)
 	if err != nil {
 		return false, fmt.Errorf("failed to save blob metadata: %w", err)
 	}
@@ -90,10 +94,9 @@ func (s *T) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) {
 	var size int64
 	var createdAt int64
 	var authPubkey sql.NullString
-	var claimedAt sql.NullInt64
 
-	query := `SELECT type, size, created_at, auth_pubkey, claimed_at FROM blobs WHERE hash = ?`
-	err := s.DB.QueryRowContext(ctx, query, hash).Scan(&mime, &size, &createdAt, &authPubkey, &claimedAt)
+	query := `SELECT type, size, created_at, auth_pubkey FROM blobs WHERE hash = ?`
+	err := s.DB.QueryRowContext(ctx, query, hash).Scan(&mime, &size, &createdAt, &authPubkey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BlobMeta{}, ErrBlobNotFound
 	}
@@ -110,24 +113,7 @@ func (s *T) Query(ctx context.Context, hash blossom.Hash) (BlobMeta, error) {
 	if authPubkey.Valid {
 		meta.AuthPubkey = authPubkey.String
 	}
-	if claimedAt.Valid {
-		t := time.Unix(claimedAt.Int64, 0).UTC()
-		meta.ClaimedAt = &t
-	}
 	return meta, nil
-}
-
-// Claim marks a blob as referenced by a live event, setting claimed_at to now if not already set.
-// It is a no-op if the blob does not exist or is already claimed.
-func (s *T) Claim(ctx context.Context, hash blossom.Hash) error {
-	_, err := s.DB.ExecContext(ctx,
-		`UPDATE blobs SET claimed_at = ? WHERE hash = ? AND claimed_at IS NULL`,
-		time.Now().UTC().Unix(), hash,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to claim blob: %w", err)
-	}
-	return nil
 }
 
 // Delete removes a blob's metadata record from the database.
@@ -137,33 +123,6 @@ func (s *T) Delete(ctx context.Context, hash blossom.Hash) error {
 		return fmt.Errorf("failed to delete blob: %w", err)
 	}
 	return nil
-}
-
-// Unclaimed returns all blob hashes that have not yet been confirmed as referenced by a live event.
-func (s *T) Unclaimed(ctx context.Context) ([]blossom.Hash, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT hash FROM blobs WHERE claimed_at IS NULL`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query unclaimed blobs: %w", err)
-	}
-	defer rows.Close()
-
-	var blobs []blossom.Hash
-	for rows.Next() {
-		var hash string
-		if err := rows.Scan(&hash); err != nil {
-			return nil, fmt.Errorf("failed to scan unclaimed blob: %w", err)
-		}
-
-		h, err := blossom.ParseHash(hash)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse unclaimed blob hash: %w", err)
-		}
-		blobs = append(blobs, h)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate unclaimed blobs: %w", err)
-	}
-	return blobs, nil
 }
 
 // Has checks whether a blob with the given hash exists in the database.
