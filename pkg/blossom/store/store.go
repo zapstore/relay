@@ -139,6 +139,33 @@ func (s *T) Delete(ctx context.Context, hash blossom.Hash) error {
 	return nil
 }
 
+// Unclaimed returns all blob hashes that have not yet been confirmed as referenced by a live event.
+func (s *T) Unclaimed(ctx context.Context) ([]blossom.Hash, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT hash FROM blobs WHERE claimed_at IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unclaimed blobs: %w", err)
+	}
+	defer rows.Close()
+
+	var blobs []blossom.Hash
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, fmt.Errorf("failed to scan unclaimed blob: %w", err)
+		}
+
+		h, err := blossom.ParseHash(hash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse unclaimed blob hash: %w", err)
+		}
+		blobs = append(blobs, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate unclaimed blobs: %w", err)
+	}
+	return blobs, nil
+}
+
 // Has checks whether a blob with the given hash exists in the database.
 func (s *T) Has(ctx context.Context, hash blossom.Hash) (bool, error) {
 	query := `SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?)`
