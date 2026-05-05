@@ -800,7 +800,7 @@ func TestForceDeleteRequest(t *testing.T) {
 				}
 			}
 
-			deleted, err := ForceDeleteRequest(ctx, store, &test.request)
+			deleted, err := store.ForceDeleteRequest(ctx, &test.request)
 			if !errors.Is(err, test.err) {
 				t.Fatalf("expected error %v, got %v", test.err, err)
 			}
@@ -813,7 +813,7 @@ func TestForceDeleteRequest(t *testing.T) {
 
 // getIndexedTags returns all tags indexed for an event from the tags table,
 // sorted in lexicographic order by key then value.
-func getIndexedTags(t *testing.T, store *sqlite.Store, eventID string) nostr.Tags {
+func getIndexedTags(t *testing.T, store T, eventID string) nostr.Tags {
 	t.Helper()
 	rows, err := store.DB.Query("SELECT key, value FROM tags WHERE event_id = ?", eventID)
 	if err != nil {

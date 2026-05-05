@@ -13,7 +13,6 @@ import (
 	"syscall"
 
 	"github.com/nbd-wtf/go-nostr"
-	sqlite "github.com/vertex-lab/nostr-sqlite"
 	"github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
@@ -186,7 +185,7 @@ func main() {
 
 // Resolver implements [analytics.Resolver] and [blossom.AssetResolver]
 type resolver struct {
-	db *sqlite.Store
+	db eventstore.T
 }
 
 func (r resolver) ResolveAssetURL(ctx context.Context, hash string) (string, bool, error) {

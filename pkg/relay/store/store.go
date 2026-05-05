@@ -22,7 +22,11 @@ var ErrUnsupportedREQ = errors.New("unsupported REQ")
 //go:embed schema.sql
 var schema string
 
-func New(path string) (*sqlite.Store, error) {
+type T struct {
+	*sqlite.Store
+}
+
+func New(path string) (T, error) {
 	store, err := sqlite.New(
 		path,
 		sqlite.WithAdditionalSchema(schema),
@@ -34,9 +38,9 @@ func New(path string) (*sqlite.Store, error) {
 		sqlite.WithoutCountPolicy(), // count queries have been validated by the relay
 	)
 	if err != nil {
-		return nil, err
+		return T{}, err
 	}
-	return store, nil
+	return T{Store: store}, nil
 }
 
 // ForceDeleteRequest forces a NIP-09 deletion request (kind 5 event), deleting all referenced events, even
@@ -45,7 +49,7 @@ func New(path string) (*sqlite.Store, error) {
 //
 // The event is assumed to have been validated before calling this function.
 // Calling DeleteRequest with a non kind-5 event returns [ErrInvalidDeletionRequest].
-func ForceDeleteRequest(ctx context.Context, s *sqlite.Store, event *nostr.Event) (int, error) {
+func (s T) ForceDeleteRequest(ctx context.Context, event *nostr.Event) (int, error) {
 	if event.Kind != nostr.KindDeletion {
 		return 0, sqlite.ErrInvalidDeletionRequest
 	}

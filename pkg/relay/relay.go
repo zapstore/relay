@@ -15,7 +15,6 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/rely"
-	sqlite "github.com/vertex-lab/nostr-sqlite"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
@@ -57,7 +56,7 @@ func Setup(
 	config Config,
 	limiter rate.Limiter,
 	defender defender.T,
-	store *sqlite.Store,
+	store store.T,
 	analytics *analytics.Engine,
 	indexing *indexing.Engine, // nil = no demand-driven indexing
 ) (*rely.Relay, error) {
@@ -100,7 +99,7 @@ func Setup(
 	return relay, nil
 }
 
-func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
+func Save(db store.T, analytics *analytics.Engine, idx *indexing.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
 	return func(c rely.Client, event *nostr.Event) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -112,7 +111,7 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, o
 
 			if event.PubKey == operatorPubkey {
 				// Operator delete request
-				deleted, err = store.ForceDeleteRequest(ctx, db, event)
+				deleted, err = db.ForceDeleteRequest(ctx, event)
 				if err != nil {
 					slog.Error("relay: failed to fulfill the operator delete request", "error", err, "event", event.ID)
 					return err
@@ -155,7 +154,7 @@ func Save(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine, o
 	}
 }
 
-func Query(db *sqlite.Store, analytics *analytics.Engine, idx *indexing.Engine) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
+func Query(db store.T, analytics *analytics.Engine, idx *indexing.Engine) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 	return func(ctx context.Context, client rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -345,7 +344,7 @@ func InvalidStructure(_ rely.Client, e *nostr.Event) error {
 //   - indexer → non-indexer:             delete old 32267, accept (indexer takeover)
 //   - non-indexer → indexer:             delete indexer's 32267, accept (developer reclaim)
 //   - anyone else → anyone else:         reject
-func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e *nostr.Event) error {
+func AppOwnership(db store.T, indexerPubkey string) func(_ rely.Client, e *nostr.Event) error {
 	if indexerPubkey == "" {
 		indexerPubkey = indexerPubkeyFallback
 	}
@@ -416,7 +415,7 @@ func AppOwnership(db *sqlite.Store, indexerPubkey string) func(_ rely.Client, e 
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
 // Anchoring means simply that the event references an existing root event.
-func NotAnchored(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
+func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if slices.Contains(RootKinds, e.Kind) {
 			// root events do not need to be "anchored" to an existing event
