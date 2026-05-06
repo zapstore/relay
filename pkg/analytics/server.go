@@ -58,10 +58,16 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /v1/metrics/relay", e.relayMetrics)
 	mux.HandleFunc("GET /v1/metrics/blossom", e.blossomMetrics)
 
-	server := &http.Server{Addr: addr, Handler: mux}
 	exit := make(chan error, 1)
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	go func() {
+		e.log.Info("analytics: API server starting", "address", addr)
 		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			exit <- err
 		}

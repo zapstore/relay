@@ -10,7 +10,6 @@ import (
 
 type Config struct {
 	// Port is the port the analytics API server listens on. Default is "3336".
-	// Set to empty string to disable the API server.
 	Port string `env:"ANALYTICS_API_PORT"`
 
 	// FlushInterval is the interval at which the analytics engine flushes data to the database. Default is 5 minutes.
@@ -37,7 +36,7 @@ type Config struct {
 
 func NewConfig() Config {
 	return Config{
-		Port:          "3336",
+		Port:               "3336",
 		FlushInterval:      5 * time.Minute,
 		FlushTimeout:       10 * time.Second,
 		FlushSize:          1000,
