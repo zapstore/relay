@@ -33,8 +33,6 @@ var (
 		This is a precautionary measure because Android doesn't allow apps with the same identifier to be installed side by side.
 		Please use a different identifier or contact the Zapstore team for more information.`)
 
-	ErrProfileUnknown = errors.New("kind 0 profile rejected: pubkey has no events on this relay")
-
 	ErrTooManyFilters  = errors.New("number of filters exceed the maximum allowed per REQ")
 	ErrFiltersTooVague = errors.New("filters are too vague")
 
@@ -434,43 +432,36 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 			}
 
 			if !isPublisher {
-				return ErrProfileUnknown
+				return errors.New("kind 0: pubkey must have other events on this relay")
 			}
 
-		case events.KindComment, events.KindZap:
+		case events.KindComment:
 			aTag, hasA := events.Find(e.Tags, "A")
 			eTag, hasE := events.Find(e.Tags, "e")
 			if !hasA && !hasE {
-				return fmt.Errorf("kind %d: must have an 'A' tag (root) or 'e' tag (reply)", e.Kind)
+				return fmt.Errorf("kind 1111: must have an 'A' tag (root) or 'e' tag (reply)")
 			}
 
 			if hasA {
 				// A tag must reference a known app kind:32267 or stack kind:30267 event
 				ref, err := events.ParseAddressableRef(aTag)
 				if err != nil {
-					return fmt.Errorf("kind %d: 'A' tag must reference a kind 32267 or kind 30267: %w", e.Kind, err)
+					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %w", err)
 				}
 				if err := ref.Validate(); err != nil {
-					return fmt.Errorf("kind %d: 'A' tag must reference a kind 32267 or kind 30267: %w", e.Kind, err)
+					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %w", err)
 				}
 				if ref.Kind != events.KindApp && ref.Kind != events.KindStack {
-					return fmt.Errorf("kind %d: 'A' tag must reference a kind 32267 or kind 30267: %d", e.Kind, ref.Kind)
+					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
 				}
 
-				f := nostr.Filter{
-					Authors: []string{ref.Pubkey},
-					Kinds:   []int{ref.Kind},
-					Tags:    nostr.TagMap{"d": []string{ref.DTag}},
-				}
-
-				exists, err := db.Has(ctx, f)
+				found, err := db.Has(ctx, ref.Filter())
 				if err != nil {
-					slog.Error("NotAnchored: failed to check comment or zap", "error", err, "event", e.ID, "tag", aTag)
+					slog.Error("NotAnchored: failed to check comment", "error", err, "event", e.ID, "tag", aTag)
 					return ErrInternal
 				}
-
-				if !exists {
-					return fmt.Errorf("kind %d: A tag reference not found on this relay", e.Kind)
+				if !found {
+					return fmt.Errorf("kind 1111: 'A' tag reference not found on this relay")
 				}
 			}
 
@@ -481,14 +472,56 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 					Kinds: []int{events.KindForumPost, events.KindComment},
 				}
 
-				exists, err := db.Has(ctx, f)
+				found, err := db.Has(ctx, f)
 				if err != nil {
-					slog.Error("NotAnchored: failed to check comment or zap", "error", err, "event", e.ID, "tag", eTag)
+					slog.Error("NotAnchored: failed to check comment", "error", err, "event", e.ID, "tag", eTag)
+					return ErrInternal
+				}
+				if !found {
+					return fmt.Errorf("kind 1111: 'e' tag reference not found on this relay")
+				}
+			}
+
+		case events.KindZap:
+			aTag, hasA := events.Find(e.Tags, "a")
+			eTag, hasE := events.Find(e.Tags, "e")
+			if !hasA && !hasE {
+				return fmt.Errorf("kind 9735: must have an 'a' tag or 'e' tag")
+			}
+
+			if hasA {
+				// a tag must reference a known app kind:32267 or stack kind:30267 event
+				ref, err := events.ParseAddressableRef(aTag)
+				if err != nil {
+					return fmt.Errorf("kind 9735: 'a' tag must reference a kind 32267 or kind 30267: %w", err)
+				}
+				if err := ref.Validate(); err != nil {
+					return fmt.Errorf("kind 9735: 'a' tag must reference a kind 32267 or kind 30267: %w", err)
+				}
+				if ref.Kind != events.KindApp && ref.Kind != events.KindStack {
+					return fmt.Errorf("kind 9735: 'a' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
+				}
+
+				found, err := db.Has(ctx, ref.Filter())
+				if err != nil {
+					slog.Error("NotAnchored: failed to check zap", "error", err, "event", e.ID, "tag", aTag)
+					return ErrInternal
+				}
+				if !found {
+					return fmt.Errorf("kind 9735: 'a' tag reference not found on this relay")
+				}
+			}
+
+			if hasE {
+				// e tag must reference any known event
+				found, err := db.Has(ctx, nostr.Filter{IDs: []string{eTag}})
+				if err != nil {
+					slog.Error("NotAnchored: failed to check zap", "error", err, "event", e.ID, "tag", eTag)
 					return ErrInternal
 				}
 
-				if !exists {
-					return fmt.Errorf("kind %d: e tag reference not found on this relay", e.Kind)
+				if !found {
+					return fmt.Errorf("kind 9735: e tag reference not found on this relay")
 				}
 			}
 		}

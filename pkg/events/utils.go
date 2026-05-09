@@ -93,6 +93,15 @@ func (r AddressableRef) String() string {
 	return strconv.Itoa(r.Kind) + ":" + r.Pubkey + ":" + r.DTag
 }
 
+// Filter returns a nostr.Filter to query for the event corresponding to this reference.
+func (r AddressableRef) Filter() nostr.Filter {
+	return nostr.Filter{
+		Authors: []string{r.Pubkey},
+		Kinds:   []int{r.Kind},
+		Tags:    nostr.TagMap{"d": []string{r.DTag}},
+	}
+}
+
 func (r AddressableRef) Validate() error {
 	if r.Kind < 0 || r.Kind > 65535 {
 		return fmt.Errorf("invalid kind: %d", r.Kind)
