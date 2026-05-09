@@ -439,7 +439,7 @@ func NotAnchored(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
 				return ErrProfileUnknown
 			}
 
-		case events.KindComment, events.KindZap:
+		case events.KindComment:
 			aTag, hasA := events.Find(e.Tags, "A")
 			eTag, hasE := events.Find(e.Tags, "e")
 			if !hasA && !hasE {
@@ -470,6 +470,47 @@ func NotAnchored(db *sqlite.Store) func(_ rely.Client, e *nostr.Event) error {
 			if hasE {
 				// e tag must reference a known kind:11 or kind:1111 event
 				exists, err := PostOrCommentExists(ctx, db, eTag)
+				if err != nil {
+					slog.Error("NotAnchored: failed to check kind:1111", "error", err, "tag", eTag)
+					return ErrInternal
+				}
+
+				if !exists {
+					return errors.New("kind 1111: e tag reference not found for kind:11 or kind:1111 on this relay")
+				}
+			}
+
+		case events.KindZap:
+			aTag, hasA := events.Find(e.Tags, "a")
+			eTag, hasE := events.Find(e.Tags, "e")
+			if !hasA && !hasE {
+				return errors.New("kind 9735: must have an 'A' tag (root) or 'e' tag (reply)")
+			}
+
+			if hasA {
+				// a tag must reference a known app kind:32267 or stack kind:30267 event
+				ref, err := events.ParseAddressableRef(aTag)
+				if err != nil {
+					return fmt.Errorf("kind 9735: 'A' tag must reference a kind 32267 or kind 30267: %w", err)
+				}
+				if ref.Kind != events.KindApp && ref.Kind != events.KindStack {
+					return fmt.Errorf("kind 9735: 'A' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
+				}
+
+				exists, err := AddressExists(ctx, db, ref)
+				if err != nil {
+					slog.Error("NotAnchored: failed to check kind:9735", "error", err, "tag", aTag)
+					return ErrInternal
+				}
+
+				if !exists {
+					return errors.New("kind 9735: A tag reference not found on this relay")
+				}
+			}
+
+			if hasE {
+				// e tag must reference a known event of any kind
+				exists, err := EventExists(ctx, db, eTag)
 				if err != nil {
 					slog.Error("NotAnchored: failed to check kind:1111", "error", err, "tag", eTag)
 					return ErrInternal
@@ -526,6 +567,23 @@ func PostOrCommentExists(ctx context.Context, db *sqlite.Store, id string) (bool
 
 	var exists bool
 	err := db.DB.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? AND kind IN (11, 1111) LIMIT 1`, id).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// EventExists checks if an event exists in the store by event ID.
+func EventExists(ctx context.Context, db *sqlite.Store, id string) (bool, error) {
+	if err := events.ValidateHash(id); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err := db.DB.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? LIMIT 1`, id).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
