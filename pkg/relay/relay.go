@@ -439,20 +439,13 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 
 		case events.KindComment, events.KindZap:
 			aTag, hasA := events.Find(e.Tags, "A")
-			if e.Kind == events.KindZap && !hasA {
-				// NIP-57 zaps usually use lowercase "a" for addressable references.
-				aTag, hasA = events.Find(e.Tags, "a")
-			}
 			eTag, hasE := events.Find(e.Tags, "e")
 			if !hasA && !hasE {
-				if e.Kind == events.KindZap {
-					return fmt.Errorf("kind %d: must have an 'a' tag (root) or 'e' tag (reply)", e.Kind)
-				}
 				return fmt.Errorf("kind %d: must have an 'A' tag (root) or 'e' tag (reply)", e.Kind)
 			}
 
 			if hasA {
-				// A/a tag must reference a known app kind:32267 or stack kind:30267 event.
+				// A tag must reference a known app kind:32267 or stack kind:30267 event
 				ref, err := events.ParseAddressableRef(aTag)
 				if err != nil {
 					return fmt.Errorf("kind %d: 'A' tag must reference a kind 32267 or kind 30267: %w", e.Kind, err)
@@ -482,15 +475,10 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 			}
 
 			if hasE {
-				// e tag must reference a known kind:11 or kind:1111 event.
-				// For kind:9735 zaps, also allow app events (kind:32267).
-				eKinds := []int{events.KindForumPost, events.KindComment}
-				if e.Kind == events.KindZap {
-					eKinds = append(eKinds, events.KindApp)
-				}
+				// e tag must reference a known kind:11 or kind:1111 event
 				f := nostr.Filter{
 					IDs:   []string{eTag},
-					Kinds: eKinds,
+					Kinds: []int{events.KindForumPost, events.KindComment},
 				}
 
 				exists, err := db.Has(ctx, f)
