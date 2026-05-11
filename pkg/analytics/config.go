@@ -48,6 +48,9 @@ func NewConfig() Config {
 }
 
 func (c Config) Validate() error {
+	if c.Port != "" {
+		return errors.New("port cannot be empty")
+	}
 	if c.FlushInterval < time.Second {
 		return errors.New("flush interval must be greater than 1s to avoid too many database writes")
 	}

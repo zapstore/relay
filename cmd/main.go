@@ -141,9 +141,9 @@ func main() {
 
 	// Step 6.
 	// Run everything
-	exit := make(chan error, 2)
+	exit := make(chan error, 3)
 	wg := sync.WaitGroup{}
-	wg.Add(2)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
@@ -161,17 +161,13 @@ func main() {
 		}
 	}()
 
-	if config.Analytics.Port != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			address := "localhost:" + config.Analytics.Port
-			logger.Info("analytics: API server starting", "address", address)
-			if err := analytics.StartAndServe(ctx, address); err != nil {
-				exit <- err
-			}
-		}()
-	}
+	go func() {
+		defer wg.Done()
+		address := "localhost:" + config.Analytics.Port
+		if err := analytics.StartAndServe(ctx, address); err != nil {
+			exit <- err
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
