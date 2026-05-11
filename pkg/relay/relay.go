@@ -15,7 +15,7 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
-	"github.com/pippellia-btc/rely"
+	"github.com/pippellia-btc/rely/v2"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
@@ -239,38 +239,44 @@ func (r *T) reconcile(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (r *T) save(c rely.Client, event *nostr.Event) error {
+func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	r.analytics.RecordEvent(c, event)
 
 	switch {
 	case event.Kind == nostr.KindDeletion:
 		if err := r.handleDelete(ctx, event); err != nil {
 			slog.Error("relay: failed to fullfil delete", "event", event.ID, "error", err)
-			return err
+			return rely.Fail(err.Error())
 		}
 
 	case event.Kind == events.KindAsset:
-		if err := r.saveAsset(ctx, event); err != nil {
+		isPending, err := r.saveAsset(ctx, event)
+		if err != nil {
 			slog.Error("relay: failed to save asset event", "event", event.ID, "error", err)
-			return err
+			return rely.Fail(err.Error())
+		}
+
+		if isPending {
+			// avoid broadcasting the event until it is fully saved
+			return rely.Success().NoBroadcast().WithReply("the event will be saved when the referenced blob is uploaded")
 		}
 
 	case nostr.IsRegularKind(event.Kind):
 		if _, err := r.store.Save(ctx, event); err != nil {
 			slog.Error("relay: failed to save regular event", "event", event.ID, "error", err)
-			return err
+			return rely.Fail(err.Error())
 		}
 
 	case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
 		if _, err := r.store.Replace(ctx, event); err != nil {
 			slog.Error("relay: failed to replace event", "event", event.ID, "error", err)
-			return err
+			return rely.Fail(err.Error())
 		}
 	}
-
-	r.analytics.RecordEvent(c, event)
-	return nil
+	return rely.Success()
 }
 
 // handleDelete handles deletion events, either from the operator or a regular NIP-09 deletion.
@@ -311,39 +317,39 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 // saveAsset saves an asset event to the store.
 // If the asset references a blob that is not in blossom yet, it will be saved as pending, until the
 // runReconcile loop saves it to the store or deletes it if too much time has passed.
-func (r *T) saveAsset(ctx context.Context, event *nostr.Event) error {
+func (r *T) saveAsset(ctx context.Context, event *nostr.Event) (pending bool, err error) {
 	if event.Kind != events.KindAsset {
-		return errors.New("event is not an asset")
+		return false, errors.New("event is not an asset")
 	}
 
 	xTag, ok := events.Find(event.Tags, "x")
 	if !ok {
-		return errors.New("asset event is missing x tag")
+		return false, errors.New("asset event is missing x tag")
 	}
 
 	hash, err := blossom.ParseHash(xTag)
 	if err != nil {
-		return fmt.Errorf("asset event has an invalid x tag: %w", err)
+		return false, fmt.Errorf("asset event has an invalid x tag: %w", err)
 	}
 
 	found, err := r.blossom.Has(ctx, hash)
 	if err != nil {
-		return fmt.Errorf("failed to check if hash %s exists: %w", hash, err)
+		return false, fmt.Errorf("failed to check if hash %s exists: %w", hash, err)
 	}
 
 	if !found {
 		// the asset reference a blob that is not yet in blossom. Save as pending
 		if _, err := r.store.SavePending(ctx, event); err != nil {
-			return fmt.Errorf("failed to save the asset event as pending: %w", err)
+			return false, fmt.Errorf("failed to save the asset event as pending: %w", err)
 		}
-		return nil
+		return true, nil
 	}
 
 	// the asset is ready
 	if _, err := r.store.Save(ctx, event); err != nil {
-		return fmt.Errorf("failed to save the asset event: %w", err)
+		return false, fmt.Errorf("failed to save the asset event: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
 func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
