@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -68,6 +69,9 @@ func (s T) SavePending(ctx context.Context, event *nostr.Event) (bool, error) {
 // QueryPending returns all pending events of the given kind.
 func (s T) QueryPending(ctx context.Context, kind int) ([]nostr.Event, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT raw FROM pending_events WHERE kind = ?`, kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending events: %w", err)
 	}
@@ -86,9 +90,25 @@ func (s T) QueryPending(ctx context.Context, kind int) ([]nostr.Event, error) {
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate pending events: %w", err)
+		return nil, fmt.Errorf("failed to query pending events: %w", err)
 	}
 	return events, nil
+}
+
+// DeletePending removes a pending event from the pending_events table by its ID.
+func (s T) DeletePending(ctx context.Context, ID string) error {
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM pending_events WHERE id = ?`, ID); err != nil {
+		return fmt.Errorf("failed to delete pending event: %w", err)
+	}
+	return nil
+}
+
+// DeleteExpiredPending removes all pending events that were received before the given cutoff time.
+func (s T) DeleteExpiredPending(ctx context.Context, before time.Time) error {
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM pending_events WHERE received_at < ?`, before.Unix()); err != nil {
+		return fmt.Errorf("failed to delete expired pending events: %w", err)
+	}
+	return nil
 }
 
 // ForceDeleteRequest forces a NIP-09 deletion request (kind 5 event), deleting all referenced events, even
