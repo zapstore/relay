@@ -31,23 +31,38 @@ var (
 	ErrRateLimited = blossom.ErrTooMany("rate-limited: slow down chief")
 )
 
-// AssetResolver looks up a download URL for a kind 3063 asset by its SHA-256 hash.
-type AssetResolver interface {
-	ResolveAssetURL(ctx context.Context, hash string) (url string, found bool, err error)
+type Hash = blossom.Hash
+
+// T represents the blossoms server and all its dependencies.
+type T struct {
+	server *blossy.Server
+	config Config
+
+	limiter   rate.Limiter
+	bunny     bunny.Client
+	store     *store.T
+	relay     Relay
+	analytics *analytics.Engine
 }
 
-type Hash = blossom.Hash
+// Relay is an interface that represents the subset of the relay functionalities needed by the blossoms server.
+type Relay interface {
+	// ResolveAssetURL looks up a download URL for a kind 3063 asset by its SHA-256 hash.
+	ResolveAssetURL(ctx context.Context, hash blossom.Hash) (url string, err error)
+
+	// NotifyUpload notifies the relay that an upload has been completed.
+	NotifyUpload(hash blossom.Hash, mime string) error
+}
 
 func Setup(
 	config Config,
 	limiter rate.Limiter,
 	defender defender.T,
 	store *store.T,
+	relay Relay,
 	analytics *analytics.Engine,
-	resolver AssetResolver,
 ) (*blossy.Server, error) {
 
-	bunny := bunny.NewClient(config.Bunny)
 	server, err := blossy.NewServer(
 		blossy.WithHostname(config.Hostname),
 		blossy.WithRangeSupport(),
@@ -72,78 +87,85 @@ func Setup(
 		NotAllowed(defender),
 	)
 
-	server.On.Check = Check(store, analytics)
-	server.On.Download = Download(store, bunny, resolver, analytics)
-	server.On.Upload = Upload(store, bunny, limiter, config.StallTimeout, analytics)
+	blossom := T{
+		server:    server,
+		config:    config,
+		limiter:   limiter,
+		bunny:     bunny.NewClient(config.Bunny),
+		store:     store,
+		relay:     relay,
+		analytics: analytics,
+	}
+
+	server.On.Check = blossom.check
+	server.On.Download = blossom.download
+	server.On.Upload = blossom.upload
 	return server, nil
 }
 
-func Check(db *store.T, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
-	return func(r blossy.Request, hash blossom.Hash, _ string) (blossy.MetaDelivery, *blossom.Error) {
+func (b *T) check(r blossy.Request, hash blossom.Hash, _ string) (blossy.MetaDelivery, *blossom.Error) {
+	// We can check the local store for the blob metadata instead of redirecting to Bunny.
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
 
-		// We can check the local store for the blob metadata instead of redirecting to Bunny.
-		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
-		defer cancel()
-
-		meta, err := db.Query(ctx, hash)
-		if errors.Is(err, store.ErrBlobNotFound) {
-			return nil, ErrNotFound
-		}
-		if err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
-			return nil, ErrInternal
-		}
-
-		analytics.RecordCheck(r, hash)
-		return blossy.Found(meta.Type, meta.Size), nil
+	meta, err := b.store.Query(ctx, hash)
+	if errors.Is(err, context.Canceled) {
+		return nil, ErrClientGone
 	}
+	if errors.Is(err, store.ErrBlobNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
+		return nil, ErrInternal
+	}
+
+	b.analytics.RecordCheck(r, hash)
+	return blossy.Found(meta.Type, meta.Size), nil
 }
 
-func Download(db *store.T, client bunny.Client, resolver AssetResolver, analytics *analytics.Engine) func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
-	return func(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
+func (b *T) download(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
+	// In the Bunny CDN files are defined by their name (hash) and extension (ext).
+	// If the extension is not provided, or if it's different (e.g. .jpg instead of .jpeg), Bunny won't find the file.
+	// To find the correct extension, we check the store for that hash and use the type to get the extension.
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
 
-		// In the Bunny CDN files are defined by their name (hash) and extension (ext).
-		// If the extension is not provided, or if it's different (e.g. .jpg instead of .jpeg), Bunny won't find the file.
-		// To find the correct extension, we check the store for that hash and use the type to get the extension.
-		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	meta, err := b.store.Query(ctx, hash)
+	if errors.Is(err, context.Canceled) {
+		return nil, ErrClientGone
+	}
+	if err != nil && !errors.Is(err, store.ErrBlobNotFound) {
+		slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
+		return nil, ErrInternal
+	}
+
+	if errors.Is(err, store.ErrBlobNotFound) {
+		// blob not found locally; if the client opted in, try the relay asset resolution.
+		redirect := r.Raw().URL.Query().Has("redirect")
+		if !redirect {
+			return nil, ErrNotFound
+		}
+
+		ctx, cancel = context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
 
-		meta, err := db.Query(ctx, hash)
-		if errors.Is(err, context.Canceled) {
-			return nil, ErrClientGone
-		}
-		if err != nil && !errors.Is(err, store.ErrBlobNotFound) {
-			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
+		assetURL, err := b.relay.ResolveAssetURL(ctx, hash)
+		if err != nil {
+			slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", err)
 			return nil, ErrInternal
 		}
-
-		if errors.Is(err, store.ErrBlobNotFound) {
-			// blob not found locally; if the client opted in, try the nostr redirect resolver.
-			redirect := r.Raw().URL.Query().Has("redirect")
-			if !redirect {
-				return nil, ErrNotFound
-			}
-
-			ctx, cancel = context.WithTimeout(r.Context(), 3*time.Second)
-			defer cancel()
-
-			assetURL, found, err := resolver.ResolveAssetURL(ctx, hash.Hex())
-			if err != nil {
-				slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", err)
-				return nil, ErrInternal
-			}
-			if !found || assetURL == "" {
-				return nil, ErrNotFound
-			}
-
-			analytics.RecordDownload(r, hash)
-			return blossy.Redirect(assetURL, http.StatusTemporaryRedirect), nil
+		if assetURL == "" {
+			return nil, ErrNotFound
 		}
 
-		analytics.RecordDownload(r, hash)
-		url := client.CDNURL(BlobPath(hash, meta.Type))
-		return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
+		b.analytics.RecordDownload(r, hash)
+		return blossy.Redirect(assetURL, http.StatusTemporaryRedirect), nil
 	}
+
+	b.analytics.RecordDownload(r, hash)
+	url := b.bunny.CDNURL(BlobPath(hash, meta.Type))
+	return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
 }
 
 // stallReader resets a timer on every successful Read, enabling stall detection for streaming uploads.
@@ -161,109 +183,106 @@ func (s *stallReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func Upload(
-	db *store.T,
-	client bunny.Client,
-	limiter rate.Limiter,
-	stallTimeout time.Duration,
-	analytics *analytics.Engine,
-) func(r blossy.Request, hints blossy.UploadHints, data io.Reader) (blossom.BlobDescriptor, *blossom.Error) {
-	return func(r blossy.Request, hints blossy.UploadHints, data io.Reader) (blossom.BlobDescriptor, *blossom.Error) {
-		if data == nil {
-			return blossom.BlobDescriptor{}, blossom.ErrBadRequest("body is empty")
-		}
+func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (blossom.BlobDescriptor, *blossom.Error) {
+	if data == nil {
+		slog.Error("blossom: received nil body on upload")
+		return blossom.BlobDescriptor{}, blossom.ErrBadRequest("body is empty")
+	}
 
-		// To avoid wasting bandwidth and Bunny credits,
-		// we check if the blob exists in the store before uploading it.
-		meta, err := db.Query(r.Context(), *hints.Hash)
-		if err == nil {
-			// blob already exists
-			return blossom.BlobDescriptor{
-				Hash:     meta.Hash,
-				Type:     meta.Type,
-				Size:     meta.Size,
-				Uploaded: meta.CreatedAt.Unix(),
-			}, nil
-		}
-		if errors.Is(err, context.Canceled) {
-			return blossom.BlobDescriptor{}, blossom.ErrBadRequest("context canceled")
-		}
-		if err != nil && !errors.Is(err, store.ErrBlobNotFound) {
-			// internal error
-			slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hints.Hash)
-			return blossom.BlobDescriptor{}, ErrInternal
-		}
-
-		// upload to Bunny directly, enforcing the stall timeout to prevent clients from uploading too slowly.
-		ctx, cancel := context.WithCancelCause(r.Context())
-		defer cancel(nil)
-
-		reader := &stallReader{
-			data:    data,
-			timeout: stallTimeout,
-			timer: time.AfterFunc(stallTimeout, func() {
-				cancel(fmt.Errorf("stalled longer than %v", stallTimeout))
-			}),
-		}
-		defer reader.timer.Stop()
-
-		name := BlobPath(*hints.Hash, hints.Type)
-		sha256 := hints.Hash.Hex()
-
-		err = client.Upload(ctx, reader, name, sha256)
-		if errors.Is(err, bunny.ErrInvalidChecksum) {
-			// punish the client for providing a bad hash
-			cost := 200.0
-			limiter.Penalize(r.IP().Group(), cost)
-			return blossom.BlobDescriptor{}, blossom.ErrBadRequest("checksum mismatch")
-		}
-		if errors.Is(err, context.Canceled) {
-			return blossom.BlobDescriptor{}, ErrClientGone
-		}
-		if err != nil {
-			slog.Error("blossom: failed to upload blob", "error", err, "name", name, "ctx_error", ctx.Err(), "ctx_cause", context.Cause(ctx))
-			return blossom.BlobDescriptor{}, ErrInternal
-		}
-
-		// Use a fresh context for the remaining operations to avoid orphaning
-		// blobs in Bunny if the client disconnects after the upload completes.
-		saveCtx, saveCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer saveCancel()
-
-		_, size, err := client.Check(saveCtx, name)
-		if err != nil {
-			slog.Error("blossom: failed to check blob", "error", err, "name", name)
-			return blossom.BlobDescriptor{}, ErrInternal
-		}
-
-		// punish the client for providing bad hints.
-		if hints.Size < size {
-			cost := 100.0
-			limiter.Penalize(r.IP().Group(), cost)
-		}
-
-		meta = store.BlobMeta{
-			Hash:       *hints.Hash,
-			Type:       hints.Type,
-			Size:       size,
-			CreatedAt:  time.Now().UTC(),
-			AuthPubkey: r.Pubkey(),
-		}
-
-		_, err = db.Save(saveCtx, meta)
-		if err != nil {
-			slog.Error("blossom: failed to save blob metadata", "error", err, "hash", hints.Hash)
-			return blossom.BlobDescriptor{}, ErrInternal
-		}
-
-		analytics.RecordUpload(r, hints)
+	// To avoid wasting bandwidth and Bunny credits,
+	// we check if the blob exists in the store before uploading it.
+	meta, err := b.store.Query(r.Context(), *hints.Hash)
+	if err == nil {
+		// blob already exists
 		return blossom.BlobDescriptor{
-			Hash:     *hints.Hash,
-			Type:     hints.Type,
-			Size:     size,
+			Hash:     meta.Hash,
+			Type:     meta.Type,
+			Size:     meta.Size,
 			Uploaded: meta.CreatedAt.Unix(),
 		}, nil
 	}
+	if errors.Is(err, context.Canceled) {
+		return blossom.BlobDescriptor{}, ErrClientGone
+	}
+	if err != nil && !errors.Is(err, store.ErrBlobNotFound) {
+		// internal error
+		slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hints.Hash)
+		return blossom.BlobDescriptor{}, ErrInternal
+	}
+
+	// upload to Bunny directly, enforcing the stall timeout to prevent clients from uploading too slowly.
+	ctx, cancel := context.WithCancelCause(r.Context())
+	defer cancel(nil)
+
+	reader := &stallReader{
+		data:    data,
+		timeout: b.config.StallTimeout,
+		timer: time.AfterFunc(b.config.StallTimeout, func() {
+			cancel(fmt.Errorf("stalled longer than %v", b.config.StallTimeout))
+		}),
+	}
+	defer reader.timer.Stop()
+
+	name := BlobPath(*hints.Hash, hints.Type)
+	sha256 := hints.Hash.Hex()
+
+	err = b.bunny.Upload(ctx, reader, name, sha256)
+	if errors.Is(err, bunny.ErrInvalidChecksum) {
+		// punish the client for providing a bad hash
+		cost := 200.0
+		b.limiter.Penalize(r.IP().Group(), cost)
+		return blossom.BlobDescriptor{}, blossom.ErrBadRequest("checksum mismatch")
+	}
+	if errors.Is(err, context.Canceled) {
+		return blossom.BlobDescriptor{}, ErrClientGone
+	}
+	if err != nil {
+		slog.Error("blossom: failed to upload blob", "error", err, "name", name, "ctx_error", ctx.Err(), "ctx_cause", context.Cause(ctx))
+		return blossom.BlobDescriptor{}, ErrInternal
+	}
+
+	// Use a fresh context for the remaining operations to avoid orphaning blobs in Bunny
+	// if the client disconnects after the upload completes, but before the metadata is saved.
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer saveCancel()
+
+	_, size, err := b.bunny.Check(saveCtx, name)
+	if err != nil {
+		slog.Error("blossom: failed to check blob", "error", err, "name", name)
+		return blossom.BlobDescriptor{}, ErrInternal
+	}
+
+	// punish the client for providing bad hints.
+	if hints.Size < size {
+		cost := 100.0
+		b.limiter.Penalize(r.IP().Group(), cost)
+	}
+
+	meta = store.BlobMeta{
+		Hash:       *hints.Hash,
+		Type:       hints.Type,
+		Size:       size,
+		CreatedAt:  time.Now().UTC(),
+		AuthPubkey: r.Pubkey(),
+	}
+
+	_, err = b.store.Save(saveCtx, meta)
+	if err != nil {
+		slog.Error("blossom: failed to save blob metadata", "error", err, "hash", hints.Hash)
+		return blossom.BlobDescriptor{}, ErrInternal
+	}
+
+	if err := b.relay.NotifyUpload(meta.Hash, meta.Type); err != nil {
+		slog.Error("blossom: failed to notify relay of upload", "error", err, "hash", meta.Hash)
+	}
+
+	b.analytics.RecordUpload(r, hints)
+	return blossom.BlobDescriptor{
+		Hash:     *hints.Hash,
+		Type:     hints.Type,
+		Size:     size,
+		Uploaded: meta.CreatedAt.Unix(),
+	}, nil
 }
 
 // BlobPath returns the path to the blob on the blossom server, based on the hash and mime type.

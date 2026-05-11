@@ -133,8 +133,8 @@ func main() {
 		limiter,
 		defender,
 		blossomDB,
+		relay,
 		analytics,
-		resolver{db: relayDB},
 	)
 	if err != nil {
 		panic(err)
@@ -180,23 +180,9 @@ func main() {
 	}
 }
 
-// Resolver implements [analytics.Resolver] and [blossom.AssetResolver]
+// Resolver implements [analytics.Resolver]
 type resolver struct {
 	db eventstore.T
-}
-
-func (r resolver) ResolveAssetURL(ctx context.Context, hash string) (string, bool, error) {
-	filter := nostr.Filter{
-		Kinds: []int{events.KindAsset},
-		Tags:  nostr.TagMap{"x": []string{hash}},
-		Limit: 1,
-	}
-	found, err := r.db.Query(ctx, filter)
-	if err != nil || len(found) == 0 {
-		return "", false, err
-	}
-	url, ok := events.Find(found[0].Tags, "url")
-	return url, ok, nil
 }
 
 func (r resolver) AssetsReferencing(ctx context.Context, hash blossom.Hash) ([]nostr.Event, error) {

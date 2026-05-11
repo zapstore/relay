@@ -158,6 +158,21 @@ func (r *T) NotifyUpload(hash blossom.Hash, mime string) error {
 	}
 }
 
+// ResolveAssetURL looks up a download URL for a kind 3063 asset by the SHA-256 hash in its "x" tag.
+func (r *T) ResolveAssetURL(ctx context.Context, hash blossom.Hash) (string, error) {
+	filter := nostr.Filter{
+		Kinds: []int{events.KindAsset},
+		Tags:  nostr.TagMap{"x": []string{hash.Hex()}},
+		Limit: 1,
+	}
+	found, err := r.store.Query(ctx, filter)
+	if err != nil || len(found) == 0 {
+		return "", err
+	}
+	url, _ := events.Find(found[0].Tags, "url")
+	return url, nil
+}
+
 func (r *T) runReconcile(ctx context.Context) {
 	ticker := time.NewTicker(r.config.ReconcileInterval)
 	defer ticker.Stop()
