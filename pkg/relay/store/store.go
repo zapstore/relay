@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -69,9 +68,6 @@ func (s T) SavePending(ctx context.Context, event *nostr.Event) (bool, error) {
 // QueryPending returns all pending events of the given kind.
 func (s T) QueryPending(ctx context.Context, kind int) ([]nostr.Event, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT raw FROM pending_events WHERE kind = ?`, kind)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending events: %w", err)
 	}
