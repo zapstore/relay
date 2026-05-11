@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/rely"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/defender/pkg/models"
@@ -50,16 +51,45 @@ var RootKinds = []int{
 // indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
 const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
 
+// T represents the relay and all its dependencies.
+type T struct {
+	server *rely.Relay
+	config Config
+
+	limiter   rate.Limiter
+	defender  defender.T
+	store     store.T
+	analytics *analytics.Engine
+	indexing  *indexing.Engine
+
+	blossom Blossom
+	uploads chan upload
+}
+
+type upload struct {
+	hash blossom.Hash
+	mime string
+}
+
+// Blossom is an interface that represents the subset of the blossom functionalities needed by the relay.
+type Blossom interface {
+	// Has returns whether a hash exists in the blossom database.
+	Has(ctx context.Context, hash blossom.Hash) (bool, error)
+}
+
+// Setup creates a new relay instance with the given dependencies and configuration.
+// It registers all functions to the rely.Relay hooks.
 func Setup(
 	config Config,
 	limiter rate.Limiter,
 	defender defender.T,
 	store store.T,
+	blssm Blossom,
 	analytics *analytics.Engine,
-	indexing *indexing.Engine, // nil = no demand-driven indexing
-) (*rely.Relay, error) {
+	indexing *indexing.Engine,
+) (*T, error) {
 
-	relay := rely.NewRelay(
+	server := rely.NewRelay(
 		rely.WithAuthURL(config.Hostname),
 		rely.WithInfo(config.Info.NIP11()),
 		rely.WithQueueCapacity(config.QueueCapacity),
@@ -67,14 +97,14 @@ func Setup(
 		rely.WithClientResponseLimit(config.ResponseLimit),
 	)
 
-	relay.Reject.Connection.Clear()
-	relay.Reject.Connection.Append(
+	server.Reject.Connection.Clear()
+	server.Reject.Connection.Append(
 		RateConnectionIP(limiter),
 		rely.RegistrationFailWithin(3*time.Second),
 	)
 
-	relay.Reject.Event.Clear()
-	relay.Reject.Event.Append(
+	server.Reject.Event.Clear()
+	server.Reject.Event.Append(
 		RateEventIP(limiter),
 		KindNotAllowed(config.AllowedKinds),
 		rely.InvalidID,
@@ -85,95 +115,256 @@ func Setup(
 		AppOwnership(store, config.Info.Pubkey),
 	)
 
-	relay.Reject.Req.Clear()
-	relay.Reject.Req.Append(
+	server.Reject.Req.Clear()
+	server.Reject.Req.Append(
 		RateReqIP(limiter),
 		FiltersExceed(config.MaxReqFilters),
 		VagueFilters(3),
 	)
 
-	relay.On.Event = Save(store, analytics, indexing, config.Info.Pubkey)
-	relay.On.Req = Query(store, analytics, indexing)
+	relay := &T{
+		server: server,
+		config: config,
+
+		limiter:   limiter,
+		defender:  defender,
+		store:     store,
+		analytics: analytics,
+		indexing:  indexing,
+
+		blossom: blssm,
+		uploads: make(chan upload, 100),
+	}
+
+	server.On.Event = relay.save
+	server.On.Req = relay.query
 	return relay, nil
 }
 
-func Save(db store.T, analytics *analytics.Engine, idx *indexing.Engine, operatorPubkey string) func(c rely.Client, event *nostr.Event) error {
-	return func(c rely.Client, event *nostr.Event) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+// StartAndServe starts the relay, listens to the provided address and handles http requests.
+func (r *T) StartAndServe(ctx context.Context, addr string) error {
+	go r.runReconcile(ctx)
+	return r.server.StartAndServe(ctx, addr)
+}
 
-		switch {
-		case event.Kind == nostr.KindDeletion:
-			var deleted int
-			var err error
-
-			if event.PubKey == operatorPubkey {
-				// Operator delete request
-				deleted, err = db.ForceDeleteRequest(ctx, event)
-				if err != nil {
-					slog.Error("relay: failed to fulfill the operator delete request", "error", err, "event", event.ID)
-					return err
-				}
-			} else {
-				// Regular NIP-09 deletion
-				deleted, err = db.DeleteRequest(ctx, event)
-				if err != nil {
-					slog.Error("relay: failed to fulfill the delete request", "error", err, "event", event.ID)
-					return err
-				}
-			}
-
-			// Reject deletion events that didn't delete anything
-			if deleted == 0 {
-				return errors.New("kind 5 deletion event does not target any existing events on this relay")
-			}
-
-			// Save the delete request. Clients will fetch these to remove the deleted events from their local cache.
-			if _, err := db.Save(ctx, event); err != nil {
-				slog.Error("relay: failed to save the delete request", "error", err, "event", event.ID)
-				return err
-			}
-
-		case nostr.IsRegularKind(event.Kind):
-			if _, err := db.Save(ctx, event); err != nil {
-				slog.Error("relay: failed to save the event", "error", err, "event", event.ID)
-				return err
-			}
-
-		case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
-			if _, err := db.Replace(ctx, event); err != nil {
-				slog.Error("relay: failed to replace the event", "error", err, "event", event.ID)
-				return err
-			}
-		}
-
-		analytics.RecordEvent(c, event)
+// NotifyUpload notifies the relay that the upload of the blob with the given hash and mime type is complete.
+// The signal is used to trigger the reconciliation of pending events.
+func (r *T) NotifyUpload(hash blossom.Hash, mime string) error {
+	select {
+	case r.uploads <- upload{hash: hash, mime: mime}:
 		return nil
+	default:
+		return errors.New("channel is full")
 	}
 }
 
-func Query(db store.T, analytics *analytics.Engine, idx *indexing.Engine) func(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
-	return func(ctx context.Context, client rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
+func (r *T) runReconcile(ctx context.Context) {
+	ticker := time.NewTicker(r.config.ReconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
 
-		result, err := db.Query(ctx, filters...)
-		if errors.Is(err, store.ErrUnsupportedREQ) {
-			return nil, err
+		case <-ticker.C:
+			err := r.reconcile(ctx)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("reconcile failed", "error", err)
+			}
+
+		case u := <-r.uploads:
+			if u.mime == "application/vnd.android.package-archive" {
+				// because assets are supposed to reference APKs in their "x" tags,
+				// reconcile only when an APK is uploaded
+				err := r.reconcile(ctx)
+				if err != nil && !errors.Is(err, context.Canceled) {
+					slog.Error("reconcile failed", "error", err)
+				}
+			}
 		}
-		if err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("relay: failed to query events", "error", err, "filters", filters)
-			return nil, err
-		}
-
-		analytics.RecordReq(client, id, filters, result)
-
-		if idx != nil {
-			recordDemandSignals(idx, id, filters, result)
-		}
-
-		return result, nil
 	}
+}
+
+// reconcile is responsible for checking whether to promote pending events to normal events
+// so they can be served in queries.
+func (r *T) reconcile(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	assets, err := r.store.QueryPending(ctx, events.KindAsset)
+	if err != nil {
+		return fmt.Errorf("failed to reconcile events: %w", err)
+	}
+
+	errs := make([]error, 0, len(assets))
+	for _, asset := range assets {
+		xTag, ok := events.Find(asset.Tags, "x")
+		if !ok {
+			errs = append(errs, fmt.Errorf("asset event %s missing x tag", asset.ID))
+			continue
+		}
+
+		hash, err := blossom.ParseHash(xTag)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("asset event %s has invalid x tag: %w", asset.ID, err))
+			continue
+		}
+
+		found, err := r.blossom.Has(ctx, hash)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to check if hash %s exists: %w", hash, err))
+			continue
+		}
+
+		if found {
+			if _, err := r.store.Save(ctx, &asset); err != nil {
+				errs = append(errs, fmt.Errorf("failed to save event %s: %w", asset.ID, err))
+				continue
+			}
+			if err := r.store.DeletePending(ctx, asset.ID); err != nil {
+				errs = append(errs, fmt.Errorf("failed to delete pending event %s: %w", asset.ID, err))
+				continue
+			}
+			if err := r.server.Broadcast(&asset); err != nil {
+				errs = append(errs, fmt.Errorf("failed to broadcast event %s: %w", asset.ID, err))
+				continue
+			}
+		}
+	}
+
+	cutoff := time.Now().UTC().Add(-r.config.RemovePendingAfter)
+	if err := r.store.DeleteExpiredPending(ctx, cutoff); err != nil {
+		errs = append(errs, fmt.Errorf("failed to delete expired pending events: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+func (r *T) save(c rely.Client, event *nostr.Event) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	switch {
+	case event.Kind == nostr.KindDeletion:
+		if err := r.handleDelete(ctx, event); err != nil {
+			slog.Error("relay: failed to fullfil delete", "event", event.ID, "error", err)
+			return err
+		}
+
+	case event.Kind == events.KindAsset:
+		if err := r.saveAsset(ctx, event); err != nil {
+			slog.Error("relay: failed to save asset event", "event", event.ID, "error", err)
+			return err
+		}
+
+	case nostr.IsRegularKind(event.Kind):
+		if _, err := r.store.Save(ctx, event); err != nil {
+			slog.Error("relay: failed to save regular event", "event", event.ID, "error", err)
+			return err
+		}
+
+	case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
+		if _, err := r.store.Replace(ctx, event); err != nil {
+			slog.Error("relay: failed to replace event", "event", event.ID, "error", err)
+			return err
+		}
+	}
+
+	r.analytics.RecordEvent(c, event)
+	return nil
+}
+
+// handleDelete handles deletion events, either from the operator or a regular NIP-09 deletion.
+func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
+	if event.Kind != nostr.KindDeletion {
+		return errors.New("event is not a deletion")
+	}
+
+	var deleted int
+	var err error
+
+	if event.PubKey == r.config.Info.Pubkey {
+		// Operator delete request
+		deleted, err = r.store.ForceDeleteRequest(ctx, event)
+		if err != nil {
+			return fmt.Errorf("failed to perform operator delete: %w", err)
+		}
+	} else {
+		// Regular NIP-09 deletion
+		deleted, err = r.store.DeleteRequest(ctx, event)
+		if err != nil {
+			return fmt.Errorf("failed to perform delete: %w", err)
+		}
+	}
+
+	// Reject deletion events that didn't delete anything
+	if deleted == 0 {
+		return errors.New("kind 5 deletion event does not target any existing events on this relay")
+	}
+
+	// Save the delete request. Clients will fetch these to remove the deleted events from their local cache.
+	if _, err := r.store.Save(ctx, event); err != nil {
+		return fmt.Errorf("failed to save delete request: %w", err)
+	}
+	return nil
+}
+
+// saveAsset saves an asset event to the store.
+// If the asset references a blob that is not in blossom yet, it will be saved as pending, until the
+// runReconcile loop saves it to the store or deletes it if too much time has passed.
+func (r *T) saveAsset(ctx context.Context, event *nostr.Event) error {
+	if event.Kind != events.KindAsset {
+		return errors.New("event is not an asset")
+	}
+
+	xTag, ok := events.Find(event.Tags, "x")
+	if !ok {
+		return errors.New("asset event is missing x tag")
+	}
+
+	hash, err := blossom.ParseHash(xTag)
+	if err != nil {
+		return fmt.Errorf("asset event has an invalid x tag: %w", err)
+	}
+
+	found, err := r.blossom.Has(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("failed to check if hash %s exists: %w", hash, err)
+	}
+
+	if !found {
+		// the asset reference a blob that is not yet in blossom. Save as pending
+		if _, err := r.store.SavePending(ctx, event); err != nil {
+			return fmt.Errorf("failed to save the asset event as pending: %w", err)
+		}
+		return nil
+	}
+
+	// the asset is ready
+	if _, err := r.store.Save(ctx, event); err != nil {
+		return fmt.Errorf("failed to save the asset event: %w", err)
+	}
+	return nil
+}
+
+func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	result, err := r.store.Query(ctx, filters...)
+	if errors.Is(err, store.ErrUnsupportedREQ) {
+		return nil, err
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		slog.Error("relay: failed to query events", "error", err, "filters", filters)
+		return nil, err
+	}
+
+	if r.indexing != nil {
+		recordDemandSignals(r.indexing, id, filters, result)
+	}
+
+	r.analytics.RecordReq(c, id, filters, result)
+	return result, nil
 }
 
 // recordDemandSignals records discovery misses and release requests non-blocking.

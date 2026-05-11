@@ -51,17 +51,17 @@ func main() {
 		panic(err)
 	}
 
-	rstore, err := eventstore.New(filepath.Join(dataDir, "relay.db"))
+	relayDB, err := eventstore.New(filepath.Join(dataDir, "relay.db"))
 	if err != nil {
 		panic(err)
 	}
-	defer rstore.Close()
+	defer relayDB.Close()
 
-	bstore, err := blobstore.New(filepath.Join(dataDir, "blossom.db"))
+	blossomDB, err := blobstore.New(filepath.Join(dataDir, "blossom.db"))
 	if err != nil {
 		panic(err)
 	}
-	defer bstore.Close()
+	defer blossomDB.Close()
 
 	// Step 2.
 	// Initialize rate limiter and connect to the defender
@@ -89,7 +89,7 @@ func main() {
 			Geo:   filepath.Join(analyticsDir, "geo.mmdb"),
 		},
 		logger,
-		resolver{db: rstore},
+		resolver{db: relayDB},
 	)
 	if err != nil {
 		panic(err)
@@ -119,7 +119,8 @@ func main() {
 		config.Relay,
 		limiter,
 		defender,
-		rstore,
+		relayDB,
+		blossomDB,
 		analytics,
 		indexingEngine,
 	)
@@ -131,9 +132,9 @@ func main() {
 		config.Blossom,
 		limiter,
 		defender,
-		bstore,
+		blossomDB,
 		analytics,
-		resolver{db: rstore},
+		resolver{db: relayDB},
 	)
 	if err != nil {
 		panic(err)
