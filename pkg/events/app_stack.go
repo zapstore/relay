@@ -12,8 +12,9 @@ const KindStack = 30267
 // Stack represents a set of app identifiers with associated platform identifiers.
 // Learn more here: https://github.com/nostr-protocol/nips/blob/master/51.md#sets
 type Stack struct {
-	Apps      []AppIdentifier
-	Platforms []string
+	Apps        []AppIdentifier
+	Platforms   []string
+	Communities []string
 }
 
 func (s Stack) Validate() error {
@@ -25,6 +26,9 @@ func (s Stack) Validate() error {
 
 	if len(s.Platforms) == 0 {
 		return fmt.Errorf("missing 'f' tag (no recognized platform identifier)")
+	}
+	if len(s.Communities) == 0 {
+		return fmt.Errorf("missing 'h' tag (no community identifier)")
 	}
 	return nil
 }
@@ -49,10 +53,14 @@ func ParseStack(event *nostr.Event) (Stack, error) {
 				return Stack{}, err
 			}
 			stack.Apps = append(stack.Apps, app)
+
 		case "f":
 			if slices.Contains(PlatformIdentifiers, tag[1]) {
 				stack.Platforms = append(stack.Platforms, tag[1])
 			}
+
+		case "h":
+			stack.Communities = append(stack.Communities, tag[1])
 		}
 	}
 	return stack, nil
