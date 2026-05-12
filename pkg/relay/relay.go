@@ -308,7 +308,7 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 
 	// Reject deletion events that didn't delete anything
 	if deleted == 0 {
-		return errors.New("kind 5 deletion event does not target any existing events on this relay")
+		return nil
 	}
 
 	// Save the delete request. Clients will fetch these to remove the deleted events from their local cache.
