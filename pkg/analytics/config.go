@@ -48,7 +48,7 @@ func NewConfig() Config {
 }
 
 func (c Config) Validate() error {
-	if c.Port != "" {
+	if c.Port == "" {
 		return errors.New("port cannot be empty")
 	}
 	if c.FlushInterval < time.Second {
