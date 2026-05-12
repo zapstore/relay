@@ -168,21 +168,6 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, _ string) (blossy.Blob
 	return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
 }
 
-// stallReader resets a timer on every successful Read, enabling stall detection for streaming uploads.
-type stallReader struct {
-	data    io.Reader
-	timer   *time.Timer
-	timeout time.Duration
-}
-
-func (s *stallReader) Read(p []byte) (int, error) {
-	n, err := s.data.Read(p)
-	if n > 0 {
-		s.timer.Reset(s.timeout)
-	}
-	return n, err
-}
-
 func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (blossom.BlobDescriptor, *blossom.Error) {
 	if data == nil {
 		slog.Error("blossom: received nil body on upload")
@@ -210,34 +195,25 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 		return blossom.BlobDescriptor{}, ErrInternal
 	}
 
-	// upload to Bunny directly, enforcing the stall timeout to prevent clients from uploading too slowly.
-	ctx, cancel := context.WithCancelCause(r.Context())
-	defer cancel(nil)
-
-	reader := &stallReader{
-		data:    data,
-		timeout: b.config.StallTimeout,
-		timer: time.AfterFunc(b.config.StallTimeout, func() {
-			cancel(fmt.Errorf("stalled longer than %v", b.config.StallTimeout))
-		}),
-	}
-	defer reader.timer.Stop()
-
 	name := BlobPath(*hints.Hash, hints.Type)
 	sha256 := hints.Hash.Hex()
 
-	err = b.bunny.Upload(ctx, reader, name, sha256)
+	reader := newStallReader(r.Context(), data, b.config.StallTimeout)
+	defer reader.Stop()
+
+	err = b.bunny.Upload(reader.Context(), reader, name, sha256)
 	if errors.Is(err, bunny.ErrInvalidChecksum) {
 		// punish the client for providing a bad hash
 		cost := 200.0
 		b.limiter.Penalize(r.IP().Group(), cost)
 		return blossom.BlobDescriptor{}, blossom.ErrBadRequest("checksum mismatch")
 	}
-	if errors.Is(err, context.Canceled) {
-		return blossom.BlobDescriptor{}, ErrClientGone
+	if rErr := reader.Err(); rErr != nil {
+		// check if the error was caused by a context cancelled or stalled reader
+		return blossom.BlobDescriptor{}, &blossom.Error{Code: 499, Reason: rErr.Error()}
 	}
 	if err != nil {
-		slog.Error("blossom: failed to upload blob", "error", err, "name", name, "ctx_error", ctx.Err(), "ctx_cause", context.Cause(ctx))
+		slog.Error("blossom: failed to upload blob", "error", err, "name", name)
 		return blossom.BlobDescriptor{}, ErrInternal
 	}
 
