@@ -13,7 +13,7 @@ import (
 	"syscall"
 
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/zapstore/defender/pkg/client"
+	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
 	blobstore "github.com/zapstore/relay/pkg/blossom/store"
@@ -67,7 +67,7 @@ func main() {
 	// Initialize rate limiter and connect to the defender
 	limiter := rate.NewLimiter(config.Limiter)
 
-	defender, err := client.Default("localhost:8080")
+	defender, err := defender.Default("localhost:8080")
 	if err != nil {
 		panic(err)
 	}
