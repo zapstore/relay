@@ -67,7 +67,7 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	}
 
 	go func() {
-		e.log.Info("analytics: API server starting", "address", addr)
+		e.log.Info("serving the analytics server", "address", addr)
 		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			exit <- err
 		}
