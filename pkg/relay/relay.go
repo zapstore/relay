@@ -213,25 +213,14 @@ func (r *T) reconcile(ctx context.Context) error {
 
 	errs := make([]error, 0, len(assets))
 	for _, asset := range assets {
-		xTag, ok := events.Find(asset.Tags, "x")
-		if !ok {
-			errs = append(errs, fmt.Errorf("asset event %s missing x tag", asset.ID))
-			continue
-		}
 
-		hash, err := blossom.ParseHash(xTag)
+		ready, err := isAssetReady(ctx, r.blossom, &asset)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("asset event %s has invalid x tag: %w", asset.ID, err))
+			errs = append(errs, fmt.Errorf("failed to check if asset is ready: %w", err))
 			continue
 		}
 
-		found, err := r.blossom.Has(ctx, hash)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to check if hash %s exists: %w", hash, err))
-			continue
-		}
-
-		if found {
+		if ready {
 			if _, err := r.store.Save(ctx, &asset); err != nil {
 				errs = append(errs, fmt.Errorf("failed to save event %s: %w", asset.ID, err))
 				continue
@@ -332,37 +321,81 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 // saveAsset saves an asset event to the store.
 // If the asset references a blob that is not in blossom yet, it will be saved as pending, until the
 // runReconcile loop saves it to the store or deletes it if too much time has passed.
-func (r *T) saveAsset(ctx context.Context, event *nostr.Event) (pending bool, err error) {
+func (r *T) saveAsset(ctx context.Context, event *nostr.Event) (isPending bool, err error) {
 	if event.Kind != events.KindAsset {
 		return false, errors.New("event is not an asset")
 	}
 
-	xTag, ok := events.Find(event.Tags, "x")
+	ready, err := isAssetReady(ctx, r.blossom, event)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if asset is ready: %w", err)
+	}
+
+	if ready {
+		if _, err := r.store.Save(ctx, event); err != nil {
+			return false, fmt.Errorf("failed to save the asset event: %w", err)
+		}
+		return false, nil
+	}
+
+	// the asset reference a blob that is not yet in blossom. Save as pending
+	if _, err := r.store.SavePending(ctx, event); err != nil {
+		return false, fmt.Errorf("failed to save the asset event as pending: %w", err)
+	}
+	return true, nil
+}
+
+// isAssetReady returns whether the asset's blob has been correctly uploaded.
+// It first checks the local blossom database, and then falls back to checking all "url" tags in the event.
+func isAssetReady(ctx context.Context, b Blossom, asset *nostr.Event) (bool, error) {
+	if asset.Kind != events.KindAsset {
+		return false, errors.New("event must be an asset event")
+	}
+
+	// first we check the local blossom database
+	xTag, ok := events.Find(asset.Tags, "x")
 	if !ok {
-		return false, errors.New("asset event is missing x tag")
+		return false, errors.New("asset doesn't have an 'x' tag")
 	}
 
 	hash, err := blossom.ParseHash(xTag)
 	if err != nil {
-		return false, fmt.Errorf("asset event has an invalid x tag: %w", err)
+		return false, fmt.Errorf("invalid x tag: %w", err)
 	}
 
-	found, err := r.blossom.Has(ctx, hash)
+	found, err := b.Has(ctx, hash)
 	if err != nil {
-		return false, fmt.Errorf("failed to check if hash %s exists: %w", hash, err)
+		return false, fmt.Errorf("failed to check hash: %w", err)
 	}
-
-	if !found {
-		// the asset reference a blob that is not yet in blossom. Save as pending
-		if _, err := r.store.SavePending(ctx, event); err != nil {
-			return false, fmt.Errorf("failed to save the asset event as pending: %w", err)
-		}
+	if found {
 		return true, nil
 	}
 
-	// the asset is ready
-	if _, err := r.store.Save(ctx, event); err != nil {
-		return false, fmt.Errorf("failed to save the asset event: %w", err)
+	// if the hash is not found locally, we check the "url" tags
+	// by making a HEAD request for each URL
+	urls := events.FindAll(asset.Tags, "url")
+	if len(urls) == 0 {
+		return false, nil
+	}
+
+	for _, url := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+		if err != nil {
+			slog.Warn("isAssetReady: skipping malformed url tag", "event", asset.ID, "url", url, "error", err)
+			continue
+		}
+
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			slog.Warn("isAssetReady: skipping url", "event", asset.ID, "url", url, "error", err)
+			continue
+		}
+
+		if res.StatusCode >= 200 && res.StatusCode < 300 {
+			res.Body.Close()
+			return true, nil
+		}
+		res.Body.Close()
 	}
 	return false, nil
 }

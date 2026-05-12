@@ -82,6 +82,17 @@ func Find(tags nostr.Tags, key string) (string, bool) {
 	return "", false
 }
 
+// FindAll returns all values of the tags with the given key.
+func FindAll(tags nostr.Tags, key string) []string {
+	var result []string
+	for _, tag := range tags {
+		if len(tag) > 1 && tag[0] == key {
+			result = append(result, tag[1])
+		}
+	}
+	return result
+}
+
 // AddressableRef is a parsed NIP-01 addressable coordinate in the form "<kind>:<pubkey>:<d-tag>".
 type AddressableRef struct {
 	Kind   int
