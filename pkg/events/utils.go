@@ -25,6 +25,7 @@ var WithValidation = []int{
 	KindRelease,
 	KindAsset,
 	KindStack,
+	KindAppSettings,
 	KindAppRelays,
 	KindIdentityProof,
 	KindCommunityCreation,
@@ -45,6 +46,9 @@ func Validate(event *nostr.Event) error {
 
 	case KindStack:
 		return ValidateStack(event)
+
+	case KindAppSettings:
+		return ValidateAppSettings(event)
 
 	case KindAppRelays:
 		return ValidateAppRelays(event)

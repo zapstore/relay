@@ -61,7 +61,7 @@ func (app App) Validate() error {
 	return nil
 }
 
-// ParseApp extracts a App from a nostr.Event.
+// ParseApp extracts an App from a nostr.Event.
 // Returns an error if the event kind is wrong or if duplicate singular tags are found.
 func ParseApp(event *nostr.Event) (App, error) {
 	if event.Kind != KindApp {

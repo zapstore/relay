@@ -67,6 +67,7 @@ func NewConfig() Config {
 			events.KindAsset,
 			events.KindStack,
 			events.KindAppRelays,
+			events.KindAppSettings,
 
 			// social and community kinds
 			events.KindProfile,
