@@ -11,7 +11,7 @@ import (
 	eventPkg "github.com/zapstore/relay/pkg/events"
 )
 
-// Source represents where the impression was made.
+// Source represents where the impression/download was made.
 type Source string
 
 const (

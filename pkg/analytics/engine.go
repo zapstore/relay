@@ -334,7 +334,7 @@ func (e *Engine) run() {
 			}
 
 		case impression := <-e.impressions:
-			slog.Debug("analytics: received impression", "app_id", impression.AppID, "app_pubkey", impression.AppPubkey)
+			slog.Debug("analytics: received impression", "app_id", impression.AppID, "source", impression.Source)
 			e.pendingImpressions[impression]++
 
 			if len(e.pendingImpressions) >= e.config.FlushSize {
@@ -344,7 +344,7 @@ func (e *Engine) run() {
 			}
 
 		case download := <-e.downloads:
-			slog.Debug("analytics: received download", "app_id", download.AppID, "app_pubkey", download.AppPubkey)
+			slog.Debug("analytics: received download", "app_id", download.AppID, "source", download.Source)
 			e.pendingDownloads[download]++
 
 			if len(e.pendingDownloads) >= e.config.FlushSize {
