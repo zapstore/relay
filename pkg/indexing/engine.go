@@ -21,38 +21,35 @@ const (
 	maxTTL           = 7 * 24 * time.Hour
 )
 
-
 type discoveryMsg struct{ url string }
 type releaseMsg struct{ appID string }
 
 // Engine records demand signals non-blocking and flushes them to indexing.db.
 type Engine struct {
-	store    *store.Store
-	config   Config
-	log      *slog.Logger
-	ch       chan any
-	wg       sync.WaitGroup
-	done     chan struct{}
+	store  *store.Store
+	config Config
+	ch     chan any
+	wg     sync.WaitGroup
+	done   chan struct{}
 
-	releaseMu      sync.Mutex
-	releaseQueued  map[string]struct{}
+	releaseMu     sync.Mutex
+	releaseQueued map[string]struct{}
 }
 
 // NewEngine opens the indexing store at paths.Store and starts the background engine.
 // Returns an error if the store cannot be opened.
-func NewEngine(cfg Config, paths Paths, logger *slog.Logger) (*Engine, error) {
+func NewEngine(cfg Config, paths Paths) (*Engine, error) {
 	s, err := store.New(paths.Store)
 	if err != nil {
 		return nil, fmt.Errorf("indexing: open store: %w", err)
 	}
-	return newEngine(s, cfg, logger), nil
+	return newEngine(s, cfg), nil
 }
 
-func newEngine(s *store.Store, cfg Config, logger *slog.Logger) *Engine {
+func newEngine(s *store.Store, cfg Config) *Engine {
 	e := &Engine{
 		store:         s,
 		config:        cfg,
-		log:           logger,
 		ch:            make(chan any, cfg.QueueSize),
 		done:          make(chan struct{}),
 		releaseQueued: make(map[string]struct{}),
@@ -84,7 +81,7 @@ func (e *Engine) RecordDiscoveryMiss(rawSearch string) {
 	select {
 	case e.ch <- discoveryMsg{url: r.Canonical}:
 	default:
-		e.log.Warn("indexing: discovery channel full, dropping", "url", r.Canonical)
+		slog.Warn("indexing: discovery channel full, dropping", "url", r.Canonical)
 	}
 }
 
@@ -109,10 +106,9 @@ func (e *Engine) RecordReleaseRequest(appID string) {
 		e.releaseMu.Lock()
 		delete(e.releaseQueued, appID)
 		e.releaseMu.Unlock()
-		e.log.Warn("indexing: release request channel full, dropping", "app_id", appID)
+		slog.Warn("indexing: release request channel full, dropping", "app_id", appID)
 	}
 }
-
 
 func (e *Engine) run() {
 	for {
@@ -143,14 +139,14 @@ func (e *Engine) handle(msg any) {
 	switch m := msg.(type) {
 	case discoveryMsg:
 		if err := e.store.UpsertDiscovery(m.url); err != nil {
-			e.log.Error("indexing: failed to upsert discovery", "url", m.url, "error", err)
+			slog.Error("indexing: failed to upsert discovery", "url", m.url, "error", err)
 		}
 	case releaseMsg:
 		e.releaseMu.Lock()
 		delete(e.releaseQueued, m.appID)
 		e.releaseMu.Unlock()
 		if err := e.store.UpsertReleaseRequest(m.appID); err != nil {
-			e.log.Error("indexing: failed to upsert release request", "app_id", m.appID, "error", err)
+			slog.Error("indexing: failed to upsert release request", "app_id", m.appID, "error", err)
 		}
 	}
 }

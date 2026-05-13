@@ -40,11 +40,12 @@ func main() {
 		panic(err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, config.Sys.LogOptions()))
-	slog.SetDefault(logger)
+	slog.SetDefault(
+		slog.New(slog.NewTextHandler(os.Stdout, config.Sys.LogOptions())),
+	)
 
-	logger.Info("-------------------server startup-------------------")
-	defer logger.Info("-------------------server shutdown-------------------")
+	slog.Info("-------------------server startup-------------------")
+	defer slog.Info("-------------------server shutdown-------------------")
 
 	// Step 1.
 	// Initialize databases
@@ -90,7 +91,6 @@ func main() {
 			Store: filepath.Join(analyticsDir, "analytics.db"),
 			Geo:   filepath.Join(analyticsDir, "geo.mmdb"),
 		},
-		logger,
 		resolver{db: relayDB},
 	)
 	if err != nil {
@@ -107,12 +107,12 @@ func main() {
 
 	var indexingEngine *indexing.Engine
 	indexingPaths := indexing.Paths{Store: filepath.Join(indexingDir, "indexing.db")}
-	indexingEngine, err = indexing.NewEngine(config.Indexing, indexingPaths, logger)
+	indexingEngine, err = indexing.NewEngine(config.Indexing, indexingPaths)
 	if err != nil {
-		logger.Warn("indexing: failed to open indexing.db, demand-driven features disabled", "error", err)
+		slog.Warn("indexing: failed to open indexing.db, demand-driven features disabled", "error", err)
 	} else {
 		defer indexingEngine.Close()
-		logger.Info("indexing: demand-driven indexing enabled")
+		slog.Info("indexing: demand-driven indexing enabled")
 	}
 
 	// Step 5.

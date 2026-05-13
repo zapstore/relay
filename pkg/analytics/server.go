@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -67,7 +68,7 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	}
 
 	go func() {
-		e.log.Info("serving the analytics server", "address", addr)
+		slog.Info("serving the analytics server", "address", addr)
 		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			exit <- err
 		}

@@ -46,7 +46,6 @@ type Engine struct {
 	blossom blossomMetrics
 
 	config Config
-	log    *slog.Logger
 	wg     sync.WaitGroup
 	done   chan struct{}
 }
@@ -82,7 +81,6 @@ type blossomMetrics struct {
 func NewEngine(
 	c Config,
 	paths Paths,
-	logger *slog.Logger,
 	resolver Resolver,
 ) (*Engine, error) {
 
@@ -94,7 +92,6 @@ func NewEngine(
 		pendingImpressions: make(map[store.Impression]int),
 		pendingDownloads:   make(map[store.Download]int),
 		config:             c,
-		log:                logger,
 		done:               make(chan struct{}),
 	}
 
@@ -152,7 +149,7 @@ func (e *Engine) lookupCountry(ip net.IP) string {
 
 	country, err := e.geo.Country(ip)
 	if err != nil {
-		e.log.Warn("analytics: failed to lookup country", "error", err)
+		slog.Warn("analytics: failed to lookup country", "error", err)
 		return ""
 	}
 	return country
@@ -190,7 +187,7 @@ func (e *Engine) RecordReq(client rely.Client, id string, filters nostr.Filters,
 			version, err := e.resolver.LatestVersion(ctx, appID, event.PubKey)
 			cancel()
 			if err != nil {
-				e.log.Warn("analytics: failed to resolve version", "app_id", appID, "error", err)
+				slog.Warn("analytics: failed to resolve version", "app_id", appID, "error", err)
 			}
 
 			impression := store.Impression{
@@ -206,7 +203,7 @@ func (e *Engine) RecordReq(client rely.Client, id string, filters nostr.Filters,
 			select {
 			case e.impressions <- impression:
 			default:
-				e.log.Warn("analytics: failed to record impression", "error", "channel is full")
+				slog.Warn("analytics: failed to record impression", "error", "channel is full")
 				return
 			}
 		}
@@ -231,7 +228,7 @@ func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 	assets, err := e.resolver.AssetsReferencing(r.Context(), hash)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			e.log.Error("analytics: failed to resolve assets", "error", err)
+			slog.Error("analytics: failed to resolve assets", "error", err)
 		}
 		return
 	}
@@ -281,7 +278,7 @@ func (e *Engine) RecordDownload(r blossy.Request, hash blossom.Hash) {
 		case e.downloads <- download:
 		default:
 			dropped := len(assets) - i
-			e.log.Warn("analytics: failed to record downloads", "error", "channel is full", "dropped", dropped)
+			slog.Warn("analytics: failed to record downloads", "error", "channel is full", "dropped", dropped)
 			return
 		}
 	}
@@ -307,52 +304,52 @@ func (e *Engine) run() {
 		select {
 		case <-e.done:
 			e.drain()
-			e.log.Info("analytics: flushing all pending data...")
+			slog.Info("analytics: flushing all pending data...")
 			if err := e.flushAll(); err != nil {
-				e.log.Error("analytics: failed to flush", "err", err)
+				slog.Error("analytics: failed to flush", "err", err)
 			}
 
 			if err := e.store.Close(); err != nil {
-				e.log.Error("analytics: failed to close database", "err", err)
+				slog.Error("analytics: failed to close database", "err", err)
 			}
 			if e.config.GeoEnabled {
 				if err := e.geo.Close(); err != nil {
-					e.log.Error("analytics: failed to close geolocation db", "err", err)
+					slog.Error("analytics: failed to close geolocation db", "err", err)
 				}
 			}
 			return
 
 		case <-geoTicker:
-			e.log.Info("analytics: refreshing geolocation database")
+			slog.Info("analytics: refreshing geolocation database")
 			if err := e.geo.Refresh(context.Background()); err != nil {
-				e.log.Error("analytics: failed to refresh geolocation database", "err", err)
+				slog.Error("analytics: failed to refresh geolocation database", "err", err)
 			}
 
 		case <-flushTicker.C:
-			e.log.Debug("analytics: flushing on interval")
+			slog.Debug("analytics: flushing on interval")
 			e.drain()
 
 			if err := e.flushAll(); err != nil {
-				e.log.Error("analytics: failed to flush", "err", err)
+				slog.Error("analytics: failed to flush", "err", err)
 			}
 
 		case impression := <-e.impressions:
-			e.log.Debug("analytics: received impression")
+			slog.Debug("analytics: received impression", "app_id", impression.AppID, "app_pubkey", impression.AppPubkey)
 			e.pendingImpressions[impression]++
 
 			if len(e.pendingImpressions) >= e.config.FlushSize {
 				if err := e.flushImpressions(); err != nil {
-					e.log.Error("analytics: failed to flush impressions", "err", err)
+					slog.Error("analytics: failed to flush impressions", "err", err)
 				}
 			}
 
 		case download := <-e.downloads:
-			e.log.Debug("analytics: received download")
+			slog.Debug("analytics: received download", "app_id", download.AppID, "app_pubkey", download.AppPubkey)
 			e.pendingDownloads[download]++
 
 			if len(e.pendingDownloads) >= e.config.FlushSize {
 				if err := e.flushDownloads(); err != nil {
-					e.log.Error("analytics: failed to flush downloads", "err", err)
+					slog.Error("analytics: failed to flush downloads", "err", err)
 				}
 			}
 		}

@@ -457,7 +457,6 @@ func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filte
 
 		if hasReleaseKind(filter.Kinds) {
 			if !wantsReleases {
-				slog.Debug("indexing: release request skipped (subID prefix mismatch)", "sub_id", subID)
 				continue
 			}
 			if len(result) > 0 {
@@ -489,7 +488,9 @@ func hasReleaseKind(kinds []int) bool {
 func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Request) error {
 	return func(_ rely.Stats, request *http.Request) error {
 		cost := 1.0
-		if !limiter.Allow(rely.GetIP(request).Group(), cost) {
+		ip := rely.GetIP(request).Group()
+		if !limiter.Allow(ip, cost) {
+			slog.Debug("relay: rejecting connection", "ip", ip)
 			return ErrRateLimited
 		}
 		return nil
@@ -499,8 +500,10 @@ func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Req
 func RateEventIP(limiter rate.Limiter) func(client rely.Client, _ *nostr.Event) error {
 	return func(client rely.Client, _ *nostr.Event) error {
 		cost := 5.0
-		if !limiter.Allow(client.IP().Group(), cost) {
+		ip := client.IP().Group()
+		if !limiter.Allow(ip, cost) {
 			client.Disconnect()
+			slog.Debug("relay: rejecting event and disconnecting", "ip", ip)
 			return ErrRateLimited
 		}
 		return nil
@@ -509,13 +512,15 @@ func RateEventIP(limiter rate.Limiter) func(client rely.Client, _ *nostr.Event) 
 
 func RateReqIP(limiter rate.Limiter) func(client rely.Client, id string, filters nostr.Filters) error {
 	return func(client rely.Client, id string, filters nostr.Filters) error {
+		ip := client.IP().Group()
 		cost := 1.0
 		if len(filters) > 10 {
 			cost = 5.0
 		}
 
-		if !limiter.Allow(client.IP().Group(), cost) {
+		if !limiter.Allow(ip, cost) {
 			client.Disconnect()
+			slog.Debug("relay: rejecting req and disconnecting", "ip", ip)
 			return ErrRateLimited
 		}
 		return nil

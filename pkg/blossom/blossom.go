@@ -334,7 +334,9 @@ func RateUploadIP(limiter rate.Limiter) func(r blossy.Request, hints blossy.Uplo
 			cost = float64(hints.Size) / 10_000_000
 		}
 
-		if !limiter.Allow(r.IP().Group(), cost) {
+		ip := r.IP().Group()
+		if !limiter.Allow(ip, cost) {
+			slog.Debug("blossom: rejecting upload", "ip", ip)
 			return ErrRateLimited
 		}
 		return nil
@@ -347,6 +349,7 @@ func RateDownloadIP(limiter rate.Limiter) func(r blossy.Request, hash blossom.Ha
 		ip := r.IP().Group()
 
 		if !limiter.Allow(ip, cost) {
+			slog.Debug("blossom: rejecting download", "ip", ip)
 			return ErrRateLimited
 		}
 		return nil
@@ -359,6 +362,7 @@ func RateCheckIP(limiter rate.Limiter) func(r blossy.Request, hash blossom.Hash,
 		ip := r.IP().Group()
 
 		if !limiter.Allow(ip, cost) {
+			slog.Debug("blossom: rejecting check", "ip", ip)
 			return ErrRateLimited
 		}
 		return nil
