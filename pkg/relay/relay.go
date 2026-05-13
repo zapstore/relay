@@ -345,6 +345,15 @@ func (r *T) saveAsset(ctx context.Context, event *nostr.Event) (isPending bool, 
 	return true, nil
 }
 
+// assetChecker is used exclusively for HEAD requests in isAssetReady.
+var assetChecker = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     30 * time.Second,
+	},
+}
+
 // isAssetReady returns whether the asset's blob has been correctly uploaded.
 // It first checks the local blossom database, and then falls back to checking all "url" tags in the event.
 func isAssetReady(ctx context.Context, b Blossom, asset *nostr.Event) (bool, error) {
@@ -379,13 +388,18 @@ func isAssetReady(ctx context.Context, b Blossom, asset *nostr.Event) (bool, err
 	}
 
 	for _, url := range urls {
+		if strings.HasPrefix(url, "https://cdn.zapstore.dev") {
+			// skip URLs from the zapstore CDN, because they would have been already in the blossom db
+			continue
+		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 		if err != nil {
 			slog.Warn("isAssetReady: skipping malformed url tag", "event", asset.ID, "url", url, "error", err)
 			continue
 		}
 
-		res, err := http.DefaultClient.Do(req)
+		res, err := assetChecker.Do(req)
 		if err != nil {
 			slog.Warn("isAssetReady: skipping url", "event", asset.ID, "url", url, "error", err)
 			continue
