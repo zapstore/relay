@@ -3,14 +3,15 @@ package analytics
 import (
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/zapstore/relay/pkg/analytics/geo"
 )
 
 type Config struct {
-	// Port is the port the analytics API server listens on. Default is "3336".
-	Port string `env:"ANALYTICS_API_PORT"`
+	// Address is the address the analytics API server listens on. Default is "localhost:3336".
+	Address string `env:"ANALYTICS_API_ADDRESS"`
 
 	// FlushInterval is the interval at which the analytics engine flushes data to the database. Default is 5 minutes.
 	FlushInterval time.Duration `env:"ANALYTICS_FLUSH_INTERVAL"`
@@ -36,7 +37,7 @@ type Config struct {
 
 func NewConfig() Config {
 	return Config{
-		Port:               "3336",
+		Address:            "localhost:3336",
 		FlushInterval:      5 * time.Minute,
 		FlushTimeout:       10 * time.Second,
 		FlushSize:          1000,
@@ -48,8 +49,8 @@ func NewConfig() Config {
 }
 
 func (c Config) Validate() error {
-	if c.Port == "" {
-		return errors.New("port cannot be empty")
+	if _, err := net.ResolveTCPAddr("tcp", c.Address); err != nil {
+		return fmt.Errorf("invalid address %q: %w", c.Address, err)
 	}
 	if c.FlushInterval < time.Second {
 		return errors.New("flush interval must be greater than 1s to avoid too many database writes")
@@ -82,7 +83,7 @@ func (c Config) Validate() error {
 
 func (c Config) String() string {
 	return fmt.Sprintf("Analytics:\n"+
-		"\tAPI Port: %s\n"+
+		"\tAPI Address: %s\n"+
 		"\tFlush Interval: %s\n"+
 		"\tFlush Timeout: %s\n"+
 		"\tFlush Size: %d\n"+
@@ -90,7 +91,7 @@ func (c Config) String() string {
 		"\tGeo Enabled: %t\n"+
 		"\tGeo Refresh Interval: %s\n"+
 		"%s",
-		c.Port,
+		c.Address,
 		c.FlushInterval,
 		c.FlushTimeout,
 		c.FlushSize,

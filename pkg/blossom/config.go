@@ -2,6 +2,7 @@ package blossom
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/zapstore/relay/pkg/blossom/bunny"
@@ -12,8 +13,8 @@ type Config struct {
 	// events and for the "url" field in blob descriptors.
 	Hostname string `env:"BLOSSOM_HOSTNAME"`
 
-	// Port is the port the blossom server will listen on. Default is "3335".
-	Port string `env:"BLOSSOM_PORT"`
+	// Address is the address the blossom server will listen on. Default is "localhost:3335".
+	Address string `env:"BLOSSOM_ADDRESS"`
 
 	// AllowedContentTypes is a list of content types that are allowed to be uploaded to the blossom server.
 	// Default is "application/vnd.android.package-archive" and common image types.
@@ -27,12 +28,12 @@ type Config struct {
 
 func NewConfig() Config {
 	return Config{
-		Port: "3335",
+		Address: "localhost:3335",
 		AllowedMedia: []string{
-		"application/vnd.android.package-archive",
-		"application/x-executable",
-		"application/x-mach-binary",
-		"image/jpeg",
+			"application/vnd.android.package-archive",
+			"application/x-executable",
+			"application/x-mach-binary",
+			"image/jpeg",
 			"image/png",
 			"image/webp",
 			"image/gif",
@@ -49,8 +50,8 @@ func (c Config) Validate() error {
 	if c.Hostname == "" {
 		return fmt.Errorf("hostname is required")
 	}
-	if c.Port == "" {
-		return fmt.Errorf("port is required")
+	if _, err := net.ResolveTCPAddr("tcp", c.Address); err != nil {
+		return fmt.Errorf("invalid address %q: %w", c.Address, err)
 	}
 	if c.StallTimeout < 5*time.Second {
 		return fmt.Errorf("stall timeout must be greater than 5s to function reliably")
@@ -71,8 +72,8 @@ func (c Config) Validate() error {
 func (c Config) String() string {
 	return fmt.Sprintf("Blossom:\n"+
 		"\tHostname: %s\n"+
-		"\tPort: %s\n"+
+		"\tAddress: %s\n"+
 		"\tAllowed Media: %v\n"+
 		"\tStall Timeout: %v\n"+
-		c.Bunny.String(), c.Hostname, c.Port, c.AllowedMedia, c.StallTimeout)
+		c.Bunny.String(), c.Hostname, c.Address, c.AllowedMedia, c.StallTimeout)
 }

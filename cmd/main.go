@@ -148,24 +148,21 @@ func main() {
 
 	go func() {
 		defer wg.Done()
-		address := "localhost:" + config.Relay.Port
-		if err := relay.StartAndServe(ctx, address); err != nil {
+		if err := relay.StartAndServe(ctx, config.Relay.Address); err != nil {
 			exit <- err
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		address := "localhost:" + config.Blossom.Port
-		if err := blossom.StartAndServe(ctx, address); err != nil {
+		if err := blossom.StartAndServe(ctx, config.Blossom.Address); err != nil {
 			exit <- err
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		address := "localhost:" + config.Analytics.Port
-		if err := analytics.StartAndServe(ctx, address); err != nil {
+		if err := analytics.StartAndServe(ctx, config.Analytics.Address); err != nil {
 			exit <- err
 		}
 	}()

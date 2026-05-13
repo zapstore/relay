@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -16,8 +17,8 @@ type Config struct {
 	// Default is "".
 	Hostname string `env:"RELAY_HOSTNAME"`
 
-	// Port is the port the relay will listen on. Default is "3334".
-	Port string `env:"RELAY_PORT"`
+	// Address is the address the relay will listen on. Default is "localhost:3334".
+	Address string `env:"RELAY_ADDRESS"`
 
 	// QueueCapacity is the maximum number of events that can be queued for processing.
 	// Default is 1000.
@@ -55,7 +56,7 @@ type Config struct {
 // NewConfig create a new config with default values.
 func NewConfig() Config {
 	return Config{
-		Port:            "3334",
+		Address:         "localhost:3334",
 		QueueCapacity:   1000,
 		MaxMessageBytes: 500_000,
 		MaxReqFilters:   50,
@@ -101,8 +102,8 @@ func (c Config) Validate() error {
 	if c.Hostname == "" {
 		return errors.New("hostname is not set")
 	}
-	if c.Port == "" {
-		return errors.New("port is not set")
+	if _, err := net.ResolveTCPAddr("tcp", c.Address); err != nil {
+		return fmt.Errorf("invalid address %q: %w", c.Address, err)
 	}
 	if c.QueueCapacity <= 0 {
 		return errors.New("queue capacity must be greater than 0")
@@ -186,13 +187,13 @@ func (i Info) String() string {
 func (c Config) String() string {
 	return fmt.Sprintf("Relay:\n"+
 		"\tHostname: %s\n"+
-		"\tPort: %s\n"+
+		"\tAddress: %s\n"+
 		"\tQueue Capacity: %d\n"+
 		"\tMax Message Bytes: %d\n"+
 		"\tMax REQ Filters: %d\n"+
 		"\tResponse Limit: %d\n"+
 		"\tAllowed Kinds: %v\n"+
 		c.Info.String(),
-		c.Hostname, c.Port, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.AllowedKinds,
+		c.Hostname, c.Address, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.AllowedKinds,
 	)
 }
