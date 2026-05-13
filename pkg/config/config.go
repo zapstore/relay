@@ -10,6 +10,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/caarlos0/env/v11"
@@ -31,16 +32,43 @@ type Config struct {
 }
 
 type SystemConfig struct {
-	Dir string `env:"SYSTEM_DIRECTORY_PATH"`
+	Dir      string   `env:"SYSTEM_DIRECTORY_PATH"`
+	LogLevel LogLevel `env:"SYSTEM_LOG_LEVEL"`
+}
+
+// LogLevel represents the log level for the system.
+// It maps string names to [slog.Level] values.
+type LogLevel string
+
+const (
+	LogDebug LogLevel = "debug"
+	LogInfo  LogLevel = "info"
+	LogWarn  LogLevel = "warn"
+	LogError LogLevel = "error"
+)
+
+func (l LogLevel) IsValid() bool {
+	switch l {
+	case LogDebug, LogInfo, LogWarn, LogError:
+		return true
+	default:
+		return false
+	}
 }
 
 func NewSystemConfig() SystemConfig {
 	return SystemConfig{
-		Dir: "", // empty string for the current directory
+		Dir:      "", // empty string for the current directory
+		LogLevel: LogInfo,
 	}
 }
 
-func (c SystemConfig) Validate() error { return nil }
+func (c SystemConfig) Validate() error {
+	if !c.LogLevel.IsValid() {
+		return fmt.Errorf("invalid log level: %s", c.LogLevel)
+	}
+	return nil
+}
 
 func (c SystemConfig) String() string {
 	dir := c.Dir
@@ -49,8 +77,26 @@ func (c SystemConfig) String() string {
 	}
 
 	return fmt.Sprintf("System:\n"+
-		"\tDirectory Path: %s\n",
-		dir)
+		"\tDirectory Path: %s\n"+
+		"\tLog Level: %s\n",
+		dir,
+		c.LogLevel)
+}
+
+// LogOptions returns the [slog.HandlerOptions] for the log level of this config.
+func (c SystemConfig) LogOptions() *slog.HandlerOptions {
+	switch c.LogLevel {
+	case LogDebug:
+		return &slog.HandlerOptions{Level: slog.LevelDebug}
+	case LogInfo:
+		return &slog.HandlerOptions{Level: slog.LevelInfo}
+	case LogWarn:
+		return &slog.HandlerOptions{Level: slog.LevelWarn}
+	case LogError:
+		return &slog.HandlerOptions{Level: slog.LevelError}
+	default:
+		return &slog.HandlerOptions{Level: slog.LevelInfo}
+	}
 }
 
 // Load creates a new [Config] with default parameters, that get overwritten by env variables when specified.

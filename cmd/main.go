@@ -40,7 +40,9 @@ func main() {
 		panic(err)
 	}
 
-	logger := slog.Default()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, config.Sys.LogOptions()))
+	slog.SetDefault(logger)
+
 	logger.Info("-------------------server startup-------------------")
 	defer logger.Info("-------------------server shutdown-------------------")
 
