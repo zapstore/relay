@@ -15,7 +15,7 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
-	"github.com/pippellia-btc/rely/v2"
+	"github.com/pippellia-btc/rely"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
@@ -263,7 +263,7 @@ func (r *T) reconcile(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
+func (r *T) save(c rely.Client, event *nostr.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -273,34 +273,34 @@ func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
 	case event.Kind == nostr.KindDeletion:
 		if err := r.handleDelete(ctx, event); err != nil {
 			slog.Error("relay: failed to fullfil delete", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return err
 		}
 
 	case event.Kind == events.KindAsset:
 		isPending, err := r.saveAsset(ctx, event)
 		if err != nil {
 			slog.Error("relay: failed to save asset event", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return err
 		}
 
 		if isPending {
 			// avoid broadcasting the event until it is fully saved
-			return rely.Success().NoBroadcast().WithReply("the event will be saved when the referenced blob is uploaded")
+			return nil
 		}
 
 	case nostr.IsRegularKind(event.Kind):
 		if _, err := r.store.Save(ctx, event); err != nil {
 			slog.Error("relay: failed to save regular event", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return err
 		}
 
 	case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
 		if _, err := r.store.Replace(ctx, event); err != nil {
 			slog.Error("relay: failed to replace event", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return err
 		}
 	}
-	return rely.Success()
+	return nil
 }
 
 // handleDelete handles deletion events, either from the operator or a regular NIP-09 deletion.

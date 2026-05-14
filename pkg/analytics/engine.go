@@ -18,7 +18,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
-	"github.com/pippellia-btc/rely/v2"
+	"github.com/pippellia-btc/rely"
 	"github.com/zapstore/relay/pkg/analytics/geo"
 	"github.com/zapstore/relay/pkg/analytics/store"
 	"github.com/zapstore/relay/pkg/events"
