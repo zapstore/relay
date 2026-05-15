@@ -60,8 +60,6 @@ github.com/pippellia-btc/blossy v0.3.0 h1:JFn4z94z5KrrnOvEGssAFUZzt13+2JNbBB9NNI
 github.com/pippellia-btc/blossy v0.3.0/go.mod h1:tt4TtdefDyGLqWF3bHOpjzRLy70PSUOc42POTlxGBeA=
 github.com/pippellia-btc/rate v0.2.1 h1:ti4HBMhqKToaniEn6DlDFrQRYQJomUI85fOpiXJqtgE=
 github.com/pippellia-btc/rate v0.2.1/go.mod h1:A2YLgBc99FDcu5HbJcjbAMszlUKJCIVlmQA2mHLA5a0=
-github.com/pippellia-btc/rely/v2 v2.0.0-alpha h1:aAolj6Q6atCiag024pvg7+7/g85m4cIIlCXOpNdZHO0=
-github.com/pippellia-btc/rely/v2 v2.0.0-alpha/go.mod h1:BTn8m5NgRNglLVuH3w1zgqqAB6DSao+DhBqEaG02px8=
 github.com/pippellia-btc/rely/v2 v2.0.0-beta h1:07RpI7agTKVyPc53PKKbsL0kuccy8DLi6QclW4ddX1E=
 github.com/pippellia-btc/rely/v2 v2.0.0-beta/go.mod h1:BTn8m5NgRNglLVuH3w1zgqqAB6DSao+DhBqEaG02px8=
 github.com/pippellia-btc/slicex v0.2.5 h1:cthD4tKjg9CiWFjotIQinhqF2r7K83mkqHBX3cjig4I=
