@@ -45,6 +45,8 @@ A Nostr relay and Blossom server for the Zapstore app ecosystem.
 
 ### Build and Run
 
+Build the relay using the `make` command
+
 ```bash
 # Clone the repository
 git clone https://github.com/zapstore/relay.git
@@ -57,14 +59,25 @@ make
 
 # Or build with specific tag and build directory
 make TAG=v1.2.3 BUILD_DIR=path/to/build
+```
 
+Run the relay using the simple cli
+
+```bash
 # Create and configure .env file
 cp .env.example build/.env
 
 # Edit build/.env with your configuration
+nano build/.env
 
 # Run (use the tag that was built)
-./build/relay-v1.2.3
+./build/relay-v1.2.3 run
+
+# Print the version
+./build/relay-v1.2.3 version
+
+# Print the active configuration
+./build/relay-v1.2.3 config
 ```
 
 ### Data Directory Structure

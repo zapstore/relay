@@ -25,9 +25,23 @@ import (
 	eventstore "github.com/zapstore/relay/pkg/relay/store"
 )
 
+func printHelp() {
+	fmt.Fprintf(os.Stderr, `relay version %q
+Usage:
+  relay <command>
+
+Commands:
+  run      Start the relay and blossom server
+  version  Print the relay version
+  config   Print the active configuration
+`, config.Version)
+}
+
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	if len(os.Args) < 2 {
+		printHelp()
+		os.Exit(1)
+	}
 
 	// Step 0.
 	// Load and validate configuration from .env
@@ -38,6 +52,26 @@ func main() {
 	if err := config.Validate(); err != nil {
 		panic(err)
 	}
+
+	switch os.Args[1] {
+	case "version":
+		fmt.Println(config.Sys.Version)
+		os.Exit(0)
+
+	case "config":
+		fmt.Println(config)
+		os.Exit(0)
+
+	case "run":
+		// continues below
+
+	default:
+		printHelp()
+		os.Exit(1)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	slog.SetDefault(
 		slog.New(slog.NewTextHandler(os.Stdout, config.Sys.LogOptions())),
