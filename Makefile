@@ -1,6 +1,6 @@
 BUILD_DIR := build
 GO_TAGS := -tags fts5
-LDFLAGS := -s -w
+LDFLAGS := -s -w -X github.com/zapstore/relay/pkg/config.Version=$(TAG)
 TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
 
 # Build from current checkout; TAG handling happens in the recipe below.

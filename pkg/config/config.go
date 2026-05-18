@@ -22,6 +22,9 @@ import (
 	"github.com/zapstore/relay/pkg/relay"
 )
 
+// Version is the version of the relay server, set at build time.
+var Version = "dev"
+
 type Config struct {
 	Sys       SystemConfig
 	Limiter   rate.Config
@@ -32,6 +35,7 @@ type Config struct {
 }
 
 type SystemConfig struct {
+	Version  string   // no env variable, it's set at build time
 	Dir      string   `env:"SYSTEM_DIRECTORY_PATH"`
 	LogLevel LogLevel `env:"SYSTEM_LOG_LEVEL"`
 }
@@ -58,12 +62,16 @@ func (l LogLevel) IsValid() bool {
 
 func NewSystemConfig() SystemConfig {
 	return SystemConfig{
+		Version:  Version,
 		Dir:      "", // empty string for the current directory
 		LogLevel: LogInfo,
 	}
 }
 
 func (c SystemConfig) Validate() error {
+	if c.Version == "" {
+		return fmt.Errorf("version is not set")
+	}
 	if !c.LogLevel.IsValid() {
 		return fmt.Errorf("invalid log level: %s", c.LogLevel)
 	}
@@ -77,8 +85,10 @@ func (c SystemConfig) String() string {
 	}
 
 	return fmt.Sprintf("System:\n"+
+		"\tVersion: %s\n"+
 		"\tDirectory Path: %s\n"+
 		"\tLog Level: %s\n",
+		c.Version,
 		dir,
 		c.LogLevel)
 }
