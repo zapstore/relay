@@ -1,11 +1,105 @@
 {{define "apps"}}
 {{template "card-styles" .}}
+<p class="section-title">Apps</p>
+<p class="section-subtitle">Stats of the last 30 days</p>
+
+<div class="cards">
+  {{range .Cards}}{{template "card" .}}{{end}}
+</div>
+
+<form hx-get="/tabs/apps/chart" hx-target="#app-chart-wrap" hx-trigger="submit" style="display:flex;align-items:center;gap:0.75rem">
+  <span style="font-size:var(--text);font-weight:600;white-space:nowrap;display:flex;align-items:center;color:var(--text-muted)">APP STATISTICS</span>
+  <input class="app-input" type="text" name="app_id" value="{{.AppID}}" placeholder="App ID" style="margin:0; font-size: var(--text-small);">
+</form>
+<div id="app-chart-wrap">
+  {{template "chart" .Chart}}
+</div>
+
+<div class="cols">
+  <div>
+    <table class="countries-table" style="margin-bottom:2rem">
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Impressions</th>
+          <th>Downloads</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Sources}}
+        <tr>
+          <td><div class="country-cell"><span>{{.Emoji}}</span><span>{{.Source}}</span></div></td>
+          <td style="text-align:right;color:var(--text-muted)">{{.Impressions}}</td>
+          <td style="text-align:right;color:var(--text-muted)">{{.Downloads}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="3" style="text-align:center;padding:2rem;color:var(--text-muted)">No data</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    <table class="countries-table">
+      <thead>
+        <tr>
+          <th>Country</th>
+          <th>Impressions</th>
+          <th>Downloads</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $i, $c := .Countries}}
+        <tr>
+          <td>
+            <div class="country-cell">
+                <span>{{$c.Flag}}</span>
+                <span>{{$c.Name}}</span>
+              </div>
+          </td>
+          <td>{{$c.Impressions}}</td>
+          <td>{{$c.Downloads}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <div>
+    <table class="countries-table">
+      <thead>
+        <tr>
+          <th>App</th>
+          <th>Impressions</th>
+          <th>Downloads</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $i, $a := .Apps}}
+        <tr>
+          <td>
+            <div class="country-cell">
+                <span>{{$a.AppID}}</span>
+              </div>
+          </td>
+          <td>{{$a.Impressions}}</td>
+          <td>{{$a.Downloads}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <style>
   .cols {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 2rem;
+    gap: 4rem;
     align-items: start;
+  }
+  .cols > div {
+    min-width: 0;
   }
   .countries-table {
     width: 100%;
@@ -34,71 +128,25 @@
   }
   .countries-table tbody td:not(:first-child) { text-align: right; color: var(--text-muted); }
   .country-cell { display: flex; align-items: center; gap: 0.6rem; }
-  .country-rank { color: var(--text-muted); font-size: var(--text-normal); min-width: 1.25rem; }
+  .countries-table tbody { counter-reset: rownum; }
+  .countries-table tbody tr { counter-increment: rownum; }
+  .country-cell::before {
+    content: counter(rownum);
+    color: var(--text-muted);
+    font-size: var(--text-normal);
+    min-width: 1.25rem;
+  }
+  .app-input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: var(--text-normal);
+    padding: 0.5rem 0.75rem;
+    width: 100%;
+    max-width: 220px;
+  }
+  .app-input:focus { outline: none; border-color: var(--accent); }
 </style>
-
-<p class="section-title">App Stats</p>
-<p class="section-subtitle">Last 30 days</p>
-
-<div class="cards">
-  {{range .Cards}}{{template "card" .}}{{end}}
-</div>
-
-<div class="cols">
-  <div>
-    <table class="countries-table">
-      <thead>
-        <tr>
-          <th>Country</th>
-          <th>Impressions</th>
-          <th>Downloads</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range $i, $c := .Countries}}
-        <tr>
-          <td>
-            <div class="country-cell">
-              <span class="country-rank">{{add $i 1}}</span>
-              <span>{{$c.Flag}}</span>
-              <span>{{$c.Name}}</span>
-            </div>
-          </td>
-          <td>{{$c.Impressions}}</td>
-          <td>{{$c.Downloads}}</td>
-        </tr>
-        {{else}}
-        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  <div>
-    <table class="countries-table">
-      <thead>
-        <tr>
-          <th>App</th>
-          <th>Impressions</th>
-          <th>Downloads</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range $i, $a := .Apps}}
-        <tr>
-          <td>
-            <div class="country-cell">
-              <span class="country-rank">{{add $i 1}}</span>
-              <span>{{$a.AppID}}</span>
-            </div>
-          </td>
-          <td>{{$a.Impressions}}</td>
-          <td>{{$a.Downloads}}</td>
-        </tr>
-        {{else}}
-        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-</div>
 {{end}}

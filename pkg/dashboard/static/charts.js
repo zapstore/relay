@@ -37,8 +37,7 @@ function initChart(id) {
       })),
     },
     options: {
-      aspectRatio: 3,
-      maintainAspectRatio: true,
+      maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: {

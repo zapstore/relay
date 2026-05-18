@@ -162,6 +162,24 @@ func (d *T) blossomPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type SourceRow struct {
+	Source      string
+	Emoji       string
+	Impressions int
+	Downloads   int
+}
+
+func sourceEmoji(s string) string {
+	switch s {
+	case "app":
+		return "📱"
+	case "web":
+		return "🌐"
+	default:
+		return "❓"
+	}
+}
+
 type CountryRow struct {
 	Flag        string
 	Name        string
@@ -175,10 +193,15 @@ type AppRow struct {
 	Downloads   int
 }
 
+const defaultAppID = "dev.zapstore.app"
+
 type appsPageData struct {
 	Cards     []CardData
+	Sources   []SourceRow
 	Countries []CountryRow
 	Apps      []AppRow
+	AppID     string
+	Chart     ChartData
 }
 
 func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
@@ -193,21 +216,58 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
+	sources, err := d.sourceRows(ctx, from, to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	countries, err := d.countryRows(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	apps, err := d.appRows(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	chart, err := d.appChart(ctx, from, to, defaultAppID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	data := appsPageData{Cards: cards, Countries: countries, Apps: apps}
+	data := appsPageData{
+		Cards:     cards,
+		Sources:   sources,
+		Countries: countries,
+		Apps:      apps,
+		AppID:     defaultAppID,
+		Chart:     chart,
+	}
 	if err := d.template.ExecuteTemplate(w, "apps", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (d *T) appChartPage(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	appID := r.URL.Query().Get("app_id")
+	if appID == "" {
+		appID = defaultAppID
+	}
+
+	to := time.Now().Format("2006-01-02")
+	from := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+
+	chart, err := d.appChart(ctx, from, to, appID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := d.template.ExecuteTemplate(w, "chart", chart); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -238,6 +298,42 @@ func (d *T) appCards(ctx context.Context, from, to string) ([]CardData, error) {
 }
 
 // countryRows returns the country rows for the dashboard, showing impressions and downloads by country.
+func (d *T) sourceRows(ctx context.Context, from, to string) ([]SourceRow, error) {
+	imprBySource, err := d.analytics.QueryImpressions(ctx, store.ImpressionFilter{From: from, To: to, GroupBy: []string{"source"}})
+	if err != nil {
+		return nil, err
+	}
+	dlBySource, err := d.analytics.QueryDownloads(ctx, store.DownloadFilter{From: from, To: to, GroupBy: []string{"source"}})
+	if err != nil {
+		return nil, err
+	}
+
+	sourceMap := make(map[string]*SourceRow)
+	for _, row := range imprBySource {
+		s := string(row.Source)
+		if sourceMap[s] == nil {
+			sourceMap[s] = &SourceRow{Source: s, Emoji: sourceEmoji(s)}
+		}
+		sourceMap[s].Impressions += row.Count
+	}
+	for _, row := range dlBySource {
+		s := string(row.Source)
+		if sourceMap[s] == nil {
+			sourceMap[s] = &SourceRow{Source: s}
+		}
+		sourceMap[s].Downloads += row.Count
+	}
+
+	rows := make([]SourceRow, 0, len(sourceMap))
+	for _, v := range sourceMap {
+		rows = append(rows, *v)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Impressions > rows[j].Impressions
+	})
+	return rows, nil
+}
+
 func (d *T) countryRows(ctx context.Context, from, to string) ([]CountryRow, error) {
 	imprByCountry, err := d.analytics.QueryImpressions(ctx,
 		store.ImpressionFilter{From: from, To: to, GroupBy: []string{"country_code"}})
@@ -315,10 +411,60 @@ func (d *T) appRows(ctx context.Context, from, to string) ([]AppRow, error) {
 	sort.Slice(apps, func(i, j int) bool {
 		return apps[i].Impressions > apps[j].Impressions
 	})
-	if len(apps) > 20 {
-		apps = apps[:20]
+	if len(apps) > 25 {
+		apps = apps[:25]
 	}
 	return apps, nil
+}
+
+func (d *T) appChart(ctx context.Context, from, to, appID string) (ChartData, error) {
+	imprRows, err := d.analytics.QueryImpressions(ctx, store.ImpressionFilter{
+		AppID:   appID,
+		From:    from,
+		To:      to,
+		GroupBy: []string{"day"},
+	})
+	if err != nil {
+		return ChartData{}, err
+	}
+	dlRows, err := d.analytics.QueryDownloads(ctx, store.DownloadFilter{
+		AppID:   appID,
+		From:    from,
+		To:      to,
+		GroupBy: []string{"day"},
+	})
+	if err != nil {
+		return ChartData{}, err
+	}
+
+	imprByDay := make(map[string]int, len(imprRows))
+	for _, r := range imprRows {
+		imprByDay[r.Day] += r.Count
+	}
+	dlByDay := make(map[string]int, len(dlRows))
+	for _, r := range dlRows {
+		dlByDay[r.Day] += r.Count
+	}
+
+	days := dayRange(from, to)
+	labels := make([]string, len(days))
+	impressions := make([]int64, len(days))
+	downloads := make([]int64, len(days))
+	for i, day := range days {
+		labels[i] = day
+		impressions[i] = int64(imprByDay[day])
+		downloads[i] = int64(dlByDay[day])
+	}
+
+	return ChartData{
+		ID:     "app-chart",
+		Title:  appID,
+		Labels: labels,
+		Datasets: []ChartDataset{
+			{Label: "Impressions", Data: impressions, BorderColor: "#6366f1", BackgroundColor: "rgba(99,102,241,0.08)"},
+			{Label: "Downloads", Data: downloads, BorderColor: "#10b981", BackgroundColor: "rgba(16,185,129,0.08)"},
+		},
+	}, nil
 }
 
 type defenderPageData struct {
