@@ -64,6 +64,7 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux.Handle("GET /static/", http.FileServerFS(staticFiles))
 	mux.HandleFunc("GET /{$}", d.index)
 	mux.HandleFunc("GET /tabs/relay", d.relayPage)
+	mux.HandleFunc("GET /tabs/blossom", d.blossomPage)
 	mux.HandleFunc("GET /tabs/apps", d.appsPage)
 	mux.HandleFunc("GET /tabs/defender", d.defenderPage)
 
