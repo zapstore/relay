@@ -76,7 +76,7 @@ function initChart(id) {
             },
           },
           border: { color: borderColor },
-          grid:   { color: gridColor, lineWidth: 0.5 },
+          grid:   { color: gridColor, lineWidth: 0.25 },
         },
         y: {
           beginAtZero: true,
@@ -86,7 +86,7 @@ function initChart(id) {
             callback:      simpleNumbers,
           },
           border: { color: borderColor },
-          grid:   { color: gridColor, lineWidth: 0.5 },
+          grid:   { color: gridColor, lineWidth: 0.25 },
         },
       },
     },
