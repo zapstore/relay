@@ -19,6 +19,7 @@ import (
 	"github.com/zapstore/relay/pkg/blossom"
 	blossomDB "github.com/zapstore/relay/pkg/blossom/store"
 	"github.com/zapstore/relay/pkg/config"
+	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
@@ -178,10 +179,17 @@ func main() {
 	}
 
 	// Step 6.
+	// Initialize dashboard
+	dashboard, err := dashboard.New()
+	if err != nil {
+		panic(err)
+	}
+
+	// Step 7.
 	// Run everything
-	exit := make(chan error, 3)
+	exit := make(chan error, 4)
 	wg := sync.WaitGroup{}
-	wg.Add(3)
+	wg.Add(4)
 
 	go func() {
 		defer wg.Done()
@@ -200,6 +208,13 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := analytics.StartAndServe(ctx, config.Analytics.Address); err != nil {
+			exit <- err
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if err := dashboard.StartAndServe(ctx, config.Dashboard.Address); err != nil {
 			exit <- err
 		}
 	}()

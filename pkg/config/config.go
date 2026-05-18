@@ -17,6 +17,7 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
@@ -32,6 +33,7 @@ type Config struct {
 	Indexing  indexing.Config
 	Relay     relay.Config
 	Blossom   blossom.Config
+	Dashboard dashboard.Config
 }
 
 type SystemConfig struct {
@@ -127,6 +129,7 @@ func New() Config {
 		Indexing:  indexing.NewConfig(),
 		Relay:     relay.NewConfig(),
 		Blossom:   blossom.NewConfig(),
+		Dashboard: dashboard.NewConfig(),
 	}
 }
 
@@ -149,6 +152,9 @@ func (c Config) Validate() error {
 	if err := c.Blossom.Validate(); err != nil {
 		return fmt.Errorf("blossom: %w", err)
 	}
+	if err := c.Dashboard.Validate(); err != nil {
+		return fmt.Errorf("dashboard: %w", err)
+	}
 	return nil
 }
 
@@ -165,5 +171,7 @@ func (c Config) String() string {
 	b.WriteString(c.Relay.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Blossom.String())
+	b.WriteByte('\n')
+	b.WriteString(c.Dashboard.String())
 	return b.String()
 }

@@ -1,0 +1,16 @@
+root = "."
+
+[build]
+  cmd         = "go build -o build/relay -tags \"fts5\" ./cmd/main.go"
+  entrypoint  = ["build/relay", "run"]
+  include_ext = ["go", "html", "css", "js"]
+  exclude_dir = ["build", "cmd", "tests"]
+  delay       = 300
+
+env_files = [".air.env"]
+
+[log]
+  main_only = true
+
+[misc]
+  clean_on_exit = true

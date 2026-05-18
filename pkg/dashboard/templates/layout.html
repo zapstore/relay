@@ -1,0 +1,155 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zapstore Dashboard</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      padding: 0 1.5rem;
+      height: 56px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .logo {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #e6edf3;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+    .logo span { color: #6e40c9; }
+
+    /* ── Tab nav ── */
+    nav { display: flex; gap: 0.125rem; }
+
+    .tab {
+      background: none;
+      border: none;
+      color: #8b949e;
+      padding: 0.375rem 0.875rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-family: inherit;
+      transition: background 0.12s, color 0.12s;
+    }
+    .tab:hover  { background: #21262d; color: #e6edf3; }
+    .tab.active { background: #21262d; color: #e6edf3; font-weight: 600; }
+
+    /* ── Main content ── */
+    main { padding: 1.75rem 1.5rem; max-width: 1200px; }
+
+    /* ── Section titles ── */
+    .section-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.875rem;
+    }
+
+    /* ── Metric cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 1.125rem 1.25rem;
+    }
+    .card-label {
+      font-size: 0.72rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+    }
+    .card-value {
+      font-size: 1.9rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+
+    /* ── Placeholder block ── */
+    .placeholder {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 3rem 2rem;
+      text-align: center;
+      color: #8b949e;
+      font-size: 0.875rem;
+    }
+    .placeholder strong { display: block; margin-bottom: 0.375rem; color: #e6edf3; font-size: 0.95rem; }
+
+    /* ── HTMX loading indicator ── */
+    .htmx-indicator { opacity: 0; transition: opacity 0.2s; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">Zapstore</span>
+  <nav id="tabs">
+    <button class="tab active"
+      hx-get="/tabs/overview"
+      hx-target="#content"
+      hx-swap="innerHTML"
+      onclick="setActive(this)">Overview</button>
+    <button class="tab"
+      hx-get="/tabs/apps"
+      hx-target="#content"
+      hx-swap="innerHTML"
+      onclick="setActive(this)">Apps</button>
+    <button class="tab"
+      hx-get="/tabs/defender"
+      hx-target="#content"
+      hx-swap="innerHTML"
+      onclick="setActive(this)">Defender</button>
+  </nav>
+</header>
+
+<main>
+  <div id="content">
+    {{template "overview" .}}
+  </div>
+</main>
+
+<script>
+  function setActive(el) {
+    document.querySelectorAll('#tabs .tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+  }
+</script>
+
+</body>
+</html>
+{{end}}
