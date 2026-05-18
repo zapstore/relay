@@ -77,7 +77,7 @@ func main() {
 		slog.New(slog.NewTextHandler(os.Stdout, config.Sys.LogOptions())),
 	)
 
-	slog.Info("-------------------server startup-------------------")
+	slog.Info(fmt.Sprintf("-------------------server startup %s-------------------", config.Sys.Version))
 	defer slog.Info("-------------------server shutdown-------------------")
 
 	// Step 1.
