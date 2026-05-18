@@ -15,7 +15,8 @@ var schema string
 
 // T is the store type that manages the analytics SQLite database.
 type T struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // New opens (or creates) the SQLite database at the given path and applies the schema.
@@ -43,13 +44,17 @@ func New(path string) (*T, error) {
 	if _, err = db.Exec("PRAGMA optimize=0x10002;"); err != nil {
 		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
-
-	return &T{db: db}, nil
+	return &T{db: db, path: path}, nil
 }
 
 // Close closes the underlying database connection.
 func (s *T) Close() error {
 	return s.db.Close()
+}
+
+// Path returns the path to the SQLite database file.
+func (s *T) Path() string {
+	return s.path
 }
 
 func migrate(db *sql.DB) error {

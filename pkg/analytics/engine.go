@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -80,12 +81,14 @@ type blossomMetrics struct {
 // NewEngine starts the background goroutine and returns the engine.
 func NewEngine(
 	c Config,
-	paths Paths,
+	s *store.T,
 	resolver Resolver,
+
 ) (*Engine, error) {
 
 	var err error
 	engine := &Engine{
+		store:              s,
 		resolver:           resolver,
 		impressions:        make(chan store.Impression, c.QueueSize),
 		downloads:          make(chan store.Download, c.QueueSize),
@@ -95,15 +98,10 @@ func NewEngine(
 		done:               make(chan struct{}),
 	}
 
-	engine.store, err = store.New(paths.Store)
-	if err != nil {
-		return nil, fmt.Errorf("analytics: failed to open database at %q: %w", paths.Store, err)
-	}
-
 	if c.GeoEnabled {
-		engine.geo, err = geo.NewLocator(c.Geo, paths.Geo)
+		geoPath := filepath.Join(filepath.Dir(s.Path()), "geo.mmdb")
+		engine.geo, err = geo.NewLocator(c.Geo, geoPath)
 		if err != nil {
-			engine.store.Close()
 			return nil, fmt.Errorf("analytics: failed to create geo locator: %w", err)
 		}
 	}

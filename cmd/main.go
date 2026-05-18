@@ -15,14 +15,15 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
+	analyticsDB "github.com/zapstore/relay/pkg/analytics/store"
 	"github.com/zapstore/relay/pkg/blossom"
-	blobstore "github.com/zapstore/relay/pkg/blossom/store"
+	blossomDB "github.com/zapstore/relay/pkg/blossom/store"
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
-	eventstore "github.com/zapstore/relay/pkg/relay/store"
+	relayDB "github.com/zapstore/relay/pkg/relay/store"
 )
 
 func printHelp() {
@@ -81,23 +82,32 @@ func main() {
 	defer slog.Info("-------------------server shutdown-------------------")
 
 	// Step 1.
-	// Initialize databases
+	// Initialize databases and their directories
 	dataDir := filepath.Join(config.Sys.Dir, "data")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		panic(err)
 	}
-
-	relayDB, err := eventstore.New(filepath.Join(dataDir, "relay.db"))
+	relayDB, err := relayDB.New(filepath.Join(dataDir, "relay.db"))
 	if err != nil {
 		panic(err)
 	}
 	defer relayDB.Close()
 
-	blossomDB, err := blobstore.New(filepath.Join(dataDir, "blossom.db"))
+	blossomDB, err := blossomDB.New(filepath.Join(dataDir, "blossom.db"))
 	if err != nil {
 		panic(err)
 	}
 	defer blossomDB.Close()
+
+	analyticsDir := filepath.Join(config.Sys.Dir, "analytics")
+	if err := os.MkdirAll(analyticsDir, 0755); err != nil {
+		panic(err)
+	}
+	analyticsDB, err := analyticsDB.New(filepath.Join(analyticsDir, "analytics.db"))
+	if err != nil {
+		panic(err)
+	}
+	defer analyticsDB.Close()
 
 	// Step 2.
 	// Initialize rate limiter and connect to the defender
@@ -112,27 +122,7 @@ func main() {
 	}
 
 	// Step 3.
-	// Initialize analytics engine
-	analyticsDir := filepath.Join(config.Sys.Dir, "analytics")
-	if err := os.MkdirAll(analyticsDir, 0755); err != nil {
-		panic(err)
-	}
-
-	analytics, err := analytics.NewEngine(
-		config.Analytics,
-		analytics.Paths{
-			Store: filepath.Join(analyticsDir, "analytics.db"),
-			Geo:   filepath.Join(analyticsDir, "geo.mmdb"),
-		},
-		resolver{db: relayDB},
-	)
-	if err != nil {
-		panic(err)
-	}
-	defer analytics.Close()
-
-	// Step 4.
-	// Initialize indexing engine — indexing.db lives in its own indexing/ folder.
+	// Initialize indexing engine
 	indexingDir := filepath.Join(config.Sys.Dir, "indexing")
 	if err := os.MkdirAll(indexingDir, 0755); err != nil {
 		panic(err)
@@ -147,6 +137,18 @@ func main() {
 		defer indexingEngine.Close()
 		slog.Info("indexing: demand-driven indexing enabled")
 	}
+
+	// Step 4.
+	// Initialize analytics engine
+	analytics, err := analytics.NewEngine(
+		config.Analytics,
+		analyticsDB,
+		resolver{db: relayDB},
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer analytics.Close()
 
 	// Step 5.
 	// Setup relay and blossom server
@@ -214,7 +216,7 @@ func main() {
 
 // Resolver implements [analytics.Resolver]
 type resolver struct {
-	db eventstore.T
+	db relayDB.T
 }
 
 func (r resolver) AssetsReferencing(ctx context.Context, hash blossom.Hash) ([]nostr.Event, error) {
