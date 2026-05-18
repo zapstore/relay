@@ -1,7 +1,88 @@
 {{define "defender"}}
 <p class="section-title">Defender</p>
-<div class="placeholder">
-  <strong>Blocked IPs &amp; ban logs</strong>
-  Coming soon
+<p class="section-subtitle">List of policies</p>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Platform</th>
+        <th>ID</th>
+        <th>Status</th>
+        <th>Reason</th>
+        <th>Added by</th>
+        <th>Created at</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Policies}}
+      <tr>
+        <td>{{.Entity.Platform}}</td>
+        <td>
+          {{if eq (print .Entity.Platform) "nostr"}}
+            <a href="https://npub.world/{{.Entity.ID}}" target="_blank" rel="noopener">
+                {{truncate 30 .Entity.ID}}
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-bottom:2px"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
+            </a>
+          {{else}}
+            {{truncate 30 .Entity.ID}}
+          {{end}}
+        </td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+        <td>{{if .Reason}}{{.Reason}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+        <td>{{if .AddedBy}}{{.AddedBy}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+        <td class="text-muted">{{.CreatedAt.Format "2006-01-02"}}</td>
+      </tr>
+      {{else}}
+      <tr>
+        <td colspan="6" style="text-align:center; padding: 3rem; color: var(--text-muted);">No policies found</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
 </div>
+
+<style>
+  .table-wrap {
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-normal);
+  }
+  thead th {
+    text-align: left;
+    padding: 0.625rem 1rem;
+    font-size: var(--text-normal);
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody tr {
+    border-bottom: 1px solid var(--grid);
+    transition: background 0.1s;
+  }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--surface); }
+  tbody td {
+    padding: 0.75rem 1rem;
+    color: var(--text);
+    vertical-align: middle;
+  }
+  .badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: var(--text-normal);
+    font-weight: 600;
+  }
+  .badge-allowed { background: rgba(16,185,129,0.15); color: #10b981; }
+  .badge-blocked { background: rgba(239,68,68,0.15);  color: #ef4444; }
+  .text-muted { color: var(--text-muted); }
+  a { color: var(--text); text-underline-offset: 3px; }
+  a:hover { color: var(--accent); }
+</style>
 {{end}}

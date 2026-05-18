@@ -44,6 +44,13 @@ func New(
 			b, err := json.Marshal(v)
 			return string(b), err
 		},
+		"truncate": func(n int, s string) string {
+			runes := []rune(s)
+			if len(runes) <= n {
+				return s
+			}
+			return string(runes[:n]) + "…"
+		},
 	}
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
@@ -68,7 +75,7 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /tabs/apps", d.appsPage)
 	mux.HandleFunc("GET /tabs/defender", d.defenderPage)
 
-	srv := &http.Server{
+	server := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -78,7 +85,7 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	exit := make(chan error, 1)
 	go func() {
 		slog.Info("serving the dashboard", "address", addr)
-		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			exit <- err
 		}
 	}()
@@ -89,7 +96,7 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutCtx)
+		return server.Shutdown(shutCtx)
 	}
 }
 

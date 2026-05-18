@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nbd-wtf/go-nostr/nip19"
+	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics/store"
 )
 
@@ -165,8 +167,33 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type defenderPageData struct {
+	Policies []models.Policy
+}
+
 func (d *T) defenderPage(w http.ResponseWriter, r *http.Request) {
-	if err := d.template.ExecuteTemplate(w, "defender", nil); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	policies, err := d.defender.ListPolicies(ctx, "", "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for i := range policies {
+		// convert hex nostr keys to npubs
+		if policies[i].Entity.Platform == models.PlatformNostr {
+			policies[i].Entity.ID, err = nip19.EncodePublicKey(policies[i].Entity.ID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	data := defenderPageData{Policies: policies}
+
+	if err := d.template.ExecuteTemplate(w, "defender", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
