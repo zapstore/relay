@@ -3,38 +3,69 @@ package dashboard
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"time"
+
+	defender "github.com/zapstore/defender/pkg/client"
+	"github.com/zapstore/relay/pkg/analytics"
+	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/relay"
 )
 
 //go:embed templates/*.html
 var templateFiles embed.FS
 
+//go:embed static
+var staticFiles embed.FS
+
 // Server serves the dashboard UI.
-type Server struct {
-	tmpl *template.Template
+type T struct {
+	template  *template.Template
+	relay     relay.DB
+	blossom   blossom.DB
+	analytics analytics.DB
+	defender  defender.T
 }
 
 // New parses the embedded templates and returns a ready-to-use Server.
-func New() (*Server, error) {
-	tmpl, err := template.ParseFS(templateFiles, "templates/*.html")
+func New(
+	relay relay.DB,
+	blossom blossom.DB,
+	analytics analytics.DB,
+	defender defender.T,
+) (*T, error) {
+	funcs := template.FuncMap{
+		"json": func(v any) (string, error) {
+			b, err := json.Marshal(v)
+			return string(b), err
+		},
+	}
+	tmpl, err := template.New("").Funcs(funcs).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("dashboard: failed to parse templates: %w", err)
 	}
-	return &Server{tmpl: tmpl}, nil
+	return &T{
+		template:  tmpl,
+		relay:     relay,
+		blossom:   blossom,
+		analytics: analytics,
+		defender:  defender,
+	}, nil
 }
 
 // StartAndServe starts the dashboard HTTP server and blocks until ctx is cancelled.
-func (s *Server) StartAndServe(ctx context.Context, addr string) error {
+func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", s.index)
-	mux.HandleFunc("GET /tabs/overview", s.overview)
-	mux.HandleFunc("GET /tabs/apps", s.apps)
-	mux.HandleFunc("GET /tabs/defender", s.defender)
+	mux.Handle("GET /static/", http.FileServerFS(staticFiles))
+	mux.HandleFunc("GET /{$}", d.index)
+	mux.HandleFunc("GET /tabs/relay", d.relayPage)
+	mux.HandleFunc("GET /tabs/apps", d.appsPage)
+	mux.HandleFunc("GET /tabs/defender", d.defenderPage)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -61,26 +92,8 @@ func (s *Server) StartAndServe(ctx context.Context, addr string) error {
 	}
 }
 
-func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	if err := s.tmpl.ExecuteTemplate(w, "layout", nil); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
-	if err := s.tmpl.ExecuteTemplate(w, "overview", nil); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func (s *Server) apps(w http.ResponseWriter, r *http.Request) {
-	if err := s.tmpl.ExecuteTemplate(w, "apps", nil); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func (s *Server) defender(w http.ResponseWriter, r *http.Request) {
-	if err := s.tmpl.ExecuteTemplate(w, "defender", nil); err != nil {
+func (d *T) index(w http.ResponseWriter, r *http.Request) {
+	if err := d.template.ExecuteTemplate(w, "layout", nil); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

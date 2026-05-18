@@ -1,0 +1,18 @@
+{{define "chart"}}
+<div class="chart-container">
+  <canvas id="{{.ID}}"
+    data-labels="{{json .Labels}}"
+    data-datasets="{{json .Datasets}}"
+  ></canvas>
+</div>
+
+<script>initChart('{{.ID}}');</script>
+
+<style>
+  .chart-container {
+    position: relative;
+    margin: 0 auto 2rem;
+    padding: 1rem;
+  }
+</style>
+{{end}}

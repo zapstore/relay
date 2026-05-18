@@ -1,0 +1,35 @@
+{{define "card"}}
+<div class="card">
+  <div class="card-label">{{.Label}}</div>
+  <div class="card-value">{{.Value}}</div>
+</div>
+{{end}}
+
+{{define "card-styles"}}
+<style>
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.125rem 1.25rem;
+  }
+  .card-label {
+    font-size: var(--text-normal);
+    color: var(--text-muted);
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+  }
+  .card-value {
+    font-size: var(--text-big);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+</style>
+{{end}}

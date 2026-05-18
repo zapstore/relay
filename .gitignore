@@ -50,3 +50,7 @@ dist/
 .cursor/rules
 /spec/
 /docs/
+
+# air specific files
+/tmp/
+/air/

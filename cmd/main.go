@@ -138,11 +138,7 @@ func main() {
 
 	// Step 4.
 	// Initialize analytics engine
-	analytics, err := analytics.NewEngine(
-		config.Analytics,
-		analyticsDB,
-		resolver{db: relayDB},
-	)
+	analytics, err := analytics.NewEngine(config.Analytics, analyticsDB, resolver{db: relayDB})
 	if err != nil {
 		panic(err)
 	}
@@ -177,7 +173,7 @@ func main() {
 
 	// Step 6.
 	// Initialize dashboard
-	dashboard, err := dashboard.New()
+	dashboard, err := dashboard.New(relayDB, blossomDB, analyticsDB, defender)
 	if err != nil {
 		panic(err)
 	}

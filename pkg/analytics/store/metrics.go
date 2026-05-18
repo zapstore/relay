@@ -96,6 +96,7 @@ func (s *T) QueryRelayMetrics(ctx context.Context, from, to string) ([]RelayMetr
 		if err := rows.Scan(&m.Day, &m.Reqs, &m.Filters, &m.Events); err != nil {
 			return nil, fmt.Errorf("failed to scan relay metrics row: %w", err)
 		}
+		m.Day = normalizeDay(m.Day)
 		result = append(result, m)
 	}
 	return result, rows.Err()
@@ -131,6 +132,7 @@ func (s *T) QueryBlossomMetrics(ctx context.Context, from, to string) ([]Blossom
 		if err := rows.Scan(&m.Day, &m.Checks, &m.Downloads, &m.Uploads); err != nil {
 			return nil, fmt.Errorf("failed to scan blossom metrics row: %w", err)
 		}
+		m.Day = normalizeDay(m.Day)
 		result = append(result, m)
 	}
 	return result, rows.Err()

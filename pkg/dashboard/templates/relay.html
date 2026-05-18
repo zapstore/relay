@@ -1,0 +1,12 @@
+{{define "relay"}}
+{{template "card-styles" .}}
+
+<p class="section-title">Relay Stats</p>
+<p class="section-subtitle">Last 30 days</p>
+
+<div class="cards">
+  {{range .Cards}}{{template "card" .}}{{end}}
+</div>
+
+{{template "chart" .Chart}}
+{{end}}
