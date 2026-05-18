@@ -51,6 +51,14 @@ var RootKinds = []int{
 // indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
 const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
 
+// DB is the relay database.
+type DB = store.T
+
+// NewDB creates a new relay database.
+func NewDB(path string) (DB, error) {
+	return store.New(path)
+}
+
 // T represents the relay and all its dependencies.
 type T struct {
 	server *rely.Relay

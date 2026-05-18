@@ -25,10 +25,12 @@ import (
 	"github.com/zapstore/relay/pkg/events"
 )
 
-// Paths holds the file system locations for the analytics engine's files.
-type Paths struct {
-	Store string
-	Geo   string
+// DB is a type alias for the store database.
+type DB = *store.T
+
+// NewDB creates a new analytics database at the given path.
+func NewDB(path string) (DB, error) {
+	return store.New(path)
 }
 
 // Engine is the heart of the analytics system. It's responsible for processing data

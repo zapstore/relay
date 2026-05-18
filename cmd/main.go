@@ -15,16 +15,13 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
-	analyticsDB "github.com/zapstore/relay/pkg/analytics/store"
 	"github.com/zapstore/relay/pkg/blossom"
-	blossomDB "github.com/zapstore/relay/pkg/blossom/store"
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
-	relayDB "github.com/zapstore/relay/pkg/relay/store"
 )
 
 func printHelp() {
@@ -88,13 +85,13 @@ func main() {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		panic(err)
 	}
-	relayDB, err := relayDB.New(filepath.Join(dataDir, "relay.db"))
+	relayDB, err := relay.NewDB(filepath.Join(dataDir, "relay.db"))
 	if err != nil {
 		panic(err)
 	}
 	defer relayDB.Close()
 
-	blossomDB, err := blossomDB.New(filepath.Join(dataDir, "blossom.db"))
+	blossomDB, err := blossom.NewDB(filepath.Join(dataDir, "blossom.db"))
 	if err != nil {
 		panic(err)
 	}
@@ -104,7 +101,7 @@ func main() {
 	if err := os.MkdirAll(analyticsDir, 0755); err != nil {
 		panic(err)
 	}
-	analyticsDB, err := analyticsDB.New(filepath.Join(analyticsDir, "analytics.db"))
+	analyticsDB, err := analytics.NewDB(filepath.Join(analyticsDir, "analytics.db"))
 	if err != nil {
 		panic(err)
 	}
@@ -231,7 +228,7 @@ func main() {
 
 // Resolver implements [analytics.Resolver]
 type resolver struct {
-	db relayDB.T
+	db relay.DB
 }
 
 func (r resolver) AssetsReferencing(ctx context.Context, hash blossom.Hash) ([]nostr.Event, error) {

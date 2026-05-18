@@ -33,6 +33,14 @@ var (
 
 type Hash = blossom.Hash
 
+// DB is a pointer to the store.T struct, representing the database connection.
+type DB = *store.T
+
+// NewDB creates a new DB instance by opening a SQLite3 database at the given path.
+func NewDB(path string) (DB, error) {
+	return store.New(path)
+}
+
 // T represents the blossoms server and all its dependencies.
 type T struct {
 	server *blossy.Server
@@ -61,7 +69,7 @@ func Setup(
 	store *store.T,
 	relay Relay,
 	analytics *analytics.Engine,
-) (*blossy.Server, error) {
+) (*T, error) {
 
 	server, err := blossy.NewServer(
 		blossy.WithHostname(config.Hostname),
@@ -100,7 +108,13 @@ func Setup(
 	server.On.Check = blossom.check
 	server.On.Download = blossom.download
 	server.On.Upload = blossom.upload
-	return server, nil
+	return &blossom, nil
+}
+
+// StartAndServe starts the blossom server, listens to the provided address and handles http requests.
+// It’s a blocking operation, that stops only when the context gets cancelled.
+func (b *T) StartAndServe(ctx context.Context, addr string) error {
+	return b.server.StartAndServe(ctx, addr)
 }
 
 func (b *T) check(r blossy.Request, hash blossom.Hash, _ string) (blossy.MetaDelivery, *blossom.Error) {
