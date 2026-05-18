@@ -17,7 +17,7 @@ import (
 
 var ctx = context.Background()
 
-func TestAppSearchQuery(t *testing.T) {
+func TestSearchQuery(t *testing.T) {
 	since := nostr.Timestamp(1700000000)
 	until := nostr.Timestamp(1800000000)
 
@@ -120,13 +120,13 @@ func TestAppSearchQuery(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := appSearchQuery(tt.filter)
+			got, err := searchQuery(tt.filter)
 			if err != nil {
-				t.Fatalf("appSearchQuery() error = %v", err)
+				t.Fatalf("searchQuery() error = %v", err)
 			}
 
 			if len(got) != 1 {
-				t.Fatalf("appSearchQuery() returned %d queries, want 1", len(got))
+				t.Fatalf("searchQuery() returned %d queries, want 1", len(got))
 			}
 
 			if got[0].SQL != tt.want.SQL {

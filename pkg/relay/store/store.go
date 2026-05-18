@@ -195,35 +195,41 @@ func findAll(tags nostr.Tags, key string) []string {
 	return values
 }
 
+// Validate returns an error if the given filters are not supported.
+func Validate(filters ...nostr.Filter) error {
+	if len(filters) == 0 {
+		return errors.New("no filter provided")
+	}
+	if searchesIn(filters) == 0 {
+		return nil
+	}
+	if len(filters) > 1 {
+		// We don't support multiple filters when at least one is using NIP-50 search
+		// because the order of the result events will inevitably be ambiguous.
+		return fmt.Errorf("%w: there can only be one filter per REQ when using NIP-50 search", ErrUnsupportedREQ)
+	}
+	if !slices.Equal(filters[0].Kinds, []int{events.KindApp}) {
+		return fmt.Errorf("%w: we allow NIP-50 search only for kind %d", ErrUnsupportedREQ, events.KindApp)
+	}
+	if len(filters[0].Search) < 3 {
+		// The trigram tokenizer requires at least 3 chars, as well as the repoURL search.
+		return fmt.Errorf("%w: search term must be at least 3 characters", ErrUnsupportedREQ)
+	}
+	return nil
+}
+
 // queryBuilder handles FTS search for apps when there's exactly one app search filter.
 // When the search term is a repository URL (any host, /:user/:repo path), it performs
 // an exact match on the `repository` tag instead of FTS. Otherwise, it delegates to
 // the default query builder.
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
-	if searchesIn(filters) == 0 {
-		return sqlite.DefaultQueryBuilder(filters...)
+	if err := Validate(filters...); err != nil {
+		return nil, err
 	}
-
-	if len(filters) > 1 {
-		// We don't support multiple filters when one is using NIP-50 search because the order
-		// of the result events will inevitably be ambiguous.
-		return nil, fmt.Errorf("%w: there can only be one filter per REQ when using NIP-50 search", ErrUnsupportedREQ)
+	if searchesIn(filters) > 0 {
+		return searchQuery(filters[0])
 	}
-
-	search := filters[0]
-	if !slices.Equal(search.Kinds, []int{events.KindApp}) {
-		return nil, fmt.Errorf("%w: we allow NIP-50 search only for kind %d", ErrUnsupportedREQ, events.KindApp)
-	}
-
-	// Repository URL search: exact match on the `repository` tag (no FTS).
-	// Accepts any /:user/:repo URL (GitHub, GitLab, Codeberg, etc.) with or
-	// without a scheme and with or without trailing path/query.
-	if r, ok := repourl.Parse(search.Search); ok {
-		search.Search = r.Canonical
-		return repositoryURLQuery(search)
-	}
-
-	return appSearchQuery(search)
+	return sqlite.DefaultQueryBuilder(filters...)
 }
 
 // searchesIn counts the number of filters with a non-empty search term.
@@ -262,14 +268,17 @@ func repositoryURLQuery(filter nostr.Filter) ([]sqlite.Query, error) {
 
 // appSearchQuery builds an FTS query for searching apps.
 // Results are ordered by BM25 relevance with custom weights.
-func appSearchQuery(filter nostr.Filter) ([]sqlite.Query, error) {
-	if len(filter.Search) < 3 {
-		// Because of the trigram tokenizer, we need at least 3 characters to get a meaningful result.
-		return nil, fmt.Errorf("%w: search term must be at least 3 characters", ErrUnsupportedREQ)
+func searchQuery(f nostr.Filter) ([]sqlite.Query, error) {
+	// Repository URL search: exact match on the `repository` tag (no FTS).
+	// Accepts any /:user/:repo URL (GitHub, GitLab, Codeberg, etc.) with or
+	// without a scheme and with or without trailing path/query.
+	if r, ok := repourl.Parse(f.Search); ok {
+		f.Search = r.Canonical
+		return repositoryURLQuery(f)
 	}
 
-	filter.Search = escapeFTS5(filter.Search)
-	conditions, args := appSearchSql(filter)
+	f.Search = escapeFTS5(f.Search)
+	conditions, args := appSearchSql(f)
 
 	query := `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
 		FROM events e
@@ -278,7 +287,7 @@ func appSearchQuery(filter nostr.Filter) ([]sqlite.Query, error) {
 		ORDER BY bm25(apps_fts, 0, 20, 5, 1)
 		LIMIT ?`
 
-	args = append(args, filter.Limit)
+	args = append(args, f.Limit)
 	return []sqlite.Query{{SQL: query, Args: args}}, nil
 }
 

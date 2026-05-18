@@ -119,6 +119,7 @@ func Setup(
 	server.Reject.Req.Append(
 		RateReqIP(limiter),
 		FiltersExceed(config.MaxReqFilters),
+		UnsupportedQuery,
 		VagueFilters(3),
 	)
 
@@ -617,6 +618,10 @@ func KindNotAllowed(kinds []int) func(_ rely.Client, e *nostr.Event) error {
 
 func InvalidStructure(_ rely.Client, e *nostr.Event) error {
 	return events.Validate(e)
+}
+
+func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {
+	return store.Validate(filters...)
 }
 
 // AppOwnership enforces one publisher per app ID (kind 32267 d-tag) with role-aware transitions.
