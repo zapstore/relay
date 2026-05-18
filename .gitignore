@@ -45,3 +45,8 @@ go.work.sum
 # Build output
 build/
 dist/
+
+# AI memory and instructions
+.cursor/rules
+/spec/
+/docs/
