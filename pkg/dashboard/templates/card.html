@@ -8,8 +8,9 @@
 {{define "card-styles"}}
 <style>
   .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 1rem;
     margin-bottom: 2rem;
   }
@@ -17,7 +18,8 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 1.125rem 1.25rem;
+    padding: 1.125rem 1.75rem;
+    min-width: 180px;
   }
   .card-label {
     font-size: var(--text-normal);

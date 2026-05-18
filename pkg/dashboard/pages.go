@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr/nip19"
@@ -161,10 +162,163 @@ func (d *T) blossomPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type CountryRow struct {
+	Flag        string
+	Name        string
+	Impressions int
+	Downloads   int
+}
+
+type AppRow struct {
+	AppID       string
+	Impressions int
+	Downloads   int
+}
+
+type appsPageData struct {
+	Cards     []CardData
+	Countries []CountryRow
+	Apps      []AppRow
+}
+
 func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
-	if err := d.template.ExecuteTemplate(w, "apps", nil); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	to := time.Now().Format("2006-01-02")
+	from := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+
+	cards, err := d.appCards(ctx, from, to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	countries, err := d.countryRows(ctx, from, to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	apps, err := d.appRows(ctx, from, to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := appsPageData{Cards: cards, Countries: countries, Apps: apps}
+	if err := d.template.ExecuteTemplate(w, "apps", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// appCards returns the app cards for the dashboard, showing total impressions and downloads.
+func (d *T) appCards(ctx context.Context, from, to string) ([]CardData, error) {
+	impressions, err := d.analytics.QueryImpressions(ctx, store.ImpressionFilter{From: from, To: to})
+	if err != nil {
+		return nil, err
+	}
+	downloads, err := d.analytics.QueryDownloads(ctx, store.DownloadFilter{From: from, To: to})
+	if err != nil {
+		return nil, err
+	}
+
+	var totalImpressions, totalDownloads int64
+	if len(impressions) > 0 {
+		totalImpressions = int64(impressions[0].Count)
+	}
+	if len(downloads) > 0 {
+		totalDownloads = int64(downloads[0].Count)
+	}
+
+	return []CardData{
+		{Label: "Impressions", Value: totalImpressions},
+		{Label: "Downloads", Value: totalDownloads},
+	}, nil
+}
+
+// countryRows returns the country rows for the dashboard, showing impressions and downloads by country.
+func (d *T) countryRows(ctx context.Context, from, to string) ([]CountryRow, error) {
+	imprByCountry, err := d.analytics.QueryImpressions(ctx,
+		store.ImpressionFilter{From: from, To: to, GroupBy: []string{"country_code"}})
+	if err != nil {
+		return nil, err
+	}
+	dlByCountry, err := d.analytics.QueryDownloads(ctx,
+		store.DownloadFilter{From: from, To: to, GroupBy: []string{"country_code"}})
+	if err != nil {
+		return nil, err
+	}
+
+	countryMap := make(map[string]*CountryRow)
+	for _, row := range imprByCountry {
+		code := row.CountryCode
+		if countryMap[code] == nil {
+			countryMap[code] = &CountryRow{Flag: countryFlag(code), Name: countryName(code)}
+		}
+		countryMap[code].Impressions += row.Count
+	}
+	for _, row := range dlByCountry {
+		code := row.CountryCode
+		if countryMap[code] == nil {
+			countryMap[code] = &CountryRow{Flag: countryFlag(code), Name: countryName(code)}
+		}
+		countryMap[code].Downloads += row.Count
+	}
+
+	countries := make([]CountryRow, 0, len(countryMap))
+	for _, v := range countryMap {
+		countries = append(countries, *v)
+	}
+	sort.Slice(countries, func(i, j int) bool {
+		return countries[i].Impressions > countries[j].Impressions
+	})
+	if len(countries) > 20 {
+		countries = countries[:20]
+	}
+	return countries, nil
+}
+
+// appRows returns the app rows for the dashboard, showing impressions and downloads by app.
+func (d *T) appRows(ctx context.Context, from, to string) ([]AppRow, error) {
+	imprByApp, err := d.analytics.QueryImpressions(ctx,
+		store.ImpressionFilter{From: from, To: to, GroupBy: []string{"app_id"}})
+	if err != nil {
+		return nil, err
+	}
+	dlByApp, err := d.analytics.QueryDownloads(ctx,
+		store.DownloadFilter{From: from, To: to, GroupBy: []string{"app_id"}})
+	if err != nil {
+		return nil, err
+	}
+
+	appMap := make(map[string]*AppRow)
+	for _, row := range imprByApp {
+		id := row.AppID
+		if appMap[id] == nil {
+			appMap[id] = &AppRow{AppID: id}
+		}
+		appMap[id].Impressions += row.Count
+	}
+	for _, row := range dlByApp {
+		id := row.AppID
+		if appMap[id] == nil {
+			appMap[id] = &AppRow{AppID: id}
+		}
+		appMap[id].Downloads += row.Count
+	}
+
+	apps := make([]AppRow, 0, len(appMap))
+	for _, v := range appMap {
+		apps = append(apps, *v)
+	}
+	sort.Slice(apps, func(i, j int) bool {
+		return apps[i].Impressions > apps[j].Impressions
+	})
+	if len(apps) > 20 {
+		apps = apps[:20]
+	}
+	return apps, nil
 }
 
 type defenderPageData struct {

@@ -19,6 +19,11 @@
   </span>
   <nav id="tabs">
     <button class="tab active"
+      hx-get="/tabs/apps"
+      hx-target="#content"
+      hx-swap="innerHTML"
+      onclick="setActive(this)">Apps</button>
+    <button class="tab"
       hx-get="/tabs/relay"
       hx-target="#content"
       hx-swap="innerHTML"
@@ -29,11 +34,6 @@
       hx-swap="innerHTML"
       onclick="setActive(this)">Blossom</button>
     <button class="tab"
-      hx-get="/tabs/apps"
-      hx-target="#content"
-      hx-swap="innerHTML"
-      onclick="setActive(this)">Apps</button>
-    <button class="tab"
       hx-get="/tabs/defender"
       hx-target="#content"
       hx-swap="innerHTML"
@@ -42,7 +42,7 @@
 </header>
 
 <main>
-  <div id="content" hx-get="/tabs/relay" hx-trigger="load" hx-swap="innerHTML">
+  <div id="content" hx-get="/tabs/apps" hx-trigger="load" hx-swap="innerHTML">
   </div>
 </main>
 

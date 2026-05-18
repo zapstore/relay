@@ -1,15 +1,104 @@
 {{define "apps"}}
-<p class="section-title">Impressions</p>
-<div class="placeholder">
-  <strong>App impressions</strong>
-  Coming soon
+{{template "card-styles" .}}
+<style>
+  .cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    align-items: start;
+  }
+  .countries-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-normal);
+  }
+  .countries-table thead th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+  }
+  .countries-table thead th:not(:first-child) { text-align: right; }
+  .countries-table tbody tr {
+    border-bottom: 1px solid var(--grid);
+    transition: background 0.1s;
+  }
+  .countries-table tbody tr:last-child { border-bottom: none; }
+  .countries-table tbody tr:hover { background: var(--surface); }
+  .countries-table tbody td {
+    padding: 0.6rem 0.75rem;
+    color: var(--text);
+  }
+  .countries-table tbody td:not(:first-child) { text-align: right; color: var(--text-muted); }
+  .country-cell { display: flex; align-items: center; gap: 0.6rem; }
+  .country-rank { color: var(--text-muted); font-size: var(--text-normal); min-width: 1.25rem; }
+</style>
+
+<p class="section-title">App Stats</p>
+<p class="section-subtitle">Last 30 days</p>
+
+<div class="cards">
+  {{range .Cards}}{{template "card" .}}{{end}}
 </div>
 
-<br>
-
-<p class="section-title">Downloads</p>
-<div class="placeholder">
-  <strong>App downloads</strong>
-  Coming soon
+<div class="cols">
+  <div>
+    <table class="countries-table">
+      <thead>
+        <tr>
+          <th>Country</th>
+          <th>Impressions</th>
+          <th>Downloads</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $i, $c := .Countries}}
+        <tr>
+          <td>
+            <div class="country-cell">
+              <span class="country-rank">{{add $i 1}}</span>
+              <span>{{$c.Flag}}</span>
+              <span>{{$c.Name}}</span>
+            </div>
+          </td>
+          <td>{{$c.Impressions}}</td>
+          <td>{{$c.Downloads}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <div>
+    <table class="countries-table">
+      <thead>
+        <tr>
+          <th>App</th>
+          <th>Impressions</th>
+          <th>Downloads</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $i, $a := .Apps}}
+        <tr>
+          <td>
+            <div class="country-cell">
+              <span class="country-rank">{{add $i 1}}</span>
+              <span>{{$a.AppID}}</span>
+            </div>
+          </td>
+          <td>{{$a.Impressions}}</td>
+          <td>{{$a.Downloads}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
 </div>
 {{end}}
