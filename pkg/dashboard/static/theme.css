@@ -37,3 +37,13 @@
     --text-big: 1.5rem;
     --text-title: 2.5rem;
 }
+
+/* disabling all scrollbars */
+*::-webkit-scrollbar {
+    display: none; /* Chrome, Safari, Opera */
+}
+
+* {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE and Edge */
+}
