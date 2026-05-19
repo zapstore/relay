@@ -4,11 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"slices"
-	"time"
 
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/pippellia-btc/nwt"
 )
 
 type Config struct {
@@ -18,8 +15,11 @@ type Config struct {
 	// Hostname is the hostname of the dashboard, used for Nostr Web Token auth (e.g. dashboard.zapstore.dev)
 	Hostname string `env:"DASHBOARD_HOSTNAME"`
 
-	// AllowedPubkeys is the list of the pubkeys that can access the dashboard.
-	AllowedPubkeys []string `env:"DASHBOARD_ALLOWED_PUBKEYS"`
+	// ViewerPubkeys is the list of the pubkeys that can access the dashboard.
+	ViewerPubkeys []string `env:"DASHBOARD_VIEWER_PUBKEYS"`
+
+	// AdminPubkeys is the list of the pubkeys that can access the dashboard admin panel.
+	AdminPubkeys []string `env:"DASHBOARD_ADMIN_PUBKEYS"`
 }
 
 func NewConfig() Config {
@@ -35,12 +35,17 @@ func (c Config) Validate() error {
 	if c.Hostname == "" {
 		return errors.New("dashboard hostname is not set")
 	}
-	if len(c.AllowedPubkeys) == 0 {
-		return errors.New("allowed pubkeys is empty")
+	if len(c.AdminPubkeys) == 0 {
+		return errors.New("admin pubkeys is empty")
 	}
-	for _, pk := range c.AllowedPubkeys {
+	for _, pk := range c.AdminPubkeys {
 		if pk == "" || !nostr.IsValidPublicKey(pk) {
-			return fmt.Errorf("allowed pubkey is invalid: %q", pk)
+			return fmt.Errorf("admin pubkey is invalid: %q", pk)
+		}
+	}
+	for _, pk := range c.ViewerPubkeys {
+		if pk == "" || !nostr.IsValidPublicKey(pk) {
+			return fmt.Errorf("viewer pubkey is invalid: %q", pk)
 		}
 	}
 	return nil
@@ -50,29 +55,7 @@ func (c Config) String() string {
 	return fmt.Sprintf("Dashboard:\n"+
 		"\tAddress: %s\n"+
 		"\tHostname: %s\n"+
-		"\tAllowed Pubkeys: %v\n",
-		c.Address, c.Hostname, c.AllowedPubkeys)
-}
-
-// authValidator implements [nwt.Validator]
-type authValidator struct {
-	Config
-}
-
-func (v authValidator) Validate(t nwt.Token) error {
-	if t.ID == "" {
-		return nwt.ErrEmptyID
-	}
-	if err := nwt.ValidateTimeClaims(t, time.Minute); err != nil {
-		return err
-	}
-	if len(t.Audience) > 0 {
-		if !slices.Contains(t.Audience, v.Hostname) {
-			return fmt.Errorf("%w: it doesn't contain an exact match of %q", nwt.ErrInvalidAudience, v.Hostname)
-		}
-	}
-	if !slices.Contains(v.AllowedPubkeys, t.Signer) {
-		return fmt.Errorf("pubkey is not allowed: %q", t.Signer)
-	}
-	return nil
+		"\tViewer Pubkeys: %v\n"+
+		"\tAdmin Pubkeys: %v\n",
+		c.Address, c.Hostname, c.ViewerPubkeys, c.AdminPubkeys)
 }

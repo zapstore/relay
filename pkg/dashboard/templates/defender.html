@@ -12,6 +12,13 @@
         <th>Reason</th>
         <th>Added by</th>
         <th>Created at</th>
+        {{if .IsAdmin}}
+        <th class="th-action">
+          <button class="btn-icon" title="Add policy" onclick="openPolicyModal()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </th>
+        {{end}}
       </tr>
     </thead>
     <tbody>
@@ -32,14 +39,62 @@
         <td>{{if .Reason}}{{.Reason}}{{else}}<span class="text-muted">—</span>{{end}}</td>
         <td>{{if .AddedBy}}{{.AddedBy}}{{else}}<span class="text-muted">—</span>{{end}}</td>
         <td class="text-muted">{{.CreatedAt.Format "2006-01-02"}}</td>
+        {{if $.IsAdmin}}
+        <td class="td-action">
+          <button class="btn-icon btn-danger" title="Delete policy" data-platform="{{.Entity.Platform}}" data-id="{{.Entity.ID}}" onclick="deletePolicy(this)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          </button>
+        </td>
+        {{end}}
       </tr>
       {{else}}
       <tr>
-        <td colspan="6" style="text-align:center; padding: 3rem; color: var(--text-muted);">No policies found</td>
+        <td colspan="{{if .IsAdmin}}7{{else}}6{{end}}" style="text-align:center; padding: 3rem; color: var(--text-muted);">No policies found</td>
       </tr>
       {{end}}
     </tbody>
   </table>
+</div>
+
+<div id="policy-modal" class="modal-backdrop" style="display:none" onclick="closePolicyModal(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span>New policy</span>
+      <button class="btn-icon" onclick="closePolicyModal()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <form class="modal-form" onsubmit="submitPolicy(event)">
+      <label>
+        Platform
+        <select name="platform" required>
+          <option value="nostr">nostr</option>
+          <option value="github">github</option>
+          <option value="gitlab">gitlab</option>
+          <option value="codeberg">codeberg</option>
+        </select>
+      </label>
+      <label>
+        ID
+        <input name="id" type="text" placeholder="pubkey / username" required>
+      </label>
+      <label>
+        Status
+        <select name="status" required>
+          <option value="blocked">blocked</option>
+          <option value="allowed">allowed</option>
+        </select>
+      </label>
+      <label>
+        Reason
+        <input name="reason" type="text" placeholder="Required" required>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" onclick="closePolicyModal()">Cancel</button>
+        <button type="submit" class="btn-primary">Add policy</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div class="terminal">
@@ -108,6 +163,114 @@
   a { color: var(--text); text-underline-offset: 3px; }
   a:hover { color: var(--accent); }
 
+  .th-action { text-align: right; padding-right: 0.75rem; }
+  .btn-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+  }
+  .btn-icon:hover { color: var(--text); background: var(--surface); }
+  .btn-danger:hover { color: #ef4444; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08); }
+  .td-action { width: 1%; white-space: nowrap; padding-right: 0.75rem; }
+
+  /* ── Modal ── */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+  }
+  .modal-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 420px;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-header span {
+    font-size: var(--text-big);
+    font-weight: 700;
+    color: var(--text);
+  }
+  .modal-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .modal-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    font-size: var(--text-normal);
+    color: var(--text-muted);
+  }
+  .modal-form input,
+  .modal-form select {
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: var(--text-normal);
+    padding: 0.5rem 0.75rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .modal-form input:focus,
+  .modal-form select:focus { border-color: var(--accent); }
+  .modal-form select option { background: var(--surface); }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.625rem;
+    margin-top: 0.25rem;
+  }
+  .btn-primary {
+    padding: 0.5rem 1.125rem;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: var(--text-normal);
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-secondary {
+    padding: 0.5rem 1.125rem;
+    background: none;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: var(--text-normal);
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+  }
+  .btn-secondary:hover { color: var(--text); background: var(--surface); }
+
   /* ── Terminal ── */
   .terminal {
     border: 1px solid #2a2a2a;
@@ -168,4 +331,62 @@
                   overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
   .log-reason   { color: #6b7280; }
 </style>
+
+<script>
+  function openPolicyModal() {
+    document.getElementById('policy-modal').style.display = 'flex';
+  }
+
+  function closePolicyModal(e) {
+    // If called from the backdrop click, only close when clicking the backdrop itself.
+    if (e && e.target !== document.getElementById('policy-modal')) return;
+    const modal = document.getElementById('policy-modal');
+    modal.style.display = 'none';
+    modal.querySelector('form').reset();
+  }
+
+  function authHeader() {
+    const raw = localStorage.getItem('zapstore_nwt');
+    if (!raw) return {};
+    return { 'Authorization': 'Nostr ' + btoa(raw).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'') };
+  }
+
+  async function submitPolicy(e) {
+    e.preventDefault();
+    const form = e.target;
+    const policy = {
+      platform: form.platform.value,
+      id:       form.id.value.trim(),
+      status:   form.status.value,
+      reason:   form.reason.value.trim(),
+    };
+    const resp = await fetch('/defender/policies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify(policy),
+    });
+    if (resp.ok) {
+      closePolicyModal();
+      htmx.ajax('GET', '/tabs/defender', '#content');
+    } else {
+      alert(await resp.text());
+    }
+  }
+
+  async function deletePolicy(btn) {
+    const platform = btn.dataset.platform;
+    const id = btn.dataset.id;
+    if (!confirm(`Delete policy for ${id}?`)) return;
+    const resp = await fetch('/defender/policies', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({ platform, id }),
+    });
+    if (resp.ok) {
+      htmx.ajax('GET', '/tabs/defender', '#content');
+    } else {
+      alert(await resp.text());
+    }
+  }
+</script>
 {{end}}

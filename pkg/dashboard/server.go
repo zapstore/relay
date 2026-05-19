@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pippellia-btc/nwt"
 	"github.com/pippellia-btc/rely/v2"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
@@ -31,7 +30,7 @@ type T struct {
 	template *template.Template
 	config   Config
 
-	auth      nwt.Validator
+	auth      authValidator
 	limiter   rate.Limiter
 	defender  defender.T
 	relay     relay.DB
@@ -78,25 +77,6 @@ func New(
 	}, nil
 }
 
-// requireAuth is middleware that validates the NWT on the Authorization header.
-// On failure it returns 401 with a plain-text error; the client JS handles the redirect.
-func (d *T) requireAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token, err := nwt.Parse(r)
-		if err != nil {
-			d.limiter.Penalize(rely.GetIP(r).Group(), 10)
-			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
-			return
-		}
-		if err := d.auth.Validate(token); err != nil {
-			d.limiter.Penalize(rely.GetIP(r).Group(), 10)
-			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
 // rateLimit is middleware that rate limits requests by IP.
 func (d *T) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -118,12 +98,13 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /{$}", d.rateLimit(d.index))
 	mux.HandleFunc("GET /login", d.rateLimit(d.loginPage))
 
-	// Protected routes, every tab request carries the NWT header.
-	mux.HandleFunc("GET /tabs/apps", d.requireAuth(d.appsPage))
-	mux.HandleFunc("GET /tabs/apps/chart", d.requireAuth(d.appChartPage))
-	mux.HandleFunc("GET /tabs/relay", d.requireAuth(d.relayPage))
-	mux.HandleFunc("GET /tabs/blossom", d.requireAuth(d.blossomPage))
-	mux.HandleFunc("GET /tabs/defender", d.requireAuth(d.defenderPage))
+	mux.HandleFunc("POST /defender/policies", d.rateLimit(d.createPolicy))
+	mux.HandleFunc("DELETE /defender/policies", d.rateLimit(d.deletePolicy))
+	mux.HandleFunc("GET /tabs/apps", d.rateLimit(d.appsPage))
+	mux.HandleFunc("GET /tabs/apps/chart", d.rateLimit(d.appChartPage))
+	mux.HandleFunc("GET /tabs/relay", d.rateLimit(d.relayPage))
+	mux.HandleFunc("GET /tabs/blossom", d.rateLimit(d.blossomPage))
+	mux.HandleFunc("GET /tabs/defender", d.rateLimit(d.defenderPage))
 
 	server := &http.Server{
 		Addr:              addr,

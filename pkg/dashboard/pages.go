@@ -2,8 +2,12 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr/nip19"
@@ -40,6 +44,10 @@ type relayPageData struct {
 }
 
 func (d *T) relayPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -104,6 +112,9 @@ type blossomPageData struct {
 }
 
 func (d *T) blossomPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -205,6 +216,9 @@ type appsPageData struct {
 }
 
 func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -251,6 +265,9 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *T) appChartPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -470,9 +487,14 @@ func (d *T) appChart(ctx context.Context, from, to, appID string) (ChartData, er
 type defenderPageData struct {
 	Policies []models.Policy
 	Audits   []models.Audit
+	IsAdmin  bool
 }
 
 func (d *T) defenderPage(w http.ResponseWriter, r *http.Request) {
+	token, ok := d.authenticate(w, r)
+	if !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -481,31 +503,105 @@ func (d *T) defenderPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	for i := range policies {
-		// convert hex nostr keys to npubs
-		if policies[i].Entity.Platform == models.PlatformNostr {
-			policies[i].Entity.ID, err = nip19.EncodePublicKey(policies[i].Entity.ID)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-	}
-
 	audits, err := d.defender.ListAudits(ctx, 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	data := defenderPageData{
 		Policies: policies,
 		Audits:   audits,
+		IsAdmin:  d.auth.IsAdmin(token),
 	}
-
 	if err := d.template.ExecuteTemplate(w, "defender", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// createPolicyBody is the JSON payload for POST /defender/policies.
+type createPolicyBody struct {
+	Platform models.Platform     `json:"platform"`
+	ID       string              `json:"id"`
+	Status   models.PolicyStatus `json:"status"`
+	Reason   string              `json:"reason"`
+}
+
+func (d *T) createPolicy(w http.ResponseWriter, r *http.Request) {
+	token, ok := d.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !d.auth.IsAdmin(token) {
+		http.Error(w, "forbidden: admin access required", http.StatusForbidden)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req createPolicyBody
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Platform == models.PlatformNostr && strings.HasPrefix(req.ID, "npub1") {
+		_, v, err := nip19.Decode(req.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.ID = v.(string)
+	}
+	policy := models.Policy{
+		Entity:    models.Entity{ID: req.ID, Platform: req.Platform},
+		Status:    req.Status,
+		Reason:    req.Reason,
+		AddedBy:   "dashboard",
+		CreatedAt: time.Now().UTC(),
+	}
+
+	if err := d.defender.SetPolicy(r.Context(), policy); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("policy created", "platform", req.Platform, "id", req.ID, "status", req.Status)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deletePolicyBody is the JSON payload for DELETE /defender/policies.
+type deletePolicyBody struct {
+	Platform models.Platform `json:"platform"`
+	ID       string          `json:"id"`
+}
+
+func (d *T) deletePolicy(w http.ResponseWriter, r *http.Request) {
+	token, ok := d.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !d.auth.IsAdmin(token) {
+		http.Error(w, "forbidden: admin access required", http.StatusForbidden)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req deletePolicyBody
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	entity := models.Entity{ID: req.ID, Platform: req.Platform}
+	if err := d.defender.DeletePolicy(r.Context(), entity); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("policy deleted", "platform", req.Platform, "id", req.ID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // dayRange returns every day from `from` to `to` inclusive in ascending order.
