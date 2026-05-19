@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/pippellia-btc/nwt"
+	"github.com/pippellia-btc/rely/v2"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 )
 
@@ -30,19 +32,21 @@ type T struct {
 	config   Config
 
 	auth      nwt.Validator
+	limiter   rate.Limiter
+	defender  defender.T
 	relay     relay.DB
 	blossom   blossom.DB
 	analytics analytics.DB
-	defender  defender.T
 }
 
 // New parses the embedded templates and returns a ready-to-use Server.
 func New(
 	config Config,
+	limiter rate.Limiter,
+	defender defender.T,
 	relay relay.DB,
 	blossom blossom.DB,
 	analytics analytics.DB,
-	defender defender.T,
 ) (*T, error) {
 	funcs := template.FuncMap{
 		"json": func(v any) (string, error) {
@@ -66,10 +70,11 @@ func New(
 		template:  tmpl,
 		config:    config,
 		auth:      authValidator{config},
+		limiter:   limiter,
+		defender:  defender,
 		relay:     relay,
 		blossom:   blossom,
 		analytics: analytics,
-		defender:  defender,
 	}, nil
 }
 
@@ -79,11 +84,25 @@ func (d *T) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, err := nwt.Parse(r)
 		if err != nil {
+			d.limiter.Penalize(rely.GetIP(r).Group(), 10)
 			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
 		if err := d.auth.Validate(token); err != nil {
+			d.limiter.Penalize(rely.GetIP(r).Group(), 10)
 			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// rateLimit is middleware that rate limits requests by IP.
+func (d *T) rateLimit(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := rely.GetIP(r).Group()
+		if !d.limiter.Allow(ip, 1) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 		next(w, r)
@@ -95,11 +114,11 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
 
 	// Public routes.
-	mux.Handle("GET /static/", http.FileServerFS(staticFiles))
-	mux.HandleFunc("GET /login", d.loginPage)
+	mux.Handle("GET /static/", d.rateLimit(http.FileServerFS(staticFiles).ServeHTTP))
+	mux.HandleFunc("GET /{$}", d.rateLimit(d.index))
+	mux.HandleFunc("GET /login", d.rateLimit(d.loginPage))
 
 	// Protected routes, every tab request carries the NWT header.
-	mux.HandleFunc("GET /{$}", d.index)
 	mux.HandleFunc("GET /tabs/apps", d.requireAuth(d.appsPage))
 	mux.HandleFunc("GET /tabs/apps/chart", d.requireAuth(d.appChartPage))
 	mux.HandleFunc("GET /tabs/relay", d.requireAuth(d.relayPage))
