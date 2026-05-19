@@ -42,6 +42,29 @@
   </table>
 </div>
 
+<div class="terminal">
+  <div class="terminal-bar">
+    <span class="terminal-dot dot-red"></span>
+    <span class="terminal-dot dot-yellow"></span>
+    <span class="terminal-dot dot-green"></span>
+    <span class="terminal-title">audit log</span>
+  </div>
+  <div class="terminal-body">
+    {{range .Audits}}
+    <div class="log-line">
+      <span class="log-ts">{{.CheckedAt.Format "2006-01-02 15:04:05"}}</span>
+      <span class="log-decision log-decision-{{.Decision}}">{{.Decision}}</span>
+      <span class="log-type">{{.Type}}</span>
+      {{if .Hash}}<span class="log-hash">{{truncate 12 .Hash}}</span>{{end}}
+      {{if .Pubkey}}<span class="log-pubkey">{{truncate 16 .Pubkey}}</span>{{end}}
+      {{if .Reason}}<span class="log-reason">// {{.Reason}}</span>{{end}}
+    </div>
+    {{else}}
+    <div class="log-line"><span class="log-ts">no audit entries yet</span></div>
+    {{end}}
+  </div>
+</div>
+
 <style>
   .table-wrap {
     overflow-x: auto;
@@ -84,5 +107,65 @@
   .text-muted { color: var(--text-muted); }
   a { color: var(--text); text-underline-offset: 3px; }
   a:hover { color: var(--accent); }
+
+  /* ── Terminal ── */
+  .terminal {
+    border: 1px solid #2a2a2a;
+    border-radius: 10px;
+    overflow: hidden;
+    font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", ui-monospace, monospace;
+    font-size: 0.8rem;
+    margin-top: 3rem;
+  }
+  .terminal-bar {
+    background: #1e1e1e;
+    border-bottom: 1px solid #2a2a2a;
+    padding: 0.5rem 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .terminal-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .dot-red    { background: #ff5f57; }
+  .dot-yellow { background: #febc2e; }
+  .dot-green  { background: #28c840; }
+  .terminal-title {
+    flex: 1;
+    text-align: center;
+    color: #666;
+    font-size: 0.75rem;
+    letter-spacing: 0.03em;
+    margin-right: 36px; /* visually centre against the dots */
+  }
+  .terminal-body {
+    background: #0d0d0d;
+    padding: 0.875rem 1rem;
+    max-height: 480px;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .log-line {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    line-height: 1.7;
+    border-radius: 3px;
+  }
+  .log-line:hover { background: rgba(255,255,255,0.03); }
+  /* every column is an inline-block with a fixed width so rows stay aligned */
+  .log-ts       { display: inline-block; width: 19ch; color: #555; }
+  .log-decision { display: inline-block; width: 7ch;  font-weight: 700; }
+  .log-decision-allow  { color: #10b981; }
+  .log-decision-reject { color: #ef4444; }
+  .log-type     { display: inline-block; width: 6ch;  color: #a78bfa; }
+  .log-hash     { display: inline-block; width: 14ch; color: #60a5fa; }
+  .log-pubkey   { display: inline-block; width: 18ch; color: #94a3b8;
+                  overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+  .log-reason   { color: #6b7280; }
 </style>
 {{end}}

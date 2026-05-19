@@ -469,6 +469,7 @@ func (d *T) appChart(ctx context.Context, from, to, appID string) (ChartData, er
 
 type defenderPageData struct {
 	Policies []models.Policy
+	Audits   []models.Audit
 }
 
 func (d *T) defenderPage(w http.ResponseWriter, r *http.Request) {
@@ -480,7 +481,6 @@ func (d *T) defenderPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	for i := range policies {
 		// convert hex nostr keys to npubs
 		if policies[i].Entity.Platform == models.PlatformNostr {
@@ -491,7 +491,17 @@ func (d *T) defenderPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	data := defenderPageData{Policies: policies}
+
+	audits, err := d.defender.ListAudits(ctx, 100)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := defenderPageData{
+		Policies: policies,
+		Audits:   audits,
+	}
 
 	if err := d.template.ExecuteTemplate(w, "defender", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

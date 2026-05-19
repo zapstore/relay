@@ -4,7 +4,6 @@ github.com/aead/siphash v1.0.1/go.mod h1:Nywa3cDsYNNK3gaciGTWPwHt0wlpNV15vwmswBA
 github.com/btcsuite/btcd v0.20.1-beta/go.mod h1:wVuoA8VJLEcwgqHBwHmzLRazpKxTv13Px/pDuV7OomQ=
 github.com/btcsuite/btcd v0.22.0-beta.0.20220111032746-97732e52810c/go.mod h1:tjmYdS6MLJ5/s0Fj4DbLgSbDHbEqLJrtnHecBFkdz5M=
 github.com/btcsuite/btcd v0.23.5-0.20231215221805-96c9fd8078fd/go.mod h1:nm3Bko6zh6bWP60UxwoT5LzdGJsQJaPo6HjduXq9p6A=
-github.com/btcsuite/btcd v0.24.2 h1:aLmxPguqxza+4ag8R1I2nnJjSu2iFn/kqtHTIImswcY=
 github.com/btcsuite/btcd/btcec/v2 v2.1.0/go.mod h1:2VzYrv4Gm4apmbVVsSq5bqf1Ec8v56E48Vt0Y/umPgA=
 github.com/btcsuite/btcd/btcec/v2 v2.1.3/go.mod h1:ctjw4H1kknNJmRN4iP1R7bTQ+v3GJkZBd6mui8ZsAZE=
 github.com/btcsuite/btcd/btcec/v2 v2.3.4 h1:3EJjcN70HCu/mwqlUsGK8GcNVyLVxFDlWurTXGPFfiQ=
@@ -147,8 +146,8 @@ github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/vertex-lab/nostr-sqlite v0.7.0 h1:eZzAAWi2X7mujdZ5Tq6b93aHkkUQ6Zo7jXSFRMVaKXk=
 github.com/vertex-lab/nostr-sqlite v0.7.0/go.mod h1:yJ0pDPh1a5g5tr6q3CrgD8N5ILnQAFf8XX5Unl44MXY=
-github.com/zapstore/defender v0.2.2 h1:4puH182lm6N4l4uU856worxzjLpUf5zSTdQJQ22a8zg=
-github.com/zapstore/defender v0.2.2/go.mod h1:i7xBRA+IWwcjWGKH4UXHb13Wcc7ASI1FRCF0cVEtuUY=
+github.com/zapstore/defender v0.3.0 h1:aWXykAuItpeoHXibN6RT2R3awteBzJY/MHo6AhZIJKM=
+github.com/zapstore/defender v0.3.0/go.mod h1:i7xBRA+IWwcjWGKH4UXHb13Wcc7ASI1FRCF0cVEtuUY=
 golang.org/x/arch v0.15.0 h1:QtOrQd0bTUnhNVNndMpLHNWrDmYzZ2KDqSrEymqInZw=
 golang.org/x/arch v0.15.0/go.mod h1:JmwW7aLIoRUKgaTzhkiEFxvcEiQGyOg9BMonBJUS7EE=
 golang.org/x/crypto v0.0.0-20170930174604-9419663f5a44/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=

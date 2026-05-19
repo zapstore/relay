@@ -14,7 +14,7 @@ require (
 	github.com/pippellia-btc/rate v0.2.1
 	github.com/pippellia-btc/rely/v2 v2.0.0-beta
 	github.com/vertex-lab/nostr-sqlite v0.7.0
-	github.com/zapstore/defender v0.2.2
+	github.com/zapstore/defender v0.3.0
 )
 
 require (
