@@ -111,6 +111,8 @@ github.com/pippellia-btc/blossom v0.5.1 h1:TQ+3VYQOL5AF/QK2OCn3nshKj1GUAlA2MngYz
 github.com/pippellia-btc/blossom v0.5.1/go.mod h1:0FK415GivYBfOJambaAhg1FZkDB5cep/skpP01hfAnc=
 github.com/pippellia-btc/blossy v0.3.0 h1:JFn4z94z5KrrnOvEGssAFUZzt13+2JNbBB9NNISTHzA=
 github.com/pippellia-btc/blossy v0.3.0/go.mod h1:tt4TtdefDyGLqWF3bHOpjzRLy70PSUOc42POTlxGBeA=
+github.com/pippellia-btc/nwt v0.4.0 h1:gWy4K1m3OtTYz3Re9OUhAqkS/psM7lP94XGtCuZ10Ao=
+github.com/pippellia-btc/nwt v0.4.0/go.mod h1:+Fzl1rndLriaYke/b2EeH+FQ2nPIFqeyPTgtZ2hru5c=
 github.com/pippellia-btc/rate v0.2.1 h1:ti4HBMhqKToaniEn6DlDFrQRYQJomUI85fOpiXJqtgE=
 github.com/pippellia-btc/rate v0.2.1/go.mod h1:A2YLgBc99FDcu5HbJcjbAMszlUKJCIVlmQA2mHLA5a0=
 github.com/pippellia-btc/rely/v2 v2.0.0-beta h1:07RpI7agTKVyPc53PKKbsL0kuccy8DLi6QclW4ddX1E=

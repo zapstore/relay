@@ -173,7 +173,7 @@ func main() {
 
 	// Step 6.
 	// Initialize dashboard
-	dashboard, err := dashboard.New(relayDB, blossomDB, analyticsDB, defender)
+	dashboard, err := dashboard.New(config.Dashboard, relayDB, blossomDB, analyticsDB, defender)
 	if err != nil {
 		panic(err)
 	}

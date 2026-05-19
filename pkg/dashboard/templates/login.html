@@ -1,0 +1,198 @@
+{{define "login"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zapstore Dashboard — Login</title>
+  <link rel="stylesheet" href="/static/theme.css">
+</head>
+<body>
+
+<header>
+  <span class="logo">
+    <img src="/static/assets/zapstore-logo.svg" alt="" height="24">
+    Zapstore
+  </span>
+</header>
+
+<main>
+  <div class="login-card">
+    <h1>Dashboard</h1>
+    <p>Sign in with your Nostr key to access the dashboard.</p>
+    <div id="error" class="error"></div>
+    <button id="login-btn" class="btn-nostr" onclick="loginWithNostr()">
+      Sign in with Nostr
+    </button>
+  </div>
+</main>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font);
+    background: var(--background);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 64px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: var(--text-normal);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .logo img { display: block; }
+
+  main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .login-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2.5rem 3rem;
+    width: 100%;
+    max-width: 380px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .login-card h1 {
+    font-size: var(--text-big);
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .login-card p {
+    font-size: var(--text-normal);
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.5;
+  }
+
+  .btn-nostr {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    width: 100%;
+    padding: 0.75rem 1.25rem;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: var(--text-normal);
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .btn-nostr:hover  { opacity: 0.85; }
+  .btn-nostr:active { opacity: 0.7; }
+  .btn-nostr:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .error {
+    width: 100%;
+    padding: 0.625rem 0.875rem;
+    background: rgba(239,68,68,0.12);
+    border: 1px solid rgba(239,68,68,0.4);
+    border-radius: 6px;
+    color: #f87171;
+    font-size: var(--text-normal);
+    text-align: center;
+    display: none;
+  }
+</style>
+
+<script>
+  const AUDIENCE = "{{.Hostname}}";
+  const NWT_KEY  = "zapstore_nwt";
+
+  function showError(msg) {
+    const el = document.getElementById('error');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  function setLoading(on) {
+    document.getElementById('login-btn').disabled = on;
+    document.getElementById('login-btn').textContent = on ? 'Signing…' : '⚡ Sign in with Nostr';
+  }
+
+  // Returns true if a saved, non-expired token exists; redirects to / immediately.
+  async function autoLogin() {
+    const raw = localStorage.getItem(NWT_KEY);
+    if (!raw) return false;
+
+    try {
+      const event = JSON.parse(raw);
+      const expTag = (event.tags || []).find(t => t[0] === 'exp');
+      if (!expTag) return false;
+      const exp = parseInt(expTag[1], 10);
+      if (exp <= Math.floor(Date.now() / 1000)) {
+        localStorage.removeItem(NWT_KEY);
+        return false;
+      }
+      window.location.href = '/';
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function loginWithNostr() {
+    if (!window.nostr) {
+      showError('No NIP-07 extension found. Please install one (e.g. Alby, nos2x).');
+      return;
+    }
+    setLoading(true);
+
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const exp = now + 7 * 24 * 60 * 60; // 1 week
+
+      const event = await window.nostr.signEvent({
+        kind: 27519,
+        created_at: now,
+        tags: [
+          ['aud', AUDIENCE],
+          ['exp', String(exp)],
+        ],
+        content: 'Login to Zapstore Dashboard using Nostr Web Tokens',
+      });
+
+      localStorage.setItem(NWT_KEY, JSON.stringify(event));
+      window.location.href = '/';
+    } catch (e) {
+      showError(e.message || 'Failed to sign event.');
+      setLoading(false);
+    }
+  }
+
+  // On page load try the cached token silently, no button interaction needed.
+  (async function() { await autoLogin(); })();
+</script>
+
+</body>
+</html>
+{{end}}

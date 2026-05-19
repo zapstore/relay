@@ -46,6 +46,11 @@
   </div>
 </main>
 
+<div id="auth-error" style="display:none">
+  <span id="auth-error-msg"></span>
+  <a href="/login">Sign in again</a>
+</div>
+
 
 
   <style>
@@ -135,9 +140,74 @@
     /* ── HTMX loading indicator ── */
     .htmx-indicator { opacity: 0; transition: opacity 0.2s; }
     .htmx-request .htmx-indicator { opacity: 1; }
+
+    /* ── Auth error banner ── */
+    #auth-error {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem 1.25rem;
+      background: rgba(239,68,68,0.12);
+      border: 1px solid rgba(239,68,68,0.4);
+      border-radius: 8px;
+      color: #f87171;
+      font-size: var(--text-normal);
+      white-space: nowrap;
+      z-index: 100;
+    }
+    #auth-error a {
+      color: var(--text);
+      font-weight: 600;
+      text-decoration: underline;
+    }
   </style>
 
 <script>
+  const NWT_KEY = 'zapstore_nwt';
+
+  function nwtHeader() {
+    const raw = localStorage.getItem(NWT_KEY);
+    if (!raw) return null;
+    // base64url without padding, as per the NWT spec
+    return 'Nostr ' + btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  // Guard: redirect to /login if there is no valid token in localStorage.
+  (function() {
+    const raw = localStorage.getItem(NWT_KEY);
+    if (!raw) { window.location.href = '/login'; return; }
+    try {
+      const event = JSON.parse(raw);
+      const expTag = (event.tags || []).find(t => t[0] === 'exp');
+      if (!expTag) { window.location.href = '/login'; return; }
+      if (parseInt(expTag[1], 10) <= Math.floor(Date.now() / 1000)) {
+        localStorage.removeItem(NWT_KEY);
+        window.location.href = '/login';
+      }
+    } catch (_) {
+      window.location.href = '/login';
+    }
+  })();
+
+  // Attach the Authorization header to every HTMX request.
+  document.addEventListener('htmx:configRequest', function(e) {
+    const h = nwtHeader();
+    if (h) e.detail.headers['Authorization'] = h;
+  });
+
+  // On 401, clear the stale token and show the server's error in a banner.
+  document.addEventListener('htmx:responseError', function(e) {
+    if (e.detail.xhr.status === 401) {
+      localStorage.removeItem(NWT_KEY);
+      document.getElementById('auth-error-msg').textContent = e.detail.xhr.responseText.trim();
+      document.getElementById('auth-error').style.display = 'flex';
+    }
+  });
+
   function setActive(el) {
     document.querySelectorAll('#tabs .tab').forEach(t => t.classList.remove('active'));
     el.classList.add('active');

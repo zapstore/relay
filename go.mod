@@ -1,6 +1,6 @@
 module github.com/zapstore/relay
 
-go 1.25
+go 1.25.5
 
 require (
 	github.com/caarlos0/env/v11 v11.4.0
@@ -11,6 +11,7 @@ require (
 	github.com/oschwald/maxminddb-golang/v2 v2.1.1
 	github.com/pippellia-btc/blossom v0.5.1
 	github.com/pippellia-btc/blossy v0.3.0
+	github.com/pippellia-btc/nwt v0.4.0
 	github.com/pippellia-btc/rate v0.2.1
 	github.com/pippellia-btc/rely/v2 v2.0.0-beta
 	github.com/vertex-lab/nostr-sqlite v0.7.0

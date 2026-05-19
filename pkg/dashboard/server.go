@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/pippellia-btc/nwt"
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
@@ -23,9 +24,12 @@ var templateFiles embed.FS
 //go:embed static
 var staticFiles embed.FS
 
-// Server serves the dashboard UI.
+// T serves the dashboard UI.
 type T struct {
-	template  *template.Template
+	template *template.Template
+	config   Config
+
+	auth      nwt.Validator
 	relay     relay.DB
 	blossom   blossom.DB
 	analytics analytics.DB
@@ -34,6 +38,7 @@ type T struct {
 
 // New parses the embedded templates and returns a ready-to-use Server.
 func New(
+	config Config,
 	relay relay.DB,
 	blossom blossom.DB,
 	analytics analytics.DB,
@@ -59,6 +64,8 @@ func New(
 	}
 	return &T{
 		template:  tmpl,
+		config:    config,
+		auth:      authValidator{config},
 		relay:     relay,
 		blossom:   blossom,
 		analytics: analytics,
@@ -66,16 +73,38 @@ func New(
 	}, nil
 }
 
+// requireAuth is middleware that validates the NWT on the Authorization header.
+// On failure it returns 401 with a plain-text error; the client JS handles the redirect.
+func (d *T) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token, err := nwt.Parse(r)
+		if err != nil {
+			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if err := d.auth.Validate(token); err != nil {
+			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // StartAndServe starts the dashboard HTTP server and blocks until ctx is cancelled.
 func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
+
+	// Public routes.
 	mux.Handle("GET /static/", http.FileServerFS(staticFiles))
+	mux.HandleFunc("GET /login", d.loginPage)
+
+	// Protected routes, every tab request carries the NWT header.
 	mux.HandleFunc("GET /{$}", d.index)
-	mux.HandleFunc("GET /tabs/apps", d.appsPage)
-	mux.HandleFunc("GET /tabs/apps/chart", d.appChartPage)
-	mux.HandleFunc("GET /tabs/relay", d.relayPage)
-	mux.HandleFunc("GET /tabs/blossom", d.blossomPage)
-	mux.HandleFunc("GET /tabs/defender", d.defenderPage)
+	mux.HandleFunc("GET /tabs/apps", d.requireAuth(d.appsPage))
+	mux.HandleFunc("GET /tabs/apps/chart", d.requireAuth(d.appChartPage))
+	mux.HandleFunc("GET /tabs/relay", d.requireAuth(d.relayPage))
+	mux.HandleFunc("GET /tabs/blossom", d.requireAuth(d.blossomPage))
+	mux.HandleFunc("GET /tabs/defender", d.requireAuth(d.defenderPage))
 
 	server := &http.Server{
 		Addr:              addr,
@@ -104,6 +133,17 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 
 func (d *T) index(w http.ResponseWriter, r *http.Request) {
 	if err := d.template.ExecuteTemplate(w, "layout", nil); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+type loginPageData struct {
+	Hostname string
+}
+
+func (d *T) loginPage(w http.ResponseWriter, r *http.Request) {
+	data := loginPageData{Hostname: d.config.Hostname}
+	if err := d.template.ExecuteTemplate(w, "login", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
