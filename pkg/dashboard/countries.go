@@ -24,7 +24,7 @@ func countryName(code string) string {
 
 var countryNames = map[string]string{
 	"AD": "Andorra",
-	"AE": "United Arab Emirates",
+	"AE": "Arab Emirates",
 	"AF": "Afghanistan",
 	"AG": "Antigua and Barbuda",
 	"AL": "Albania",
@@ -34,7 +34,7 @@ var countryNames = map[string]string{
 	"AT": "Austria",
 	"AU": "Australia",
 	"AZ": "Azerbaijan",
-	"BA": "Bosnia and Herzegovina",
+	"BA": "Bosnia Herz.",
 	"BB": "Barbados",
 	"BD": "Bangladesh",
 	"BE": "Belgium",

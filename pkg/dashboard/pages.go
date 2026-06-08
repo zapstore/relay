@@ -209,12 +209,17 @@ type AppRow struct {
 const defaultAppID = "dev.zapstore.app"
 
 type appsPageData struct {
-	Cards     []CardData
-	Sources   []SourceRow
+	Cards          []CardData
+	Sources        []SourceRow
+	CountryRanking countryRanking
+	Ranking        appRanking
+	AppID          string
+	Chart          ChartData
+}
+
+type countryRanking struct {
 	Countries []CountryRow
-	Ranking   appRanking
-	AppID     string
-	Chart     ChartData
+	SortBy    string
 }
 
 func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +242,7 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	countries, err := d.countryRows(ctx, from, to)
+	countries, err := d.topCountriesImpressions(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -254,12 +259,12 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := appsPageData{
-		Cards:     cards,
-		Sources:   sources,
-		Countries: countries,
-		Ranking:   appRanking{Apps: apps, SortBy: "impressions"},
-		AppID:     defaultAppID,
-		Chart:     chart,
+		Cards:          cards,
+		Sources:        sources,
+		CountryRanking: countryRanking{Countries: countries, SortBy: "impressions"},
+		Ranking:        appRanking{Apps: apps, SortBy: "impressions"},
+		AppID:          defaultAppID,
+		Chart:          chart,
 	}
 	if err := d.template.ExecuteTemplate(w, "apps", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -352,6 +357,72 @@ func (d *T) sourceRows(ctx context.Context, from, to string) ([]SourceRow, error
 	return rows, nil
 }
 
+func (d *T) countryRankingEndpoint(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	to := time.Now().Format("2006-01-02")
+	from := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+
+	sortBy := "impressions"
+	if v := r.URL.Query().Get("sort_by"); v != "" {
+		sortBy = v
+	}
+
+	var countries []CountryRow
+	var err error
+
+	switch sortBy {
+	case "downloads":
+		countries, err = d.topCountriesDownloads(ctx, from, to)
+	case "impressions":
+		countries, err = d.topCountriesImpressions(ctx, from, to)
+	default:
+		http.Error(w, "invalid sort_by", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := countryRanking{Countries: countries, SortBy: sortBy}
+	if err := d.template.ExecuteTemplate(w, "countries-ranking", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (d *T) topCountriesImpressions(ctx context.Context, from, to string) ([]CountryRow, error) {
+	countries, err := d.countryRows(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(countries, func(i, j int) bool {
+		return countries[i].Impressions > countries[j].Impressions
+	})
+	if len(countries) > 20 {
+		countries = countries[:20]
+	}
+	return countries, nil
+}
+
+func (d *T) topCountriesDownloads(ctx context.Context, from, to string) ([]CountryRow, error) {
+	countries, err := d.countryRows(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(countries, func(i, j int) bool {
+		return countries[i].Downloads > countries[j].Downloads
+	})
+	if len(countries) > 20 {
+		countries = countries[:20]
+	}
+	return countries, nil
+}
+
 func (d *T) countryRows(ctx context.Context, from, to string) ([]CountryRow, error) {
 	imprByCountry, err := d.analytics.QueryImpressions(ctx,
 		store.ImpressionFilter{From: from, To: to, GroupBy: []string{"country_code"}})
@@ -383,12 +454,6 @@ func (d *T) countryRows(ctx context.Context, from, to string) ([]CountryRow, err
 	countries := make([]CountryRow, 0, len(countryMap))
 	for _, v := range countryMap {
 		countries = append(countries, *v)
-	}
-	sort.Slice(countries, func(i, j int) bool {
-		return countries[i].Impressions > countries[j].Impressions
-	})
-	if len(countries) > 20 {
-		countries = countries[:20]
 	}
 	return countries, nil
 }

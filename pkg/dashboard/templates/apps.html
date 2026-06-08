@@ -37,31 +37,9 @@
         {{end}}
       </tbody>
     </table>
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Country</th>
-          <th>Impressions</th>
-          <th>Downloads</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range $i, $c := .Countries}}
-        <tr>
-          <td>
-            <div class="cell">
-                <span>{{$c.Flag}}</span>
-                <span>{{$c.Name}}</span>
-              </div>
-          </td>
-          <td>{{$c.Impressions}}</td>
-          <td>{{$c.Downloads}}</td>
-        </tr>
-        {{else}}
-        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
-        {{end}}
-      </tbody>
-    </table>
+    <div id="countries-ranking-wrap">
+      {{template "countries-ranking" .CountryRanking}}
+    </div>
   </div>
   <div>
     <div id="apps-ranking-wrap">
@@ -127,6 +105,29 @@
   }
   .app-input:focus { outline: none; border-color: var(--accent); }
 </style>
+{{end}}
+
+{{define "countries-ranking"}}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Country</th>
+      <th hx-get="/tabs/apps/countries?sort_by=impressions" hx-target="#countries-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "impressions"}};color:var(--text){{end}}">Impressions</th>
+      <th hx-get="/tabs/apps/countries?sort_by=downloads" hx-target="#countries-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "downloads"}};color:var(--text){{end}}">Downloads</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range $i, $c := .Countries}}
+    <tr>
+      <td><div class="cell"><span>{{$c.Flag}}</span><span>{{$c.Name}}</span></div></td>
+      <td>{{$c.Impressions}}</td>
+      <td>{{$c.Downloads}}</td>
+    </tr>
+    {{else}}
+    <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
+    {{end}}
+  </tbody>
+</table>
 {{end}}
 
 {{define "apps-ranking"}}
