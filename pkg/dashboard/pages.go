@@ -1,11 +1,13 @@
 package dashboard
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -446,8 +448,15 @@ func (d *T) topAppsImpressions(ctx context.Context, from, to string) ([]AppRow, 
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(apps, func(i, j int) bool {
-		return apps[i].Impressions > apps[j].Impressions
+	slices.SortFunc(apps, func(a, b AppRow) int {
+		if a.Impressions > b.Impressions {
+			return -1
+		}
+		if a.Impressions < b.Impressions {
+			return 1
+		}
+		// Sort by app ID to break ties
+		return cmp.Compare(a.AppID, b.AppID)
 	})
 	if len(apps) > 25 {
 		apps = apps[:25]
@@ -461,8 +470,15 @@ func (d *T) topAppsDownloads(ctx context.Context, from, to string) ([]AppRow, er
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(apps, func(i, j int) bool {
-		return apps[i].Downloads > apps[j].Downloads
+	slices.SortFunc(apps, func(a, b AppRow) int {
+		if a.Downloads > b.Downloads {
+			return -1
+		}
+		if a.Downloads < b.Downloads {
+			return 1
+		}
+		// Sort by app ID to break ties
+		return cmp.Compare(a.AppID, b.AppID)
 	})
 	if len(apps) > 25 {
 		apps = apps[:25]
