@@ -17,7 +17,7 @@
 
 <div class="cols">
   <div>
-    <table class="countries-table" style="margin-bottom:2rem">
+    <table class="table" style="margin-bottom:2rem">
       <thead>
         <tr>
           <th>Source</th>
@@ -28,7 +28,7 @@
       <tbody>
         {{range .Sources}}
         <tr>
-          <td><div class="country-cell"><span>{{.Emoji}}</span><span>{{.Source}}</span></div></td>
+          <td><div class="cell"><span>{{.Emoji}}</span><span>{{.Source}}</span></div></td>
           <td style="text-align:right;color:var(--text-muted)">{{.Impressions}}</td>
           <td style="text-align:right;color:var(--text-muted)">{{.Downloads}}</td>
         </tr>
@@ -37,7 +37,7 @@
         {{end}}
       </tbody>
     </table>
-    <table class="countries-table">
+    <table class="table">
       <thead>
         <tr>
           <th>Country</th>
@@ -49,7 +49,7 @@
         {{range $i, $c := .Countries}}
         <tr>
           <td>
-            <div class="country-cell">
+            <div class="cell">
                 <span>{{$c.Flag}}</span>
                 <span>{{$c.Name}}</span>
               </div>
@@ -64,33 +64,11 @@
     </table>
   </div>
   <div>
-    <table class="countries-table">
-      <thead>
-        <tr>
-          <th>App</th>
-          <th>Impressions</th>
-          <th>Downloads</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range $i, $a := .Apps}}
-        <tr>
-          <td>
-            <div class="country-cell">
-                <span>{{$a.AppID}}</span>
-              </div>
-          </td>
-          <td>{{$a.Impressions}}</td>
-          <td>{{$a.Downloads}}</td>
-        </tr>
-        {{else}}
-        <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
-        {{end}}
-      </tbody>
-    </table>
+    <div id="apps-ranking-wrap">
+      {{template "apps-ranking" .Ranking}}
+    </div>
   </div>
 </div>
-
 <style>
   .cols {
     display: grid;
@@ -101,12 +79,12 @@
   .cols > div {
     min-width: 0;
   }
-  .countries-table {
+  .table {
     width: 100%;
     border-collapse: collapse;
     font-size: var(--text-normal);
   }
-  .countries-table thead th {
+  .table thead th {
     text-align: left;
     padding: 0.5rem 0.75rem;
     font-weight: 600;
@@ -115,22 +93,22 @@
     letter-spacing: 0.05em;
     border-bottom: 1px solid var(--border);
   }
-  .countries-table thead th:not(:first-child) { text-align: right; }
-  .countries-table tbody tr {
+  .table thead th:not(:first-child) { text-align: right; }
+  .table tbody tr {
     border-bottom: 1px solid var(--grid);
     transition: background 0.1s;
   }
-  .countries-table tbody tr:last-child { border-bottom: none; }
-  .countries-table tbody tr:hover { background: var(--surface); }
-  .countries-table tbody td {
+  .table tbody tr:last-child { border-bottom: none; }
+  .table tbody tr:hover { background: var(--surface); }
+  .table tbody td {
     padding: 0.6rem 0.75rem;
     color: var(--text);
   }
-  .countries-table tbody td:not(:first-child) { text-align: right; color: var(--text-muted); }
-  .country-cell { display: flex; align-items: center; gap: 0.6rem; }
-  .countries-table tbody { counter-reset: rownum; }
-  .countries-table tbody tr { counter-increment: rownum; }
-  .country-cell::before {
+  .table tbody td:not(:first-child) { text-align: right; color: var(--text-muted); }
+  .cell { display: flex; align-items: center; gap: 0.6rem; }
+  .table tbody { counter-reset: rownum; }
+  .table tbody tr { counter-increment: rownum; }
+  .cell::before {
     content: counter(rownum);
     color: var(--text-muted);
     font-size: var(--text-normal);
@@ -149,4 +127,27 @@
   }
   .app-input:focus { outline: none; border-color: var(--accent); }
 </style>
+{{end}}
+
+{{define "apps-ranking"}}
+<table class="table">
+  <thead>
+    <tr>
+      <th>App</th>
+      <th hx-get="/tabs/apps/ranking?sort_by=impressions" hx-target="#apps-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "impressions"}};color:var(--text){{end}}">Impressions</th>
+      <th hx-get="/tabs/apps/ranking?sort_by=downloads" hx-target="#apps-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "downloads"}};color:var(--text){{end}}">Downloads</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range $i, $a := .Apps}}
+    <tr>
+      <td><div class="cell"><span>{{$a.AppID}}</span></div></td>
+      <td>{{$a.Impressions}}</td>
+      <td>{{$a.Downloads}}</td>
+    </tr>
+    {{else}}
+    <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
+    {{end}}
+  </tbody>
+</table>
 {{end}}

@@ -98,13 +98,16 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /{$}", d.rateLimit(d.index))
 	mux.HandleFunc("GET /login", d.rateLimit(d.loginPage))
 
-	mux.HandleFunc("POST /defender/policies", d.rateLimit(d.createPolicy))
-	mux.HandleFunc("DELETE /defender/policies", d.rateLimit(d.deletePolicy))
 	mux.HandleFunc("GET /tabs/apps", d.rateLimit(d.appsPage))
-	mux.HandleFunc("GET /tabs/apps/chart", d.rateLimit(d.appChartPage))
+	mux.HandleFunc("GET /tabs/apps/chart", d.rateLimit(d.appChartEndpoint))
+	mux.HandleFunc("GET /tabs/apps/ranking", d.rateLimit(d.appRankingEndpoint))
+
 	mux.HandleFunc("GET /tabs/relay", d.rateLimit(d.relayPage))
 	mux.HandleFunc("GET /tabs/blossom", d.rateLimit(d.blossomPage))
+
 	mux.HandleFunc("GET /tabs/defender", d.rateLimit(d.defenderPage))
+	mux.HandleFunc("POST /defender/policies", d.rateLimit(d.createPolicy))
+	mux.HandleFunc("DELETE /defender/policies", d.rateLimit(d.deletePolicy))
 
 	server := &http.Server{
 		Addr:              addr,

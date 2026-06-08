@@ -210,7 +210,7 @@ type appsPageData struct {
 	Cards     []CardData
 	Sources   []SourceRow
 	Countries []CountryRow
-	Apps      []AppRow
+	Ranking   appRanking
 	AppID     string
 	Chart     ChartData
 }
@@ -240,7 +240,7 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	apps, err := d.appRows(ctx, from, to)
+	apps, err := d.topAppsImpressions(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -255,7 +255,7 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 		Cards:     cards,
 		Sources:   sources,
 		Countries: countries,
-		Apps:      apps,
+		Ranking:   appRanking{Apps: apps, SortBy: "impressions"},
 		AppID:     defaultAppID,
 		Chart:     chart,
 	}
@@ -263,8 +263,7 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
-
-func (d *T) appChartPage(w http.ResponseWriter, r *http.Request) {
+func (d *T) appChartEndpoint(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
 		return
 	}
@@ -392,6 +391,85 @@ func (d *T) countryRows(ctx context.Context, from, to string) ([]CountryRow, err
 	return countries, nil
 }
 
+// appRanking holds the data passed to the apps-ranking template partial.
+type appRanking struct {
+	Apps   []AppRow
+	SortBy string
+}
+
+func (d *T) appRankingEndpoint(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	to := time.Now().Format("2006-01-02")
+	from := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+
+	sortBy := "impressions"
+	if v := r.URL.Query().Get("sort_by"); v != "" {
+		sortBy = v
+	}
+
+	var apps []AppRow
+	var err error
+
+	switch sortBy {
+	case "downloads":
+		apps, err = d.topAppsDownloads(ctx, from, to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	case "impressions":
+		apps, err = d.topAppsImpressions(ctx, from, to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	default:
+		http.Error(w, "invalid sort_by", http.StatusBadRequest)
+		return
+	}
+
+	data := appRanking{Apps: apps, SortBy: sortBy}
+	if err := d.template.ExecuteTemplate(w, "apps-ranking", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// topAppsImpressions returns the top 25 apps by impressions.
+func (d *T) topAppsImpressions(ctx context.Context, from, to string) ([]AppRow, error) {
+	apps, err := d.appRows(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(apps, func(i, j int) bool {
+		return apps[i].Impressions > apps[j].Impressions
+	})
+	if len(apps) > 25 {
+		apps = apps[:25]
+	}
+	return apps, nil
+}
+
+// topAppsDownloads returns the top 25 apps by downloads.
+func (d *T) topAppsDownloads(ctx context.Context, from, to string) ([]AppRow, error) {
+	apps, err := d.appRows(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(apps, func(i, j int) bool {
+		return apps[i].Downloads > apps[j].Downloads
+	})
+	if len(apps) > 25 {
+		apps = apps[:25]
+	}
+	return apps, nil
+}
+
 // appRows returns the app rows for the dashboard, showing impressions and downloads by app.
 func (d *T) appRows(ctx context.Context, from, to string) ([]AppRow, error) {
 	imprByApp, err := d.analytics.QueryImpressions(ctx,
@@ -424,12 +502,6 @@ func (d *T) appRows(ctx context.Context, from, to string) ([]AppRow, error) {
 	apps := make([]AppRow, 0, len(appMap))
 	for _, v := range appMap {
 		apps = append(apps, *v)
-	}
-	sort.Slice(apps, func(i, j int) bool {
-		return apps[i].Impressions > apps[j].Impressions
-	})
-	if len(apps) > 25 {
-		apps = apps[:25]
 	}
 	return apps, nil
 }
