@@ -203,7 +203,7 @@ func (s *T) QueryImpressions(ctx context.Context, f ImpressionFilter) ([]Impress
 func queryImpressionsSQL(f ImpressionFilter) (string, []any) {
 	columns := make([]string, 0, len(f.GroupBy)+1)
 	columns = append(columns, f.GroupBy...)
-	columns = append(columns, "SUM(count) AS count")
+	columns = append(columns, "COALESCE(SUM(count), 0) AS count")
 	query := "SELECT " + strings.Join(columns, ", ") + " FROM app_impressions"
 
 	var args []any

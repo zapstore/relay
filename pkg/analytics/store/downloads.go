@@ -196,7 +196,7 @@ func (s *T) QueryDownloads(ctx context.Context, f DownloadFilter) ([]DownloadCou
 func queryDownloadsSQL(f DownloadFilter) (string, []any) {
 	columns := make([]string, 0, len(f.GroupBy)+1)
 	columns = append(columns, f.GroupBy...)
-	columns = append(columns, "SUM(count) AS count")
+	columns = append(columns, "COALESCE(SUM(count), 0) AS count")
 	query := "SELECT " + strings.Join(columns, ", ") + " FROM app_downloads"
 
 	var conds []string
