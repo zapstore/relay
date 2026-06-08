@@ -212,7 +212,7 @@ type appsPageData struct {
 	Cards          []CardData
 	SourceRanking  sourceRanking
 	CountryRanking countryRanking
-	Ranking        appRanking
+	AppRanking     appRanking
 	AppID          string
 	Chart          ChartData
 }
@@ -242,17 +242,17 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sources, err := d.topSourcesImpressions(ctx, from, to)
+	sources, err := d.topSourcesDownloads(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	countries, err := d.topCountriesImpressions(ctx, from, to)
+	countries, err := d.topCountriesDownloads(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	apps, err := d.topAppsImpressions(ctx, from, to)
+	apps, err := d.topAppsDownloads(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -265,9 +265,9 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 
 	data := appsPageData{
 		Cards:          cards,
-		SourceRanking:  sourceRanking{Sources: sources, SortBy: "impressions"},
-		CountryRanking: countryRanking{Countries: countries, SortBy: "impressions"},
-		Ranking:        appRanking{Apps: apps, SortBy: "impressions"},
+		SourceRanking:  sourceRanking{Sources: sources, SortBy: "downloads"},
+		CountryRanking: countryRanking{Countries: countries, SortBy: "downloads"},
+		AppRanking:     appRanking{Apps: apps, SortBy: "downloads"},
 		AppID:          defaultAppID,
 		Chart:          chart,
 	}
