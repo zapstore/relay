@@ -210,11 +210,16 @@ const defaultAppID = "dev.zapstore.app"
 
 type appsPageData struct {
 	Cards          []CardData
-	Sources        []SourceRow
+	SourceRanking  sourceRanking
 	CountryRanking countryRanking
 	Ranking        appRanking
 	AppID          string
 	Chart          ChartData
+}
+
+type sourceRanking struct {
+	Sources []SourceRow
+	SortBy  string
 }
 
 type countryRanking struct {
@@ -237,7 +242,7 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sources, err := d.sourceRows(ctx, from, to)
+	sources, err := d.topSourcesImpressions(ctx, from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -260,7 +265,7 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 
 	data := appsPageData{
 		Cards:          cards,
-		Sources:        sources,
+		SourceRanking:  sourceRanking{Sources: sources, SortBy: "impressions"},
 		CountryRanking: countryRanking{Countries: countries, SortBy: "impressions"},
 		Ranking:        appRanking{Apps: apps, SortBy: "impressions"},
 		AppID:          defaultAppID,
@@ -351,10 +356,67 @@ func (d *T) sourceRows(ctx context.Context, from, to string) ([]SourceRow, error
 	for _, v := range sourceMap {
 		rows = append(rows, *v)
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].Impressions > rows[j].Impressions
-	})
 	return rows, nil
+}
+
+func (d *T) sourceRankingEndpoint(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	to := time.Now().Format("2006-01-02")
+	from := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+
+	sortBy := "impressions"
+	if v := r.URL.Query().Get("sort_by"); v != "" {
+		sortBy = v
+	}
+
+	var sources []SourceRow
+	var err error
+
+	switch sortBy {
+	case "downloads":
+		sources, err = d.topSourcesDownloads(ctx, from, to)
+	case "impressions":
+		sources, err = d.topSourcesImpressions(ctx, from, to)
+	default:
+		http.Error(w, "invalid sort_by", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := sourceRanking{Sources: sources, SortBy: sortBy}
+	if err := d.template.ExecuteTemplate(w, "sources-ranking", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (d *T) topSourcesImpressions(ctx context.Context, from, to string) ([]SourceRow, error) {
+	sources, err := d.sourceRows(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i].Impressions > sources[j].Impressions
+	})
+	return sources, nil
+}
+
+func (d *T) topSourcesDownloads(ctx context.Context, from, to string) ([]SourceRow, error) {
+	sources, err := d.sourceRows(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i].Downloads > sources[j].Downloads
+	})
+	return sources, nil
 }
 
 func (d *T) countryRankingEndpoint(w http.ResponseWriter, r *http.Request) {

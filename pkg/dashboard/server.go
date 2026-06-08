@@ -102,6 +102,7 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /tabs/apps/chart", d.rateLimit(d.appChartEndpoint))
 	mux.HandleFunc("GET /tabs/apps/ranking", d.rateLimit(d.appRankingEndpoint))
 	mux.HandleFunc("GET /tabs/apps/countries", d.rateLimit(d.countryRankingEndpoint))
+	mux.HandleFunc("GET /tabs/apps/sources", d.rateLimit(d.sourceRankingEndpoint))
 
 	mux.HandleFunc("GET /tabs/relay", d.rateLimit(d.relayPage))
 	mux.HandleFunc("GET /tabs/blossom", d.rateLimit(d.blossomPage))
