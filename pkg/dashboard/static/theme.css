@@ -1,29 +1,13 @@
 @font-face {
-    font-family: "Ubuntu";
+    font-family: "Inter";
     font-style: normal;
-    font-weight: 400;
+    font-weight: 100 900;
     font-display: swap;
-    src: url("/static/fonts/ubuntu-400.woff2") format("woff2");
-}
-
-@font-face {
-    font-family: "Ubuntu";
-    font-style: normal;
-    font-weight: 500;
-    font-display: swap;
-    src: url("/static/fonts/ubuntu-500.woff2") format("woff2");
-}
-
-@font-face {
-    font-family: "Ubuntu";
-    font-style: normal;
-    font-weight: 700;
-    font-display: swap;
-    src: url("/static/fonts/ubuntu-700.woff2") format("woff2");
+    src: url("/static/fonts/inter.woff2") format("woff2");
 }
 
 :root {
-    --font: "Ubuntu", sans-serif;
+    --font: "Inter", sans-serif;
 
     --background: #080808;
     --surface: #0f0f0f;
