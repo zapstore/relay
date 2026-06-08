@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -402,8 +401,11 @@ func (d *T) topSourcesImpressions(ctx context.Context, from, to string) ([]Sourc
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(sources, func(i, j int) bool {
-		return sources[i].Impressions > sources[j].Impressions
+	slices.SortFunc(sources, func(a, b SourceRow) int {
+		if a.Impressions != b.Impressions {
+			return cmp.Compare(b.Impressions, a.Impressions)
+		}
+		return cmp.Compare(a.Source, b.Source)
 	})
 	return sources, nil
 }
@@ -413,8 +415,11 @@ func (d *T) topSourcesDownloads(ctx context.Context, from, to string) ([]SourceR
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(sources, func(i, j int) bool {
-		return sources[i].Downloads > sources[j].Downloads
+	slices.SortFunc(sources, func(a, b SourceRow) int {
+		if a.Downloads != b.Downloads {
+			return cmp.Compare(b.Downloads, a.Downloads)
+		}
+		return cmp.Compare(a.Source, b.Source)
 	})
 	return sources, nil
 }
@@ -462,8 +467,11 @@ func (d *T) topCountriesImpressions(ctx context.Context, from, to string) ([]Cou
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(countries, func(i, j int) bool {
-		return countries[i].Impressions > countries[j].Impressions
+	slices.SortFunc(countries, func(a, b CountryRow) int {
+		if a.Impressions != b.Impressions {
+			return cmp.Compare(b.Impressions, a.Impressions)
+		}
+		return cmp.Compare(a.Name, b.Name)
 	})
 	if len(countries) > 20 {
 		countries = countries[:20]
@@ -476,8 +484,11 @@ func (d *T) topCountriesDownloads(ctx context.Context, from, to string) ([]Count
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(countries, func(i, j int) bool {
-		return countries[i].Downloads > countries[j].Downloads
+	slices.SortFunc(countries, func(a, b CountryRow) int {
+		if a.Downloads != b.Downloads {
+			return cmp.Compare(b.Downloads, a.Downloads)
+		}
+		return cmp.Compare(a.Name, b.Name)
 	})
 	if len(countries) > 20 {
 		countries = countries[:20]
@@ -576,13 +587,9 @@ func (d *T) topAppsImpressions(ctx context.Context, from, to string) ([]AppRow, 
 		return nil, err
 	}
 	slices.SortFunc(apps, func(a, b AppRow) int {
-		if a.Impressions > b.Impressions {
-			return -1
+		if a.Impressions != b.Impressions {
+			return cmp.Compare(b.Impressions, a.Impressions)
 		}
-		if a.Impressions < b.Impressions {
-			return 1
-		}
-		// Sort by app ID to break ties
 		return cmp.Compare(a.AppID, b.AppID)
 	})
 	if len(apps) > 25 {
@@ -598,13 +605,9 @@ func (d *T) topAppsDownloads(ctx context.Context, from, to string) ([]AppRow, er
 		return nil, err
 	}
 	slices.SortFunc(apps, func(a, b AppRow) int {
-		if a.Downloads > b.Downloads {
-			return -1
+		if a.Downloads != b.Downloads {
+			return cmp.Compare(b.Downloads, a.Downloads)
 		}
-		if a.Downloads < b.Downloads {
-			return 1
-		}
-		// Sort by app ID to break ties
 		return cmp.Compare(a.AppID, b.AppID)
 	})
 	if len(apps) > 25 {
