@@ -153,7 +153,6 @@ func Setup(
 // StartAndServe starts the relay, listens to the provided address and handles http requests.
 func (r *T) StartAndServe(ctx context.Context, addr string) error {
 	go r.runReconcile(ctx)
-	go r.runStater(ctx)
 	return r.server.StartAndServe(ctx, addr)
 }
 
@@ -181,25 +180,6 @@ func (r *T) ResolveAssetURL(ctx context.Context, hash blossom.Hash) (string, err
 	}
 	url, _ := events.Find(found[0].Tags, "url")
 	return url, nil
-}
-
-// TODO: this logs stats. Remove when done debugging
-func (r *T) runStater(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case <-ticker.C:
-			clients := r.server.Clients()
-			subs := r.server.Subscriptions()
-			filters := r.server.Filters()
-			queueLoad := r.server.QueueLoad()
-			slog.Debug("stats report", "clients", clients, "subs", subs, "filters", filters, "queue_load", queueLoad)
-		}
-	}
 }
 
 func (r *T) runReconcile(ctx context.Context) {
