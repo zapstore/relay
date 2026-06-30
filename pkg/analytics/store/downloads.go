@@ -113,6 +113,42 @@ func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 	return nil
 }
 
+// QueryDownloadsByAppIDs returns total download counts for each app ID, in the same order.
+// App IDs with no recorded downloads return 0.
+func (s *T) QueryDownloadsByAppIDs(ctx context.Context, appIDs []string) ([]int, error) {
+	if len(appIDs) == 0 {
+		return nil, nil
+	}
+
+	query := `SELECT app_id, COALESCE(SUM(count), 0) FROM app_downloads
+		WHERE app_id ` + inClause(len(appIDs)) + ` GROUP BY app_id`
+	args := make([]any, 0, len(appIDs))
+	for _, id := range appIDs {
+		args = append(args, id)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query downloads by app IDs: %w", err)
+	}
+	defer rows.Close()
+
+	index := make(map[string]int, len(appIDs))
+	for i, id := range appIDs {
+		index[id] = i
+	}
+	result := make([]int, len(appIDs))
+	for rows.Next() {
+		var appID string
+		var count int
+		if err := rows.Scan(&appID, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		result[index[appID]] = count
+	}
+	return result, rows.Err()
+}
+
 // DownloadFilter defines query parameters for QueryDownloads.
 type DownloadFilter struct {
 	Hash      string       // restricts to a specific blob hash

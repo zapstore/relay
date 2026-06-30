@@ -71,3 +71,14 @@ func migrate(db *sql.DB) error {
 	}
 	return nil
 }
+
+// inClause returns an SQL IN clause for the given number of placeholders, with the first placeholder repeated n times.
+func inClause(n int) string {
+	if n <= 0 {
+		panic("analytics.store.inClause: n must be positive")
+	}
+	if n == 1 {
+		return "= ?"
+	}
+	return "IN (" + strings.Repeat("?,", n-1) + "?)"
+}

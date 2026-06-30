@@ -334,6 +334,59 @@ func TestQueryDownloads(t *testing.T) {
 	})
 }
 
+// --- QueryDownloadsByAppIDs ---
+
+func TestQueryDownloadsByAppIDs(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	h1 := blossom.ComputeHash([]byte("file1"))
+	h2 := blossom.ComputeHash([]byte("file2"))
+	seed := []DownloadCount{
+		{Download{Hash: h1, AppID: "com.example.app1", Day: "2024-01-01", Source: SourceApp, Type: Install, CountryCode: "US"}, 10},
+		{Download{Hash: h1, AppID: "com.example.app1", Day: "2024-01-02", Source: SourceApp, Type: Install, CountryCode: "US"}, 5},
+		{Download{Hash: h2, AppID: "com.example.app2", Day: "2024-01-01", Source: SourceApp, Type: Install, CountryCode: "US"}, 3},
+	}
+	if err := s.SaveDownloads(ctx, seed); err != nil {
+		t.Fatalf("SaveDownloads: %v", err)
+	}
+
+	t.Run("counts in input order", func(t *testing.T) {
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app2", "com.example.app1"})
+		if err != nil {
+			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
+		}
+		want := []int{3, 15}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("unknown app ID returns 0", func(t *testing.T) {
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app1", "com.example.unknown"})
+		if err != nil {
+			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
+		}
+		want := []int{15, 0}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("empty input returns empty slice", func(t *testing.T) {
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{})
+		if err != nil {
+			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("expected empty slice, got %v", got)
+		}
+	})
+}
+
 // --- Helpers ---
 
 func allDownloads(db *sql.DB) ([]DownloadCount, error) {
