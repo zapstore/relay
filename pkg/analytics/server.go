@@ -56,6 +56,7 @@ func (e *Engine) StartAndServe(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/app/impressions", e.appImpressions)
 	mux.HandleFunc("GET /v1/app/downloads", e.appDownloads)
+	mux.HandleFunc("POST /v1/app/downloads", e.appBatchDownload)
 	mux.HandleFunc("GET /v1/metrics/relay", e.relayMetrics)
 	mux.HandleFunc("GET /v1/metrics/blossom", e.blossomMetrics)
 
@@ -133,6 +134,34 @@ func (e *Engine) appImpressions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, resp)
+}
+
+// appBatchDownload serves POST /v1/app/downloads
+//
+// Request body: {"app_ids": ["com.example.app1", ...]}
+// Response:     {"com.example.app1": 42, ...} — count per app ID, 0 if no downloads
+func (e *Engine) appBatchDownload(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AppIDs []string `json:"app_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if len(body.AppIDs) == 0 {
+		http.Error(w, "app_ids must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	counts, err := e.store.QueryDownloadsByAppIDs(ctx, body.AppIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, counts)
 }
 
 // appDownloads serves GET /v1/app/downloads
