@@ -29,9 +29,6 @@ func New(path string) (*T, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("failed to apply base schema: %w", err)
 	}
-	if err := migrate(db); err != nil {
-		return nil, fmt.Errorf("failed to migrate: %w", err)
-	}
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
 	}
@@ -55,21 +52,6 @@ func (s *T) Close() error {
 // Path returns the path to the SQLite database file.
 func (s *T) Path() string {
 	return s.path
-}
-
-func migrate(db *sql.DB) error {
-	for _, m := range []struct{ stmt, desc string }{
-		{`ALTER TABLE app_downloads ADD COLUMN type TEXT NOT NULL DEFAULT 'unknown'`, "add type"},
-		{`ALTER TABLE app_downloads ADD COLUMN app_id TEXT NOT NULL DEFAULT ''`, "add app_id"},
-		{`ALTER TABLE app_downloads ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`, "add app_version"},
-		{`ALTER TABLE app_downloads ADD COLUMN app_pubkey TEXT NOT NULL DEFAULT ''`, "add app_pubkey"},
-		{`ALTER TABLE app_impressions ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`, "add impressions app_version"},
-	} {
-		if _, err := db.Exec(m.stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-			return fmt.Errorf("%s: %w", m.desc, err)
-		}
-	}
-	return nil
 }
 
 // inClause returns an SQL IN clause for the given number of placeholders, with the first placeholder repeated n times.
