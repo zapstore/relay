@@ -354,12 +354,12 @@ func TestQueryDownloadsByAppIDs(t *testing.T) {
 		t.Fatalf("SaveDownloads: %v", err)
 	}
 
-	t.Run("counts in input order", func(t *testing.T) {
-		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app2", "com.example.app1"})
+	t.Run("returns counts keyed by app ID", func(t *testing.T) {
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app1", "com.example.app2"})
 		if err != nil {
 			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
 		}
-		want := []int{3, 15}
+		want := map[string]int{"com.example.app1": 15, "com.example.app2": 3}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}
@@ -370,19 +370,19 @@ func TestQueryDownloadsByAppIDs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
 		}
-		want := []int{15, 0}
+		want := map[string]int{"com.example.app1": 15, "com.example.unknown": 0}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 	})
 
-	t.Run("empty input returns empty slice", func(t *testing.T) {
+	t.Run("empty input returns empty map", func(t *testing.T) {
 		got, err := s.QueryDownloadsByAppIDs(ctx, []string{})
 		if err != nil {
 			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
 		}
 		if len(got) != 0 {
-			t.Errorf("expected empty slice, got %v", got)
+			t.Errorf("expected empty map, got %v", got)
 		}
 	})
 }

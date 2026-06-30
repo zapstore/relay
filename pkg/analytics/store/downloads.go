@@ -113,11 +113,15 @@ func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 	return nil
 }
 
-// QueryDownloadsByAppIDs returns total download counts for each app ID, in the same order.
+// QueryDownloadsByAppIDs returns total download counts keyed by app ID.
 // App IDs with no recorded downloads return 0.
-func (s *T) QueryDownloadsByAppIDs(ctx context.Context, appIDs []string) ([]int, error) {
+func (s *T) QueryDownloadsByAppIDs(ctx context.Context, appIDs []string) (map[string]int, error) {
+	result := make(map[string]int, len(appIDs))
+	for _, id := range appIDs {
+		result[id] = 0
+	}
 	if len(appIDs) == 0 {
-		return nil, nil
+		return result, nil
 	}
 
 	query := `SELECT app_id, COALESCE(SUM(count), 0) FROM app_downloads
@@ -133,18 +137,13 @@ func (s *T) QueryDownloadsByAppIDs(ctx context.Context, appIDs []string) ([]int,
 	}
 	defer rows.Close()
 
-	index := make(map[string]int, len(appIDs))
-	for i, id := range appIDs {
-		index[id] = i
-	}
-	result := make([]int, len(appIDs))
 	for rows.Next() {
 		var appID string
 		var count int
 		if err := rows.Scan(&appID, &count); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
-		result[index[appID]] = count
+		result[appID] = count
 	}
 	return result, rows.Err()
 }
