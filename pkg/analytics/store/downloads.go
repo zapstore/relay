@@ -114,22 +114,29 @@ func (s *T) SaveDownloads(ctx context.Context, batch []DownloadCount) error {
 }
 
 // QueryDownloadsByAppIDs returns total download counts keyed by app ID.
-// App IDs with no recorded downloads return 0.
-func (s *T) QueryDownloadsByAppIDs(ctx context.Context, appIDs []string) (map[string]int, error) {
-	result := make(map[string]int, len(appIDs))
-	for _, id := range appIDs {
-		result[id] = 0
-	}
+// App IDs with no recorded downloads are omitted from the result.
+// from and to are optional YYYY-MM-DD date bounds (inclusive).
+func (s *T) QueryDownloadsByAppIDs(ctx context.Context, appIDs []string, from, to string) (map[string]int, error) {
 	if len(appIDs) == 0 {
-		return result, nil
+		return map[string]int{}, nil
 	}
 
-	query := `SELECT app_id, COALESCE(SUM(count), 0) FROM app_downloads
-		WHERE app_id ` + inClause(len(appIDs)) + ` GROUP BY app_id`
-	args := make([]any, 0, len(appIDs))
+	conds := []string{"app_id " + inClause(len(appIDs))}
+	args := make([]any, 0, len(appIDs)+2)
 	for _, id := range appIDs {
 		args = append(args, id)
 	}
+	if from != "" {
+		conds = append(conds, "day >= ?")
+		args = append(args, from)
+	}
+	if to != "" {
+		conds = append(conds, "day <= ?")
+		args = append(args, to)
+	}
+
+	query := "SELECT app_id, COALESCE(SUM(count), 0) FROM app_downloads WHERE " +
+		strings.Join(conds, " AND ") + " GROUP BY app_id"
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -137,6 +144,7 @@ func (s *T) QueryDownloadsByAppIDs(ctx context.Context, appIDs []string) (map[st
 	}
 	defer rows.Close()
 
+	result := make(map[string]int, len(appIDs))
 	for rows.Next() {
 		var appID string
 		var count int

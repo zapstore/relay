@@ -355,7 +355,7 @@ func TestQueryDownloadsByAppIDs(t *testing.T) {
 	}
 
 	t.Run("returns counts keyed by app ID", func(t *testing.T) {
-		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app1", "com.example.app2"})
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app1", "com.example.app2"}, "", "")
 		if err != nil {
 			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
 		}
@@ -365,19 +365,30 @@ func TestQueryDownloadsByAppIDs(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown app ID returns 0", func(t *testing.T) {
-		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app1", "com.example.unknown"})
+	t.Run("from/to filters by date range", func(t *testing.T) {
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app1", "com.example.app2"}, "2024-01-02", "2024-01-02")
 		if err != nil {
 			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
 		}
-		want := map[string]int{"com.example.app1": 15, "com.example.unknown": 0}
+		want := map[string]int{"com.example.app1": 5}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("unknown app ID is omitted", func(t *testing.T) {
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{"com.example.app1", "com.example.unknown"}, "", "")
+		if err != nil {
+			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
+		}
+		want := map[string]int{"com.example.app1": 15}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 	})
 
 	t.Run("empty input returns empty map", func(t *testing.T) {
-		got, err := s.QueryDownloadsByAppIDs(ctx, []string{})
+		got, err := s.QueryDownloadsByAppIDs(ctx, []string{}, "", "")
 		if err != nil {
 			t.Fatalf("QueryDownloadsByAppIDs: %v", err)
 		}

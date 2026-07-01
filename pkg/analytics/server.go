@@ -138,11 +138,13 @@ func (e *Engine) appImpressions(w http.ResponseWriter, r *http.Request) {
 
 // appBatchDownload serves POST /v1/app/downloads
 //
-// Request body: {"app_ids": ["com.example.app1", ...]}
+// Request body: {"app_ids": ["com.example.app1", ...], "from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}
 // Response:     {"com.example.app1": 42, ...} — count per app ID, 0 if no downloads
 func (e *Engine) appBatchDownload(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AppIDs []string `json:"app_ids"`
+		From   string   `json:"from"`
+		To     string   `json:"to"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -156,7 +158,7 @@ func (e *Engine) appBatchDownload(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	counts, err := e.store.QueryDownloadsByAppIDs(ctx, body.AppIDs)
+	counts, err := e.store.QueryDownloadsByAppIDs(ctx, body.AppIDs, body.From, body.To)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
