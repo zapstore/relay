@@ -9,15 +9,20 @@ import (
 
 const KindStack = 30267
 
+var validStackIdentifiers = []string{"zapstore-bookmarks", "zapstore-installed-apps", "zapstore-unmanaged-apps"}
+
 // Stack represents a set of app identifiers with associated platform identifiers.
 // Learn more here: https://github.com/nostr-protocol/nips/blob/master/51.md#sets
 type Stack struct {
-	Apps        []AppIdentifier
-	Platforms   []string
-	Communities []string
+	Identifier string
+	Apps       []AppIdentifier
+	Platforms  []string
 }
 
 func (s Stack) Validate() error {
+	if !slices.Contains(validStackIdentifiers, s.Identifier) {
+		return fmt.Errorf("invalid 'd' tag")
+	}
 	for _, e := range s.Apps {
 		if err := e.Validate(); err != nil {
 			return err
@@ -26,9 +31,6 @@ func (s Stack) Validate() error {
 
 	if len(s.Platforms) == 0 {
 		return fmt.Errorf("missing 'f' tag (no recognized platform identifier)")
-	}
-	if len(s.Communities) == 0 {
-		return fmt.Errorf("missing 'h' tag (no community identifier)")
 	}
 	return nil
 }
@@ -47,6 +49,9 @@ func ParseStack(event *nostr.Event) (Stack, error) {
 		}
 
 		switch tag[0] {
+		case "d":
+			stack.Identifier = tag[1]
+
 		case "a":
 			app, err := ParseAppIdentifier(tag[1])
 			if err != nil {
@@ -58,9 +63,6 @@ func ParseStack(event *nostr.Event) (Stack, error) {
 			if slices.Contains(PlatformIdentifiers, tag[1]) {
 				stack.Platforms = append(stack.Platforms, tag[1])
 			}
-
-		case "h":
-			stack.Communities = append(stack.Communities, tag[1])
 		}
 	}
 	return stack, nil

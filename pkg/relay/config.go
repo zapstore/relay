@@ -75,6 +75,7 @@ func NewConfig() Config {
 			events.KindDeletion,
 			events.KindForumPost,
 			events.KindComment,
+			events.KindReport,
 			events.KindZap,
 			events.KindCommunityCreation,
 

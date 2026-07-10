@@ -16,6 +16,7 @@ const (
 	KindDeletion  = 5
 	KindForumPost = 11
 	KindComment   = 1111
+	KindReport    = 1984
 	KindZap       = 9735
 )
 

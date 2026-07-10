@@ -104,6 +104,7 @@ func TestParseStack_UnknownFTagsIgnored(t *testing.T) {
 	event := &nostr.Event{
 		Kind: KindStack,
 		Tags: nostr.Tags{
+			{"d", "zapstore-bookmarks"},
 			{"a", "32267:" + pk + ":com.example.app"},
 			{"f", "android-armeabi"},   // unknown — should be ignored
 			{"f", "android-arm64-v8a"}, // known — should be kept
@@ -124,6 +125,7 @@ func TestValidateStack_OnlyUnknownFTags_Rejected(t *testing.T) {
 	event := &nostr.Event{
 		Kind: KindStack,
 		Tags: nostr.Tags{
+			{"d", "zapstore-bookmarks"},
 			{"a", "32267:" + pk + ":com.example.app"},
 			{"f", "android-armeabi"},
 		},
@@ -135,6 +137,27 @@ func TestValidateStack_OnlyUnknownFTags_Rejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no recognized platform identifier") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestValidateStackIdentifiers(t *testing.T) {
+	for _, identifier := range validStackIdentifiers {
+		event := &nostr.Event{Kind: KindStack, Tags: nostr.Tags{{"d", identifier}, {"f", "web"}}}
+		if err := ValidateStack(event); err != nil {
+			t.Errorf("identifier=%q: %v", identifier, err)
+		}
+	}
+	if err := ValidateStack(&nostr.Event{Kind: KindStack, Tags: nostr.Tags{{"d", "other"}, {"f", "web"}}}); err == nil {
+		t.Fatal("invalid d accepted")
+	}
+}
+
+func TestValidateAppSettingsIdentifier(t *testing.T) {
+	if err := ValidateAppSettings(&nostr.Event{Kind: KindAppSettings, Tags: nostr.Tags{{"d", appSettingsIdentifier}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAppSettings(&nostr.Event{Kind: KindAppSettings, Tags: nostr.Tags{{"d", "other"}}}); err == nil {
+		t.Fatal("invalid d accepted")
 	}
 }
 

@@ -3,29 +3,25 @@ package events
 import (
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/nbd-wtf/go-nostr"
 )
 
 const KindAppSettings = 30078
 
-var validAppSettingsDs = []string{
-	"zapstore-unmanaged-apps",
-	"zapstore-installed-apps",
-}
+const appSettingsIdentifier = "zapstore-settings"
 
 // AppSettings holds the encrypted application settings.
 // For now we only need the "d" tag to be parsed and validated.
 type AppSettings struct {
-	D string
+	Identifier string
 }
 
 func (a AppSettings) Validate() error {
-	if a.D == "" {
+	if a.Identifier == "" {
 		return errors.New("'d' tag is empty")
 	}
-	if !slices.Contains(validAppSettingsDs, a.D) {
+	if a.Identifier != appSettingsIdentifier {
 		return errors.New("invalid 'd' tag")
 	}
 	return nil
@@ -46,10 +42,10 @@ func ParseAppSettings(e *nostr.Event) (AppSettings, error) {
 
 		switch tag[0] {
 		case "d":
-			if settings.D != "" {
+			if settings.Identifier != "" {
 				return AppSettings{}, errors.New("duplicate 'd' tag")
 			}
-			settings.D = tag[1]
+			settings.Identifier = tag[1]
 		}
 	}
 	return settings, nil
