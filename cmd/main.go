@@ -111,7 +111,11 @@ func main() {
 	// Initialize rate limiter and connect to the defender
 	limiter := rate.NewLimiter(config.Limiter)
 
-	defender, err := defender.Default("localhost:8080")
+	defenderURL := strings.TrimSpace(os.Getenv("DEFENDER_URL"))
+	if defenderURL == "" {
+		defenderURL = "localhost:8080"
+	}
+	defender, err := defender.Default(defenderURL)
 	if err != nil {
 		panic(err)
 	}
