@@ -3,13 +3,18 @@ package events
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/nbd-wtf/go-nostr"
 )
 
 const KindAppSettings = 30078
 
-const appSettingsIdentifier = "zapstore-settings"
+var validAppSettingsIdentifiers = []string{
+	"zapstore-settings",
+	"zapstore-device-state",
+	"zapstore-device-key-backup",
+}
 
 // AppSettings holds the encrypted application settings.
 // For now we only need the "d" tag to be parsed and validated.
@@ -21,7 +26,7 @@ func (a AppSettings) Validate() error {
 	if a.Identifier == "" {
 		return errors.New("'d' tag is empty")
 	}
-	if a.Identifier != appSettingsIdentifier {
+	if !slices.Contains(validAppSettingsIdentifiers, a.Identifier) {
 		return errors.New("invalid 'd' tag")
 	}
 	return nil

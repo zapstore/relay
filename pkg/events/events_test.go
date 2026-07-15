@@ -153,8 +153,13 @@ func TestValidateStackIdentifiers(t *testing.T) {
 }
 
 func TestValidateAppSettingsIdentifier(t *testing.T) {
-	if err := ValidateAppSettings(&nostr.Event{Kind: KindAppSettings, Tags: nostr.Tags{{"d", appSettingsIdentifier}}}); err != nil {
-		t.Fatal(err)
+	for _, identifier := range validAppSettingsIdentifiers {
+		if err := ValidateAppSettings(&nostr.Event{
+			Kind: KindAppSettings,
+			Tags: nostr.Tags{{"d", identifier}},
+		}); err != nil {
+			t.Errorf("identifier=%q: %v", identifier, err)
+		}
 	}
 	if err := ValidateAppSettings(&nostr.Event{Kind: KindAppSettings, Tags: nostr.Tags{{"d", "other"}}}); err == nil {
 		t.Fatal("invalid d accepted")
