@@ -95,7 +95,12 @@ func (r *T) fetchProfile(ctx context.Context, pubkey string) (*nostr.Event, erro
 
 	for _, relayURL := range r.config.ProfileRelays {
 		queryCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-		upstream := nostr.NewRelay(queryCtx, relayURL)
+		upstream, err := nostr.RelayConnect(queryCtx, relayURL)
+		if err != nil {
+			cancel()
+			errs = append(errs, fmt.Errorf("%s: %w", relayURL, err))
+			continue
+		}
 
 		found, err := upstream.QuerySync(queryCtx, nostr.Filter{
 			Kinds:   []int{events.KindProfile},
