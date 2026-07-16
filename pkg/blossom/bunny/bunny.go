@@ -202,13 +202,17 @@ func (c Client) upload(ctx context.Context, data io.Reader, path string, sha256 
 	}
 }
 
+// ProfilePath returns the stable CDN/storage path for a processed profile picture.
+func ProfilePath(pubkey string) string {
+	return "p/" + pubkey + ".webp"
+}
+
 // UploadProfile stores a processed profile picture at its stable CDN path.
 func (c Client) UploadProfile(ctx context.Context, pubkey string, data io.Reader) error {
 	if pubkey == "" {
 		return fmt.Errorf("bunny: failed to upload profile: %w", ErrEmptyPath)
 	}
-	path := "p/" + pubkey + ".webp"
-	if err := c.upload(ctx, data, path, "", "image/webp"); err != nil {
+	if err := c.upload(ctx, data, ProfilePath(pubkey), "", "image/webp"); err != nil {
 		return fmt.Errorf("bunny: failed to upload profile: %w", err)
 	}
 	return nil

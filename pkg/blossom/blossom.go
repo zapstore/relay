@@ -32,6 +32,8 @@ var (
 	ErrRateLimited = blossom.ErrTooMany("rate-limited: slow down chief")
 )
 
+const profileExt = "profile.webp"
+
 type Hash = blossom.Hash
 
 // DB is a pointer to the store.T struct, representing the database connection.
@@ -118,7 +120,11 @@ func (b *T) StartAndServe(ctx context.Context, addr string) error {
 	return b.server.StartAndServe(ctx, addr)
 }
 
-func (b *T) check(r blossy.Request, hash blossom.Hash, _ string) (blossy.MetaDelivery, *blossom.Error) {
+func (b *T) check(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
+	if ext == profileExt {
+		return blossy.Redirect(b.profileURL(hash, r.Raw().URL.RawQuery), http.StatusTemporaryRedirect), nil
+	}
+
 	// We can check the local store for the blob metadata instead of redirecting to Bunny.
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 	defer cancel()
@@ -139,7 +145,11 @@ func (b *T) check(r blossy.Request, hash blossom.Hash, _ string) (blossy.MetaDel
 	return blossy.Found(meta.Type, meta.Size), nil
 }
 
-func (b *T) download(r blossy.Request, hash blossom.Hash, _ string) (blossy.BlobDelivery, *blossom.Error) {
+func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.BlobDelivery, *blossom.Error) {
+	if ext == profileExt {
+		return blossy.Redirect(b.profileURL(hash, r.Raw().URL.RawQuery), http.StatusTemporaryRedirect), nil
+	}
+
 	// In the Bunny CDN files are defined by their name (hash) and extension (ext).
 	// If the extension is not provided, or if it's different (e.g. .jpg instead of .jpeg), Bunny won't find the file.
 	// To find the correct extension, we check the store for that hash and use the type to get the extension.
@@ -185,6 +195,10 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, _ string) (blossy.Blob
 		(url.Values{"class": query["class"]}).Encode(),
 	)
 	return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
+}
+
+func (b *T) profileURL(pubkey blossom.Hash, rawQuery string) string {
+	return b.bunny.CDNURLWithRawQuery(bunny.ProfilePath(pubkey.Hex()), rawQuery)
 }
 
 func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (blossom.BlobDescriptor, *blossom.Error) {
