@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -178,7 +179,11 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, _ string) (blossy.Blob
 	}
 
 	b.analytics.RecordDownload(r, hash)
-	url := b.bunny.CDNURL(BlobPath(hash, meta.Type))
+	query := r.Raw().URL.Query()
+	url := b.bunny.CDNURLWithRawQuery(
+		BlobPath(hash, meta.Type),
+		(url.Values{"class": query["class"]}).Encode(),
+	)
 	return blossy.Redirect(url, http.StatusTemporaryRedirect), nil
 }
 

@@ -64,6 +64,15 @@ func (c Client) CDNURL(path string) string {
 	return fmt.Sprintf("https://%s/%s", c.config.CDN, path)
 }
 
+// CDNURLWithRawQuery returns the request URL for the provided path and raw query on the CDN.
+func (c Client) CDNURLWithRawQuery(path string, rawQuery string) string {
+	cdnURL := c.CDNURL(path)
+	if rawQuery == "" {
+		return cdnURL
+	}
+	return cdnURL + "?" + rawQuery
+}
+
 // Download the file at the specified path.
 // Returns the reader for the file, or an error if the file does not exist.
 // The caller is responsible for closing the reader.
