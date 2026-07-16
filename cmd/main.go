@@ -16,6 +16,7 @@ import (
 	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/blossom/bunny"
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
@@ -156,6 +157,7 @@ func main() {
 		defender,
 		relayDB,
 		blossomDB,
+		bunny.NewClient(config.Blossom.Bunny),
 		analytics,
 		indexingEngine,
 	)

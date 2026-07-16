@@ -148,6 +148,10 @@ func (c Client) Check(ctx context.Context, path string) (mime string, size int64
 // If the hex-encoded sha256 is not empty (not ""), it will be used to set the "Checksum" header.
 // If the sha256(data) != sha256, Bunny will reject the upload and [ErrChecksumMismatch] will be returned.
 func (c Client) Upload(ctx context.Context, data io.Reader, path string, sha256 string) error {
+	return c.upload(ctx, data, path, sha256, "")
+}
+
+func (c Client) upload(ctx context.Context, data io.Reader, path string, sha256 string, contentType string) error {
 	if data == nil {
 		return fmt.Errorf("bunny: failed to upload: %w", ErrEmptyData)
 	}
@@ -168,6 +172,9 @@ func (c Client) Upload(ctx context.Context, data io.Reader, path string, sha256 
 	}
 
 	c.setHeaders(req)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	if sha256 != "" {
 		req.Header.Add("Checksum", strings.ToUpper(sha256))
 	}
@@ -193,6 +200,18 @@ func (c Client) Upload(ctx context.Context, data io.Reader, path string, sha256 
 		body, _ := io.ReadAll(res.Body)
 		return fmt.Errorf("bunny: failed to upload: status %s: body %s", res.Status, string(body))
 	}
+}
+
+// UploadProfile stores a processed profile picture at its stable CDN path.
+func (c Client) UploadProfile(ctx context.Context, pubkey string, data io.Reader) error {
+	if pubkey == "" {
+		return fmt.Errorf("bunny: failed to upload profile: %w", ErrEmptyPath)
+	}
+	path := "p/" + pubkey + ".webp"
+	if err := c.upload(ctx, data, path, "", "image/webp"); err != nil {
+		return fmt.Errorf("bunny: failed to upload profile: %w", err)
+	}
+	return nil
 }
 
 // Delete the file at the specified path.

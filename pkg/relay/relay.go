@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -70,8 +71,11 @@ type T struct {
 	analytics *analytics.Engine
 	indexing  *indexing.Engine
 
-	blossom Blossom
-	uploads chan upload
+	blossom         Blossom
+	profileUploader ProfileUploader
+	uploads         chan upload
+
+	profileJobs chan string
 }
 
 type upload struct {
@@ -85,6 +89,12 @@ type Blossom interface {
 	Has(ctx context.Context, hash blossom.Hash) (bool, error)
 }
 
+// ProfileUploader stores processed profile pictures in the CDN.
+type ProfileUploader interface {
+	// UploadProfile stores a processed profile picture at the stable CDN path.
+	UploadProfile(ctx context.Context, pubkey string, data io.Reader) error
+}
+
 // Setup creates a new relay instance with the given dependencies and configuration.
 // It registers all functions to the rely.Relay hooks.
 func Setup(
@@ -93,6 +103,7 @@ func Setup(
 	defender defender.T,
 	store store.T,
 	blssm Blossom,
+	profileUploader ProfileUploader,
 	analytics *analytics.Engine,
 	indexing *indexing.Engine,
 ) (*T, error) {
@@ -141,8 +152,10 @@ func Setup(
 		analytics: analytics,
 		indexing:  indexing,
 
-		blossom: blssm,
-		uploads: make(chan upload, 100),
+		blossom:         blssm,
+		profileUploader: profileUploader,
+		uploads:         make(chan upload, 100),
+		profileJobs:     make(chan string, 100),
 	}
 
 	server.On.Event = relay.save
@@ -153,6 +166,7 @@ func Setup(
 // StartAndServe starts the relay, listens to the provided address and handles http requests.
 func (r *T) StartAndServe(ctx context.Context, addr string) error {
 	go r.runReconcile(ctx)
+	go r.runProfileWorker(ctx)
 	return r.server.StartAndServe(ctx, addr)
 }
 
@@ -284,9 +298,13 @@ func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
 		}
 
 	case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
-		if _, err := r.store.Replace(ctx, event); err != nil {
+		saved, err := r.store.Replace(ctx, event)
+		if err != nil {
 			slog.Error("relay: failed to replace event", "event", event.ID, "error", err)
 			return rely.Fail(err.Error())
+		}
+		if saved && event.Kind == events.KindApp {
+			r.enqueueProfile(event.PubKey)
 		}
 	}
 	return rely.Success()

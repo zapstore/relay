@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -49,6 +50,10 @@ type Config struct {
 	// Default is 5 hours.
 	RemovePendingAfter time.Duration `env:"RELAY_REMOVE_PENDING_AFTER"`
 
+	// ProfileRelays are the trusted upstream relays used to resolve kind 0
+	// profiles when an app is published.
+	ProfileRelays []string `env:"RELAY_PROFILE_RELAYS" envSeparator:","`
+
 	// Info contains the relay's metadata, such as name, description, and supported NIPs.
 	Info Info
 }
@@ -84,6 +89,7 @@ func NewConfig() Config {
 		},
 		ReconcileInterval:  1 * time.Minute,
 		RemovePendingAfter: 5 * time.Hour,
+		ProfileRelays:      []string{"wss://relay.vertexlab.io"},
 	}
 }
 
@@ -120,6 +126,12 @@ func (c Config) Validate() error {
 	}
 	if len(c.AllowedKinds) == 0 {
 		slog.Warn("relay allowed kinds is empty. No events will be accepted.")
+	}
+	for _, relayURL := range c.ProfileRelays {
+		parsed, err := url.Parse(relayURL)
+		if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
+			return fmt.Errorf("invalid profile relay URL %q", relayURL)
+		}
 	}
 	if err := c.Info.Validate(); err != nil {
 		// info is not critical, so we log the error and continue
@@ -194,7 +206,8 @@ func (c Config) String() string {
 		"\tMax REQ Filters: %d\n"+
 		"\tResponse Limit: %d\n"+
 		"\tAllowed Kinds: %v\n"+
+		"\tProfile Relays: %v\n"+
 		c.Info.String(),
-		c.Hostname, c.Address, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.AllowedKinds,
+		c.Hostname, c.Address, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.AllowedKinds, c.ProfileRelays,
 	)
 }
