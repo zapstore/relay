@@ -9,8 +9,6 @@ import (
 
 const KindStack = 30267
 
-var validStackIdentifiers = []string{"zapstore-bookmarks", "zapstore-installed-apps", "zapstore-unmanaged-apps"}
-
 // Stack represents a set of app identifiers with associated platform identifiers.
 // Learn more here: https://github.com/nostr-protocol/nips/blob/master/51.md#sets
 type Stack struct {
@@ -20,8 +18,8 @@ type Stack struct {
 }
 
 func (s Stack) Validate() error {
-	if !slices.Contains(validStackIdentifiers, s.Identifier) {
-		return fmt.Errorf("invalid 'd' tag")
+	if s.Identifier == "" {
+		return fmt.Errorf("missing 'd' tag")
 	}
 	for _, e := range s.Apps {
 		if err := e.Validate(); err != nil {

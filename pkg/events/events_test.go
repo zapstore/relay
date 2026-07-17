@@ -141,14 +141,14 @@ func TestValidateStack_OnlyUnknownFTags_Rejected(t *testing.T) {
 }
 
 func TestValidateStackIdentifiers(t *testing.T) {
-	for _, identifier := range validStackIdentifiers {
+	for _, identifier := range []string{"zapstore-bookmarks", "nostr", "other"} {
 		event := &nostr.Event{Kind: KindStack, Tags: nostr.Tags{{"d", identifier}, {"f", "web"}}}
 		if err := ValidateStack(event); err != nil {
 			t.Errorf("identifier=%q: %v", identifier, err)
 		}
 	}
-	if err := ValidateStack(&nostr.Event{Kind: KindStack, Tags: nostr.Tags{{"d", "other"}, {"f", "web"}}}); err == nil {
-		t.Fatal("invalid d accepted")
+	if err := ValidateStack(&nostr.Event{Kind: KindStack, Tags: nostr.Tags{{"f", "web"}}}); err == nil {
+		t.Fatal("missing d accepted")
 	}
 }
 
