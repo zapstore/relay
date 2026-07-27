@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
 	defender "github.com/zapstore/defender/pkg/client"
@@ -61,9 +60,6 @@ type T struct {
 type Relay interface {
 	// ResolveAssetURL looks up a download URL for a kind 3063 asset by its SHA-256 hash.
 	ResolveAssetURL(ctx context.Context, hash blossom.Hash) (url string, err error)
-
-	// Query returns nostr events matching the given filter.
-	Query(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error)
 
 	// NotifyUpload notifies the relay that an upload has been completed.
 	NotifyUpload(hash blossom.Hash, mime string) error
@@ -118,46 +114,10 @@ func Setup(
 	return &blossom, nil
 }
 
-// Handler returns the HTTP handler for the blossom server, including custom routes
-// such as GET/HEAD /download-latest.
-func (b *T) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /download-latest", b.downloadLatest)
-	mux.HandleFunc("HEAD /download-latest", b.downloadLatest)
-	mux.Handle("/", b.server)
-	return mux
-}
-
 // StartAndServe starts the blossom server, listens to the provided address and handles http requests.
 // It’s a blocking operation, that stops only when the context gets cancelled.
 func (b *T) StartAndServe(ctx context.Context, addr string) error {
-	exitErr := make(chan error, 1)
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           b.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       time.Minute,
-	}
-
-	go func() {
-		slog.Info("serving the blossom server", "address", addr)
-		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			exitErr <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		slog.Info("shutting down the blossom server", "address", addr)
-		defer slog.Info("blossom server stopped")
-		return server.Shutdown(ctx)
-
-	case err := <-exitErr:
-		return err
-	}
+	return b.server.StartAndServe(ctx, addr)
 }
 
 func (b *T) check(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaDelivery, *blossom.Error) {
@@ -206,11 +166,6 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 	}
 
 	if errors.Is(err, store.ErrBlobNotFound) {
-		// Inline downloads (e.g. /download-latest) must not bounce to an external URL.
-		if serveInline(r.Context()) {
-			return nil, ErrNotFound
-		}
-
 		// blob not found locally; if the client opted in, try the relay asset resolution.
 		redirect := r.Raw().URL.Query().Has("redirect")
 		if !redirect {
@@ -234,19 +189,6 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 	}
 
 	b.analytics.RecordDownload(r, hash)
-
-	if serveInline(r.Context()) {
-		body, err := b.bunny.Download(r.Context(), BlobPath(hash, meta.Type))
-		if errors.Is(err, bunny.ErrFileNotFound) {
-			return nil, ErrNotFound
-		}
-		if err != nil {
-			slog.Error("blossom: failed to download blob from bunny", "error", err, "hash", hash)
-			return nil, ErrInternal
-		}
-		return blossy.Serve(blossom.BlobFromStream(body, meta.Size, meta.Type)), nil
-	}
-
 	query := r.Raw().URL.Query()
 	url := b.bunny.CDNURLWithRawQuery(
 		BlobPath(hash, meta.Type),

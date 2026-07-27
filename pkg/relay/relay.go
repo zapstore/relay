@@ -196,11 +196,6 @@ func (r *T) ResolveAssetURL(ctx context.Context, hash blossom.Hash) (string, err
 	return url, nil
 }
 
-// Query returns nostr events matching the given filter.
-func (r *T) Query(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error) {
-	return r.store.Query(ctx, filter)
-}
-
 func (r *T) runReconcile(ctx context.Context) {
 	ticker := time.NewTicker(r.config.ReconcileInterval)
 	defer ticker.Stop()
