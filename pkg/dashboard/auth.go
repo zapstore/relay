@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -22,8 +23,7 @@ func (v authValidator) IsAdmin(t nwt.Token) bool {
 // IsViewer reports whether the token signer is in ViewerPubkeys.
 // Admin pubkeys are also considered viewers.
 func (v authValidator) IsViewer(t nwt.Token) bool {
-	return slices.Contains(v.ViewerPubkeys, t.Signer) ||
-		slices.Contains(v.AdminPubkeys, t.Signer)
+	return slices.Contains(v.ViewerPubkeys, t.Signer) || slices.Contains(v.AdminPubkeys, t.Signer)
 }
 
 // validate checks the token's time claims, audience.
@@ -39,6 +39,9 @@ func (v authValidator) validate(t nwt.Token) error {
 			return fmt.Errorf("%w: it doesn't contain an exact match of %q", nwt.ErrInvalidAudience, v.Hostname)
 		}
 	}
+	if !v.IsViewer(t) {
+		return errors.New("unauthorized pubkey")
+	}
 	return nil
 }
 
@@ -48,12 +51,12 @@ func (v authValidator) validate(t nwt.Token) error {
 func (d *T) authenticate(w http.ResponseWriter, r *http.Request) (nwt.Token, bool) {
 	token, err := nwt.Parse(r)
 	if err != nil {
-		d.limiter.Penalize(rely.GetIP(r).Group(), 10)
+		d.limiter.Penalize(rely.GetIP(r).Group(), 100)
 		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return nwt.Token{}, false
 	}
 	if err := d.auth.validate(token); err != nil {
-		d.limiter.Penalize(rely.GetIP(r).Group(), 10)
+		d.limiter.Penalize(rely.GetIP(r).Group(), 100)
 		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return nwt.Token{}, false
 	}
