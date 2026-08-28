@@ -182,9 +182,6 @@ func ParseAsset(event *nostr.Event) (Asset, error) {
 			asset.MinAllowedVersionCode = tag[1]
 
 		case "apk_certificate_hash":
-			if asset.APKCertificateHashes != nil {
-				return Asset{}, fmt.Errorf("duplicate 'apk_certificate_hash' tag")
-			}
 			asset.APKCertificateHashes = append(asset.APKCertificateHashes, tag[1])
 
 		case "executable":

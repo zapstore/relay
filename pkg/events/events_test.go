@@ -1,6 +1,7 @@
 package events
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -74,6 +75,34 @@ func TestParseAsset_UnknownFTagsIgnored(t *testing.T) {
 	}
 	if len(asset.Platforms) != 1 || asset.Platforms[0] != "android-armeabi-v7a" {
 		t.Errorf("expected [android-armeabi-v7a], got %v", asset.Platforms)
+	}
+}
+
+func TestParseAsset_AllowsSigningCertificateLineage(t *testing.T) {
+	oldCertificate := strings.Repeat("1", 64)
+	newCertificate := strings.Repeat("2", 64)
+	event := &nostr.Event{
+		Kind: KindAsset,
+		Tags: nostr.Tags{
+			{"i", "com.example.app"},
+			{"x", validHash},
+			{"version", "2.0.0"},
+			{"f", "android-arm64-v8a"},
+			{"version_code", "200"},
+			{"apk_certificate_hash", newCertificate},
+			{"apk_certificate_hash", oldCertificate},
+		},
+	}
+
+	asset, err := ParseAsset(event)
+	if err != nil {
+		t.Fatalf("unexpected parse error for signing lineage: %v", err)
+	}
+	if !slices.Equal(asset.APKCertificateHashes, []string{newCertificate, oldCertificate}) {
+		t.Fatalf("unexpected certificate lineage: %v", asset.APKCertificateHashes)
+	}
+	if err := asset.Validate(); err != nil {
+		t.Fatalf("unexpected validation error for signing lineage: %v", err)
 	}
 }
 
