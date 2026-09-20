@@ -3,6 +3,12 @@ GO_TAGS := -tags fts5
 TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
 LDFLAGS := -s -w -X github.com/zapstore/relay/pkg/config.Version=$(TAG)
 
+# go-sqlite3 (fts5) and chai2010/webp both pass -lm. Apple ld warns; ignore it.
+ifeq ($(shell uname -s),Darwin)
+CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
+export CGO_LDFLAGS
+endif
+
 # Build from current checkout; TAG handling happens in the recipe below.
 
 .PHONY: all clean relay

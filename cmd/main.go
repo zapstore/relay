@@ -20,7 +20,6 @@ import (
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
-	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 )
@@ -125,23 +124,6 @@ func main() {
 	}
 
 	// Step 3.
-	// Initialize indexing engine
-	indexingDir := filepath.Join(config.Sys.Dir, "indexing")
-	if err := os.MkdirAll(indexingDir, 0755); err != nil {
-		panic(err)
-	}
-
-	var indexingEngine *indexing.Engine
-	indexingPaths := indexing.Paths{Store: filepath.Join(indexingDir, "indexing.db")}
-	indexingEngine, err = indexing.NewEngine(config.Indexing, indexingPaths)
-	if err != nil {
-		slog.Warn("indexing: failed to open indexing.db, demand-driven features disabled", "error", err)
-	} else {
-		defer indexingEngine.Close()
-		slog.Info("indexing: demand-driven indexing enabled")
-	}
-
-	// Step 4.
 	// Initialize analytics engine
 	analytics, err := analytics.NewEngine(config.Analytics, analyticsDB, resolver{db: relayDB})
 	if err != nil {
@@ -149,7 +131,7 @@ func main() {
 	}
 	defer analytics.Close()
 
-	// Step 5.
+	// Step 4.
 	// Setup relay and blossom server
 	relay, err := relay.Setup(
 		config.Relay,
@@ -159,7 +141,6 @@ func main() {
 		blossomDB,
 		bunny.NewClient(config.Blossom.Bunny),
 		analytics,
-		indexingEngine,
 	)
 	if err != nil {
 		panic(err)
@@ -177,7 +158,7 @@ func main() {
 		panic(err)
 	}
 
-	// Step 6.
+	// Step 5.
 	// Initialize dashboard
 	dashboard, err := dashboard.New(
 		config.Dashboard,
@@ -191,7 +172,7 @@ func main() {
 		panic(err)
 	}
 
-	// Step 7.
+	// Step 6.
 	// Run everything
 	exit := make(chan error, 4)
 	wg := sync.WaitGroup{}

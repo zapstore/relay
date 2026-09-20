@@ -21,8 +21,6 @@ import (
 	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/events"
-	"github.com/zapstore/relay/pkg/events/legacy"
-	"github.com/zapstore/relay/pkg/indexing"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay/store"
 )
@@ -69,7 +67,6 @@ type T struct {
 	defender  defender.T
 	store     store.T
 	analytics *analytics.Engine
-	indexing  *indexing.Engine
 
 	blossom         Blossom
 	profileUploader ProfileUploader
@@ -105,7 +102,6 @@ func Setup(
 	blssm Blossom,
 	profileUploader ProfileUploader,
 	analytics *analytics.Engine,
-	indexing *indexing.Engine,
 ) (*T, error) {
 
 	server := rely.NewRelay(
@@ -150,7 +146,6 @@ func Setup(
 		defender:  defender,
 		store:     store,
 		analytics: analytics,
-		indexing:  indexing,
 
 		blossom:         blssm,
 		profileUploader: profileUploader,
@@ -454,62 +449,8 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 		return nil, err
 	}
 
-	if r.indexing != nil {
-		recordDemandSignals(r.indexing, id, filters, result)
-	}
-
 	r.analytics.RecordReq(c, id, filters, result)
 	return result, nil
-}
-
-// recordDemandSignals records discovery misses and release requests non-blocking.
-// Release-request signals are gated to known Zapstore client subscription prefixes,
-// filtering out bots and non-Zapstore clients.
-func recordDemandSignals(idx *indexing.Engine, subID string, filters nostr.Filters, result []nostr.Event) {
-	wantsReleases := strings.HasPrefix(subID, "app-updates") ||
-		strings.HasPrefix(subID, "app-detail") ||
-		strings.HasPrefix(subID, "app-bg") ||
-		strings.HasPrefix(subID, "web-app-detail") ||
-		strings.HasPrefix(subID, "web-releases")
-
-	for _, filter := range filters {
-		// Discovery miss: NIP-50 search on kind 32267 with a GitHub URL and zero results.
-		// Not gated on subID — discovery misses are always meaningful.
-		// DISABLED: GitHub/user-repo indexing temporarily commented out.
-		// if filter.Search != "" && len(result) == 0 {
-		// 	if isKindOnly(filter.Kinds, events.KindApp) {
-		// 		idx.RecordDiscoveryMiss(filter.Search)
-		// 	}
-		// }
-
-		if hasReleaseKind(filter.Kinds) {
-			if !wantsReleases {
-				continue
-			}
-			if len(result) > 0 {
-				if iVals, ok := filter.Tags["i"]; ok {
-					for _, appID := range iVals {
-						idx.RecordReleaseRequest(appID)
-					}
-				} else {
-					for _, ev := range result {
-						if appID, ok := events.Find(ev.Tags, "i"); ok {
-							idx.RecordReleaseRequest(appID)
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-func hasReleaseKind(kinds []int) bool {
-	for _, k := range kinds {
-		if k == events.KindRelease || k == events.KindAsset || k == legacy.KindFile {
-			return true
-		}
-	}
-	return false
 }
 
 func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Request) error {
