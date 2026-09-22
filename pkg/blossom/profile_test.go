@@ -17,7 +17,11 @@ func TestProfileRedirect(t *testing.T) {
 
 	b := &T{
 		server: server,
-		bunny:  bunny.NewClient(bunny.Config{CDN: "cdn.example.com"}),
+		config: Config{Bunny: bunny.Config{
+			CDN:         "cdn.example.com",
+			StorageZone: bunny.StorageZone{Name: "zone", Hostname: "storage.example.com", Password: "password1"},
+		}},
+		bunny: bunny.NewClient(bunny.Config{CDN: "cdn.example.com"}),
 	}
 	server.On.Download = b.download
 	server.On.Check = b.check

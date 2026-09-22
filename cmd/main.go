@@ -13,7 +13,7 @@ import (
 	"syscall"
 
 	"github.com/nbd-wtf/go-nostr"
-	defender "github.com/zapstore/defender/pkg/client"
+	defenderclient "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
 	"github.com/zapstore/relay/pkg/blossom/bunny"
@@ -90,6 +90,7 @@ func main() {
 		panic(err)
 	}
 	defer relayDB.Close()
+	config.Blossom.Dir = filepath.Join(dataDir, "blobs")
 
 	blossomDB, err := blossom.NewDB(filepath.Join(dataDir, "blossom.db"))
 	if err != nil {
@@ -112,15 +113,19 @@ func main() {
 	limiter := rate.NewLimiter(config.Limiter)
 
 	defenderURL := strings.TrimSpace(os.Getenv("DEFENDER_URL"))
+	var defender defenderclient.T
 	if defenderURL == "" {
-		defenderURL = "localhost:8080"
-	}
-	defender, err := defender.Default(defenderURL)
-	if err != nil {
-		panic(err)
-	}
-	if _, err := defender.Health(ctx); err != nil {
-		slog.Error("defender health check failed", "error", err)
+		slog.Info("DEFENDER_URL unset: accepting all events and blobs")
+		config.Relay.SkipDefender = true
+		config.Blossom.SkipDefender = true
+	} else {
+		defender, err = defenderclient.Default(defenderURL)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := defender.Health(ctx); err != nil {
+			slog.Error("defender health check failed", "error", err)
+		}
 	}
 
 	// Step 3.
@@ -133,13 +138,21 @@ func main() {
 
 	// Step 4.
 	// Setup relay and blossom server
+	var profiles relay.ProfileUploader
+	if config.Blossom.Bunny.Configured() {
+		profiles = bunny.NewClient(config.Blossom.Bunny)
+	} else {
+		slog.Info("Bunny unset: writing blobs locally", "dir", config.Blossom.Dir)
+		profiles = blossom.Files{Dir: config.Blossom.Dir}
+	}
+
 	relay, err := relay.Setup(
 		config.Relay,
 		limiter,
 		defender,
 		relayDB,
 		blossomDB,
-		bunny.NewClient(config.Blossom.Bunny),
+		profiles,
 		analytics,
 	)
 	if err != nil {

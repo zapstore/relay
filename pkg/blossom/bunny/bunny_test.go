@@ -12,17 +12,10 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 )
 
-// =========================== TESTS ============================
-// The tests require a .env file with the following variables:
-// - BUNNY_STORAGE_ZONE_NAME
-// - BUNNY_STORAGE_ZONE_HOSTNAME
-// - BUNNY_STORAGE_ZONE_PASSWORD
-// - BUNNY_CDN_HOSTNAME
-//
-// Configure these by checking your Bunny dashboard.
-//
-// Note: these tests require the file "file_exists.txt" to be present in the Bunny storage zone.
-// ================================================================
+// Live tests (Test*Live) need Bunny credentials in the environment:
+// BUNNY_STORAGE_ZONE_NAME, BUNNY_STORAGE_ZONE_HOSTNAME,
+// BUNNY_STORAGE_ZONE_PASSWORD, BUNNY_CDN_HOSTNAME.
+// They skip when those are unset. Validation tests run without Bunny.
 
 var (
 	config = NewConfig()
@@ -33,9 +26,12 @@ func init() {
 	if err := env.Parse(&config); err != nil {
 		panic(fmt.Errorf("failed to parse config: %w", err))
 	}
+}
 
-	if err := config.Validate(); err != nil {
-		panic(fmt.Errorf("failed to validate config: %w", err))
+func requireBunny(t *testing.T) {
+	t.Helper()
+	if err := config.Validate(); err != nil || !config.Configured() {
+		t.Skip("Bunny is unset")
 	}
 }
 
@@ -66,6 +62,27 @@ func TestUpload(t *testing.T) {
 			sha256: "invalid",
 			err:    ErrInvalidChecksum,
 		},
+	}
+
+	client := Client{}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := client.Upload(ctx, test.data, test.path, test.sha256)
+			if !errors.Is(err, test.err) {
+				t.Fatalf("expected error %v, got %v", test.err, err)
+			}
+		})
+	}
+}
+
+func TestUploadLive(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		data   io.Reader
+		sha256 string
+		err    error
+	}{
 		{
 			name: "valid test (no checksum)",
 			path: "/tests/test.txt",
@@ -79,6 +96,7 @@ func TestUpload(t *testing.T) {
 		},
 	}
 
+	requireBunny(t)
 	client := NewClient(config)
 
 	for _, test := range tests {
@@ -93,16 +111,18 @@ func TestUpload(t *testing.T) {
 }
 
 func TestDownload(t *testing.T) {
+	_, err := (Client{}).Download(ctx, "")
+	if !errors.Is(err, ErrEmptyPath) {
+		t.Fatalf("expected error %v, got %v", ErrEmptyPath, err)
+	}
+}
+
+func TestDownloadLive(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
 		err  error
 	}{
-		{
-			name: "invalid path (empty)",
-			path: "",
-			err:  ErrEmptyPath,
-		},
 		{
 			name: "file does not exists",
 			path: "/tests/file_does_not_exist.txt",
@@ -114,6 +134,7 @@ func TestDownload(t *testing.T) {
 		},
 	}
 
+	requireBunny(t)
 	client := NewClient(config)
 
 	expected := []byte("This is a test")
@@ -145,6 +166,13 @@ func TestDownload(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
+	_, _, err := (Client{}).Check(ctx, "")
+	if !errors.Is(err, ErrEmptyPath) {
+		t.Fatalf("expected error %v, got %v", ErrEmptyPath, err)
+	}
+}
+
+func TestCheckLive(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
@@ -152,11 +180,6 @@ func TestCheck(t *testing.T) {
 		size int64
 		err  error
 	}{
-		{
-			name: "invalid path (empty)",
-			path: "",
-			err:  ErrEmptyPath,
-		},
 		{
 			name: "file does not exists",
 			path: "/tests/file_does_not_exist.txt",
@@ -170,6 +193,7 @@ func TestCheck(t *testing.T) {
 		},
 	}
 
+	requireBunny(t)
 	client := NewClient(config)
 
 	for _, test := range tests {
@@ -190,16 +214,18 @@ func TestCheck(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
+	err := (Client{}).Delete(ctx, "")
+	if !errors.Is(err, ErrEmptyPath) {
+		t.Fatalf("expected error %v, got %v", ErrEmptyPath, err)
+	}
+}
+
+func TestDeleteLive(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
 		err  error
 	}{
-		{
-			name: "invalid path (empty)",
-			path: "",
-			err:  ErrEmptyPath,
-		},
 		{
 			name: "valid delete (file exists)",
 			path: "/tests/test.txt",
@@ -210,6 +236,7 @@ func TestDelete(t *testing.T) {
 		},
 	}
 
+	requireBunny(t)
 	client := NewClient(config)
 
 	for _, test := range tests {

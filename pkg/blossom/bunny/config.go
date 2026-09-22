@@ -36,7 +36,20 @@ func NewConfig() Config {
 	}
 }
 
+// set reports whether any Bunny field was provided. Partial configs fail Validate.
+func (c Config) set() bool {
+	return c.CDN != "" || c.StorageZone.Name != "" || c.StorageZone.Hostname != "" || c.StorageZone.Password != ""
+}
+
+// Configured reports whether Bunny is fully set and the relay should use the CDN.
+func (c Config) Configured() bool {
+	return c.CDN != "" && c.StorageZone.Name != "" && c.StorageZone.Hostname != "" && len(c.StorageZone.Password) >= 8
+}
+
 func (c Config) Validate() error {
+	if !c.set() {
+		return nil
+	}
 	if c.StorageZone.Name == "" {
 		return errors.New("storage zone name must be specified")
 	}
@@ -82,6 +95,9 @@ func ValidateHostname(hostname string) error {
 }
 
 func (c Config) String() string {
+	if !c.Configured() {
+		return "Bunny:\n\t(unset, local blobs)\n"
+	}
 	return fmt.Sprintf("Bunny:\n"+
 		"\tRequest Timeout: %v\n"+
 		"\tCDN Hostname: %s\n"+
@@ -93,6 +109,13 @@ func (c Config) String() string {
 		c.CDN,
 		c.StorageZone.Name,
 		c.StorageZone.Hostname,
-		c.StorageZone.Password[:4]+"___REDACTED___"+c.StorageZone.Password[len(c.StorageZone.Password)-4:],
+		redactSecret(c.StorageZone.Password),
 	)
+}
+
+func redactSecret(s string) string {
+	if len(s) < 8 {
+		return "(unset)"
+	}
+	return s[:4] + "___REDACTED___" + s[len(s)-4:]
 }

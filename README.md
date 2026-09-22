@@ -17,10 +17,10 @@ A Nostr relay and Blossom server for the Zapstore app ecosystem.
 - [Bunny CDN](https://bunny.net/) integration for scalable blob delivery
 - Configurable allowed media types (APKs, images)
 - Deduplication: blobs are checked before upload to save bandwidth
-- Local SQLite metadata store with CDN redirect for downloads
+- Local SQLite metadata store with CDN redirect for downloads, or local files when Bunny is unset
 
 ### Access Control in Defender
-- Access control is delegated to the Zapstore [defender](https://github.com/zapstore/defender).
+- Access control is delegated to the Zapstore [defender](https://github.com/zapstore/defender) when `DEFENDER_URL` is set
 - Rate-limiting, cryptographic and structural validation is kept in the relay
 
 ### Analytics
@@ -40,7 +40,7 @@ A Nostr relay and Blossom server for the Zapstore app ecosystem.
 ### Prerequisites
 
 - Go 1.25 or later
-- A BunnyCDN account with a storage zone configured
+- For production: a BunnyCDN account with a storage zone configured
 - A Nostr secret key loaded with Vertex DVM credits
 
 ### Build and Run
@@ -92,7 +92,8 @@ $SYSTEM_DIRECTORY_PATH/
 │ 
 └── data/
     ├── relay.db      # SQLite database for relay events
-    └── blossom.db    # SQLite database for blob metadata
+    ├── blossom.db    # SQLite database for blob metadata
+    └── blobs/        # Blob bytes when Bunny is unset
 ```
 
 ### Endpoints

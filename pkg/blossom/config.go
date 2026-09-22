@@ -23,6 +23,13 @@ type Config struct {
 	// The no-progress timeout for streaming uploads. Default is 30 seconds.
 	StallTimeout time.Duration `env:"BLOSSOM_STALL_TIMEOUT"`
 
+	// Dir holds blob bytes when Bunny is unset.
+	// It is always SYSTEM_DIRECTORY_PATH/data/blobs and is set by main.
+	Dir string
+
+	// SkipDefender is set by main when DEFENDER_URL is empty.
+	SkipDefender bool
+
 	Bunny bunny.Config
 }
 
@@ -75,5 +82,6 @@ func (c Config) String() string {
 		"\tAddress: %s\n"+
 		"\tAllowed Media: %v\n"+
 		"\tStall Timeout: %v\n"+
-		c.Bunny.String(), c.Hostname, c.Address, c.AllowedMedia, c.StallTimeout)
+		"\tBlob Directory: %s\n"+
+		c.Bunny.String(), c.Hostname, c.Address, c.AllowedMedia, c.StallTimeout, c.Dir)
 }

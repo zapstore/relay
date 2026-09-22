@@ -56,6 +56,9 @@ type Config struct {
 
 	// Info contains the relay's metadata, such as name, description, and supported NIPs.
 	Info Info
+
+	// SkipDefender is set by main when DEFENDER_URL is empty.
+	SkipDefender bool
 }
 
 // NewConfig create a new config with default values.

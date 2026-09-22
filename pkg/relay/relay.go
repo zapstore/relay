@@ -126,9 +126,11 @@ func Setup(
 		rely.InvalidSignature,
 		InvalidStructure,
 		NotAnchored(store),
-		NotAllowed(defender),
-		AppOwnership(store, config.Info.Pubkey),
 	)
+	if !config.SkipDefender {
+		server.Reject.Event.Append(NotAllowed(defender))
+	}
+	server.Reject.Event.Append(AppOwnership(store, config.Info.Pubkey))
 
 	server.Reject.Req.Clear()
 	server.Reject.Req.Append(
