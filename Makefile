@@ -1,7 +1,7 @@
-BUILD_DIR := build
-GO_TAGS := -tags fts5
-TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
-LDFLAGS := -s -w -X github.com/zapstore/relay/pkg/config.Version=$(TAG)
+# Deploy runs: make release REF=<tag>
+# Writes dist/out from this tree. Does not check out git.
+
+REF ?=
 
 # go-sqlite3 (fts5) and chai2010/webp both pass -lm. Apple ld warns; ignore it.
 ifeq ($(shell uname -s),Darwin)
@@ -9,41 +9,14 @@ CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
 export CGO_LDFLAGS
 endif
 
-# Build from current checkout; TAG handling happens in the recipe below.
+.PHONY: release clean
 
-.PHONY: all clean relay
-
-all: relay
-
-relay:
-	@echo "Building relay at tag $(TAG)"
-	@mkdir -p $(BUILD_DIR)
-	@set -e; \
-	if [ -z "$(TAG)" ]; then \
-		echo "No tags found" >&2; \
-		exit 1; \
-	fi; \
-	if ! git rev-parse -q --verify "refs/tags/$(TAG)" >/dev/null; then \
-		echo "Tag $(TAG) not found" >&2; \
-		exit 1; \
-	fi; \
-	if [ -n "$(TAG)" ]; then \
-		ORIG_REF="$$(git rev-parse --abbrev-ref HEAD)"; \
-		ORIG_SHA="$$(git rev-parse HEAD)"; \
-		RESTORE() { \
-			if [ "$$ORIG_REF" = "HEAD" ]; then \
-				git checkout -q "$$ORIG_SHA"; \
-			else \
-				git checkout -q "$$ORIG_REF"; \
-			fi; \
-		}; \
-		trap 'RESTORE' EXIT; \
-		git -c advice.detachedHead=false checkout -q "$(TAG)"; \
-	fi; \
-	CGO_ENABLED=1 \
-		go build $(GO_TAGS) -ldflags "$(LDFLAGS)" \
-		-o $(BUILD_DIR)/relay-$(TAG) ./cmd/; \
-	echo "Build relay commit hash $$(git rev-parse HEAD), $$(git log -1 --pretty=%s)"
+release:
+	mkdir -p dist
+	rm -rf dist/out
+	CGO_ENABLED=1 go build -tags fts5 -trimpath \
+		-ldflags '-s -w $(if $(REF),-X github.com/zapstore/relay/pkg/config.Version=$(REF))' \
+		-o dist/out ./cmd
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf dist
