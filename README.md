@@ -50,13 +50,13 @@ make release
 make release REF=v1.2.3
 ```
 
-The binary is `dist/out`. `REF` is embedded as the version.
+The binary is `dist/relay-<ref>-<arch>`, or `dist/relay-dev-<arch>` when `REF` is empty. `REF` is embedded as the version.
 
 ```bash
 cp .env.example .env
-./dist/out run
-./dist/out version
-./dist/out config
+./dist/relay-dev-$(go env GOARCH) run
+./dist/relay-dev-$(go env GOARCH) version
+./dist/relay-dev-$(go env GOARCH) config
 ```
 
 ### Data Directory Structure

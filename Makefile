@@ -1,10 +1,14 @@
-# Deploy runs: make release REF=<tag>
-# Writes dist/out from this tree. Does not check out git.
+# Deploy runs: make release REF=<ref>
+# Writes dist/<name>-<ref>-<arch>. Infra installs that file as releases/<id>-<ref>.
 
+NAME := relay
 REF ?=
+GOARCH ?= $(shell go env GOARCH)
+DIST := dist/$(NAME)-$(or $(REF),dev)-$(GOARCH)
 
 # go-sqlite3 (fts5) and chai2010/webp both pass -lm. Apple ld warns; ignore it.
-ifeq ($(shell uname -s),Darwin)
+GOOS ?= $(shell go env GOOS)
+ifeq ($(GOOS),darwin)
 CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
 export CGO_LDFLAGS
 endif
@@ -13,10 +17,10 @@ endif
 
 release:
 	mkdir -p dist
-	rm -rf dist/out
+	rm -rf $(DIST)
 	CGO_ENABLED=1 go build -tags fts5 -trimpath \
 		-ldflags '-s -w $(if $(REF),-X github.com/zapstore/relay/pkg/config.Version=$(REF))' \
-		-o dist/out ./cmd
+		-o $(DIST) ./cmd
 
 clean:
 	rm -rf dist
