@@ -4,7 +4,6 @@ go 1.25.5
 
 require (
 	github.com/caarlos0/env/v11 v11.4.0
-	github.com/chai2010/webp v1.4.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-sqlite3 v1.14.42
@@ -17,7 +16,6 @@ require (
 	github.com/pippellia-btc/rely/v2 v2.0.0-beta
 	github.com/vertex-lab/nostr-sqlite v0.7.0
 	github.com/zapstore/defender v0.3.0
-	golang.org/x/image v0.38.0
 )
 
 require (

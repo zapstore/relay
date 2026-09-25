@@ -16,7 +16,6 @@ import (
 	defenderclient "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
-	"github.com/zapstore/relay/pkg/blossom/bunny"
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
@@ -138,12 +137,8 @@ func main() {
 
 	// Step 4.
 	// Setup relay and blossom server
-	var profiles relay.ProfileUploader
-	if config.Blossom.Bunny.Configured() {
-		profiles = bunny.NewClient(config.Blossom.Bunny)
-	} else {
+	if !config.Blossom.Bunny.Configured() {
 		slog.Info("Bunny unset: writing blobs locally", "dir", config.Blossom.Dir)
-		profiles = blossom.Files{Dir: config.Blossom.Dir}
 	}
 
 	relay, err := relay.Setup(
@@ -152,7 +147,6 @@ func main() {
 		defender,
 		relayDB,
 		blossomDB,
-		profiles,
 		analytics,
 	)
 	if err != nil {

@@ -6,13 +6,6 @@ REF ?=
 GOARCH ?= $(shell go env GOARCH)
 DIST := dist/$(NAME)-$(or $(REF),dev)-$(GOARCH)
 
-# go-sqlite3 (fts5) and chai2010/webp both pass -lm. Apple ld warns; ignore it.
-GOOS ?= $(shell go env GOOS)
-ifeq ($(GOOS),darwin)
-CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
-export CGO_LDFLAGS
-endif
-
 .PHONY: release clean
 
 release:

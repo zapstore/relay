@@ -207,17 +207,6 @@ func ProfilePath(pubkey string) string {
 	return "p/" + pubkey + ".webp"
 }
 
-// UploadProfile stores a processed profile picture at its stable CDN path.
-func (c Client) UploadProfile(ctx context.Context, pubkey string, data io.Reader) error {
-	if pubkey == "" {
-		return fmt.Errorf("bunny: failed to upload profile: %w", ErrEmptyPath)
-	}
-	if err := c.upload(ctx, data, ProfilePath(pubkey), "", "image/webp"); err != nil {
-		return fmt.Errorf("bunny: failed to upload profile: %w", err)
-	}
-	return nil
-}
-
 // Delete the file at the specified path.
 // Returns nil if the file was deleted successfully, or if the file did not exist.
 func (c Client) Delete(ctx context.Context, path string) error {

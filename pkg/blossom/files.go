@@ -2,20 +2,17 @@ package blossom
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/zapstore/relay/pkg/blossom/bunny"
 )
 
 var errChecksumMismatch = errors.New("checksum mismatch")
 
-// Files stores blob and profile bytes on disk when Bunny is unset.
+// Files stores blob bytes on disk when Bunny is unset.
 type Files struct {
 	Dir string
 }
@@ -73,13 +70,4 @@ func (f Files) open(rel string) (*os.File, error) {
 		return nil, err
 	}
 	return os.Open(path)
-}
-
-// UploadProfile stores a processed profile picture next to local blobs.
-func (f Files) UploadProfile(_ context.Context, pubkey string, data io.Reader) error {
-	if pubkey == "" {
-		return bunny.ErrEmptyPath
-	}
-	_, err := f.put(bunny.ProfilePath(pubkey), data, nil)
-	return err
 }

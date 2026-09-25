@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -68,9 +67,8 @@ type T struct {
 	store     store.T
 	analytics *analytics.Engine
 
-	blossom         Blossom
-	profileUploader ProfileUploader
-	uploads         chan upload
+	blossom Blossom
+	uploads chan upload
 
 	profileJobs chan string
 }
@@ -86,12 +84,6 @@ type Blossom interface {
 	Has(ctx context.Context, hash blossom.Hash) (bool, error)
 }
 
-// ProfileUploader stores processed profile pictures in the CDN.
-type ProfileUploader interface {
-	// UploadProfile stores a processed profile picture at the stable CDN path.
-	UploadProfile(ctx context.Context, pubkey string, data io.Reader) error
-}
-
 // Setup creates a new relay instance with the given dependencies and configuration.
 // It registers all functions to the rely.Relay hooks.
 func Setup(
@@ -100,7 +92,6 @@ func Setup(
 	defender defender.T,
 	store store.T,
 	blssm Blossom,
-	profileUploader ProfileUploader,
 	analytics *analytics.Engine,
 ) (*T, error) {
 
@@ -149,10 +140,9 @@ func Setup(
 		store:     store,
 		analytics: analytics,
 
-		blossom:         blssm,
-		profileUploader: profileUploader,
-		uploads:         make(chan upload, 100),
-		profileJobs:     make(chan string, 100),
+		blossom:     blssm,
+		uploads:     make(chan upload, 100),
+		profileJobs: make(chan string, 100),
 	}
 
 	server.On.Event = relay.save
