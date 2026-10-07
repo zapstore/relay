@@ -1,5 +1,11 @@
--- Zapstore schema extensions for tag indexing and full-text search.
+-- Zapstore schema extensions for tag indexing.
 -- Note: 'd' tags for kinds 30000-39999 are already indexed by the base schema.
+--
+-- Older builds kept an FTS5 index (apps_fts). Search is vector search now.
+-- Drop the triggers so an insert does not write that index. The table is unused.
+
+DROP TRIGGER IF EXISTS app_fts_ai;
+DROP TRIGGER IF EXISTS app_fts_ad;
 
 -- Pending events are events that have been received but not yet promoted to the main event table.
 -- Because of that, they can't be served by the relay.
@@ -26,14 +32,6 @@ BEGIN
 		AND length(json_extract(value, '$[0]')) = 1;
 END;
 
-CREATE VIRTUAL TABLE IF NOT EXISTS apps_fts USING fts5(
-	id UNINDEXED,
-	name,
-	summary,
-	content,
-	tokenize = 'trigram'
-);
-
 -- KindApp (32267) - multi-character tag indexing
 CREATE TRIGGER IF NOT EXISTS app_tags_ai AFTER INSERT ON events
 WHEN NEW.kind = 32267
@@ -44,27 +42,6 @@ BEGIN
 	WHERE json_type(value) = 'array'
 		AND json_array_length(value) > 1
 		AND json_extract(value, '$[0]') IN ('name', 'license', 'url', 'repository');
-END;
-
--- Full-text search index for apps
-CREATE TRIGGER IF NOT EXISTS app_fts_ai AFTER INSERT ON events
-WHEN NEW.kind = 32267
-BEGIN
-	INSERT INTO apps_fts (id, name, summary, content)
-	VALUES (
-		NEW.id,
-		(SELECT json_extract(value, '$[1]') FROM json_each(NEW.tags)
-			WHERE json_extract(value, '$[0]') = 'name' LIMIT 1),
-		(SELECT json_extract(value, '$[1]') FROM json_each(NEW.tags)
-			WHERE json_extract(value, '$[0]') = 'summary' LIMIT 1),
-		NEW.content
-	);
-END;
-
-CREATE TRIGGER IF NOT EXISTS app_fts_ad AFTER DELETE ON events
-WHEN OLD.kind = 32267
-BEGIN
-	DELETE FROM apps_fts WHERE id = OLD.id;
 END;
 
 -- KindRelease (30063) - multi-character tag indexing

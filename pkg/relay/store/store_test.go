@@ -18,217 +18,109 @@ import (
 var ctx = context.Background()
 
 func TestSearchQuery(t *testing.T) {
-	since := nostr.Timestamp(1700000000)
-	until := nostr.Timestamp(1800000000)
-
-	tests := []struct {
-		name   string
-		filter nostr.Filter
-		want   sqlite.Query
-	}{
-		{
-			name: "basic search",
-			filter: nostr.Filter{
-				Kinds:  []int{events.KindApp},
-				Search: "signal",
-				Limit:  50,
-			},
-			want: sqlite.Query{
-				SQL: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
+	got, err := searchQuery(nostr.Filter{
+		Kinds:  []int{events.KindApp},
+		Search: "https://github.com/example/app.git",
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatalf("searchQuery() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("searchQuery() returned %d queries, want 1", len(got))
+	}
+	want := sqlite.Query{
+		SQL: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
 		FROM events e
-		JOIN apps_fts fts ON e.id = fts.id
-		WHERE apps_fts MATCH ?
-		ORDER BY bm25(apps_fts, 0, 20, 5, 1)
+		JOIN tags t ON t.event_id = e.id
+		WHERE e.kind = 32267
+		  AND t.key = 'repository'
+		  AND (t.value = ? OR t.value = ?)
 		LIMIT ?`,
-				Args: []any{"\"signal\"", 50},
-			},
-		},
-		{
-			name: "search with IDs",
-			filter: nostr.Filter{
-				Kinds:  []int{events.KindApp},
-				Search: "signal",
-				IDs:    []string{"abc123", "def456"},
-				Limit:  10,
-			},
-			want: sqlite.Query{
-				SQL: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM events e
-		JOIN apps_fts fts ON e.id = fts.id
-		WHERE apps_fts MATCH ? AND e.id IN (?,?)
-		ORDER BY bm25(apps_fts, 0, 20, 5, 1)
-		LIMIT ?`,
-				Args: []any{"\"signal\"", "abc123", "def456", 10},
-			},
-		},
-		{
-			name: "search with authors",
-			filter: nostr.Filter{
-				Kinds:   []int{events.KindApp},
-				Search:  "signal",
-				Authors: []string{"pubkey1", "pubkey2"},
-				Limit:   20,
-			},
-			want: sqlite.Query{
-				SQL: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM events e
-		JOIN apps_fts fts ON e.id = fts.id
-		WHERE apps_fts MATCH ? AND e.pubkey IN (?,?)
-		ORDER BY bm25(apps_fts, 0, 20, 5, 1)
-		LIMIT ?`,
-				Args: []any{"\"signal\"", "pubkey1", "pubkey2", 20},
-			},
-		},
-		{
-			name: "search with since and until",
-			filter: nostr.Filter{
-				Kinds:  []int{events.KindApp},
-				Search: "signal",
-				Since:  &since,
-				Until:  &until,
-				Limit:  100,
-			},
-			want: sqlite.Query{
-				SQL: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM events e
-		JOIN apps_fts fts ON e.id = fts.id
-		WHERE apps_fts MATCH ? AND e.created_at >= ? AND e.created_at <= ?
-		ORDER BY bm25(apps_fts, 0, 20, 5, 1)
-		LIMIT ?`,
-				Args: []any{"\"signal\"", int64(1700000000), int64(1800000000), 100},
-			},
-		},
-		{
-			name: "search with tags",
-			filter: nostr.Filter{
-				Kinds:  []int{events.KindApp},
-				Search: "signal",
-				Tags:   nostr.TagMap{"t": {"productivity", "tools"}},
-				Limit:  25,
-			},
-			want: sqlite.Query{
-				SQL: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM events e
-		JOIN apps_fts fts ON e.id = fts.id
-		WHERE apps_fts MATCH ? AND EXISTS (SELECT 1 FROM tags WHERE event_id = e.id AND key = ? AND value IN (?,?))
-		ORDER BY bm25(apps_fts, 0, 20, 5, 1)
-		LIMIT ?`,
-				Args: []any{"\"signal\"", "t", "productivity", "tools", 25},
-			},
-		},
+		Args: []any{"https://github.com/example/app", "https://github.com/example/app.git", 10},
+	}
+	if got[0].SQL != want.SQL {
+		t.Errorf("SQL mismatch\ngot:  %q\nwant: %q", got[0].SQL, want.SQL)
+	}
+	if !reflect.DeepEqual(got[0].Args, want.Args) {
+		t.Errorf("Args mismatch\ngot:  %v\nwant: %v", got[0].Args, want.Args)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := searchQuery(tt.filter)
-			if err != nil {
-				t.Fatalf("searchQuery() error = %v", err)
-			}
-
-			if len(got) != 1 {
-				t.Fatalf("searchQuery() returned %d queries, want 1", len(got))
-			}
-
-			if got[0].SQL != tt.want.SQL {
-				t.Errorf("SQL mismatch\ngot:  %q\nwant: %q", got[0].SQL, tt.want.SQL)
-			}
-
-			if !reflect.DeepEqual(got[0].Args, tt.want.Args) {
-				t.Errorf("Args mismatch\ngot:  %v\nwant: %v", got[0].Args, tt.want.Args)
-			}
-		})
+	if _, err := searchQuery(nostr.Filter{Kinds: []int{events.KindApp}, Search: "signal"}); !errors.Is(err, ErrUnsupportedREQ) {
+		t.Fatalf("text search error = %v, want ErrUnsupportedREQ", err)
 	}
 }
 
-func TestStoreQueryAppSearch(t *testing.T) {
+func TestValidateSearch(t *testing.T) {
+	repo := nostr.Filter{Kinds: []int{events.KindApp}, Search: "github.com/example/app"}
+	if err := Validate(repo); err != nil {
+		t.Fatalf("repository URL: %v", err)
+	}
+	if err := Validate(nostr.Filter{Kinds: []int{events.KindApp}, Search: "signal"}); !errors.Is(err, ErrUnsupportedREQ) {
+		t.Fatalf("text search error = %v, want ErrUnsupportedREQ", err)
+	}
+	if err := Validate(repo, repo); !errors.Is(err, ErrUnsupportedREQ) {
+		t.Fatalf("two search filters error = %v, want ErrUnsupportedREQ", err)
+	}
+}
+
+func TestStoreQueryRepository(t *testing.T) {
 	store, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 	defer store.Close()
 
-	// Save multiple apps with varying relevance to "signal"
-	apps := []*nostr.Event{
-		{
-			ID:        "app1",
-			PubKey:    "pubkey1",
-			CreatedAt: nostr.Timestamp(1700000001),
-			Kind:      events.KindApp,
-			Tags: nostr.Tags{
-				{"d", "org.signal.app"},
-				{"name", "Signal"},
-				{"summary", "Private messenger"},
-				{"f", "android-arm64-v8a"},
-			},
-			Content: "Signal is a privacy-focused messaging app.",
-			Sig:     "sig1",
+	app := &nostr.Event{
+		ID:        "app1",
+		PubKey:    "pubkey1",
+		CreatedAt: nostr.Timestamp(1700000001),
+		Kind:      events.KindApp,
+		Tags: nostr.Tags{
+			{"d", "org.signal.app"},
+			{"name", "Signal"},
+			{"repository", "https://github.com/signalapp/Signal-Android.git"},
 		},
-		{
-			ID:        "app2",
-			PubKey:    "pubkey2",
-			CreatedAt: nostr.Timestamp(1700000002),
-			Kind:      events.KindApp,
-			Tags: nostr.Tags{
-				{"d", "org.telegram.messenger"},
-				{"name", "Telegram"},
-				{"summary", "Cloud-based messenger"},
-				{"f", "android-arm64-v8a"},
-			},
-			Content: "Telegram is a cloud-based messaging app. Some say it's an alternative to Signal.",
-			Sig:     "sig2",
-		},
-		{
-			ID:        "app3",
-			PubKey:    "pubkey3",
-			CreatedAt: nostr.Timestamp(1700000003),
-			Kind:      events.KindApp,
-			Tags: nostr.Tags{
-				{"d", "com.whatsapp"},
-				{"name", "WhatsApp"},
-				{"summary", "Popular messenger"},
-				{"f", "android-arm64-v8a"},
-			},
-			Content: "WhatsApp is a popular messaging application.",
-			Sig:     "sig3",
-		},
-		{
-			ID:        "app4",
-			PubKey:    "pubkey4",
-			CreatedAt: nostr.Timestamp(1700000004),
-			Kind:      events.KindApp,
-			Tags: nostr.Tags{
-				{"d", "com.signal.signaling"},
-				{"name", "Signal Signaling"},
-				{"summary", "Signal Signaling is the signaling protocol for Signal."},
-				{"f", "android-x86"}, // different platform, so it should not be returned
-			},
-			Content: "Signal Signaling is the signaling protocol for Signal.",
-			Sig:     "sig4",
-		},
+		Content: "Signal is a privacy-focused messaging app.",
+		Sig:     "sig1",
 	}
-
-	for _, app := range apps {
-		if _, err := store.Save(ctx, app); err != nil {
-			t.Fatalf("failed to save app %s: %v", app.ID, err)
+	other := &nostr.Event{
+		ID:        "app2",
+		PubKey:    "pubkey2",
+		CreatedAt: nostr.Timestamp(1700000002),
+		Kind:      events.KindApp,
+		Tags: nostr.Tags{
+			{"d", "org.telegram.messenger"},
+			{"name", "Telegram"},
+			{"repository", "https://github.com/telegramdesktop/tdesktop"},
+		},
+		Content: "Telegram.",
+		Sig:     "sig2",
+	}
+	for _, event := range []*nostr.Event{app, other} {
+		if _, err := store.Save(ctx, event); err != nil {
+			t.Fatalf("failed to save app %s: %v", event.ID, err)
 		}
 	}
 
-	// Query for "signal"
-	filter := nostr.Filter{
+	results, err := store.Query(ctx, nostr.Filter{
 		Kinds:  []int{events.KindApp},
-		Search: "signal",
-		Tags:   nostr.TagMap{"f": {"android-arm64-v8a"}},
-		Limit:  50,
-	}
-
-	results, err := store.Query(ctx, filter)
+		Search: "github.com/signalapp/Signal-Android",
+		Limit:  10,
+	})
 	if err != nil {
 		t.Fatalf("store.Query() error = %v", err)
 	}
+	if !reflect.DeepEqual(results, []nostr.Event{*app}) {
+		t.Errorf("results mismatch\ngot:  %v\nwant: %v", results, []nostr.Event{*app})
+	}
 
-	expected := []nostr.Event{*apps[0], *apps[1]}
-	if !reflect.DeepEqual(results, expected) {
-		t.Errorf("results mismatch\ngot:  %v\nwant: %v", results, expected)
+	if _, err := store.Query(ctx, nostr.Filter{
+		Kinds:  []int{events.KindApp},
+		Search: "signal",
+		Limit:  10,
+	}); !errors.Is(err, ErrUnsupportedREQ) {
+		t.Fatalf("text search error = %v, want ErrUnsupportedREQ", err)
 	}
 }
 
@@ -258,7 +150,7 @@ func TestAppTagsIndexing(t *testing.T) {
 			{"name", "Example App"},
 			{"f", "android-arm64-v8a"},
 			{"f", "linux-x86_64"},
-			{"summary", "A short description"},               // FTS only, not in tags
+			{"summary", "A short description"},               // not indexed
 			{"icon", "https://example.com/icon.png"},         // Not indexed
 			{"image", "https://example.com/screenshot1.png"}, // Not indexed
 			{"t", "productivity"},
@@ -284,77 +176,6 @@ func TestAppTagsIndexing(t *testing.T) {
 
 	if !equalTags(got, want) {
 		t.Errorf("indexed tags mismatch\ngot:  %v\nwant: %v", got, want)
-	}
-}
-
-func TestAppFTSIndexing(t *testing.T) {
-	store, err := New(":memory:")
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	event := &nostr.Event{
-		ID:        "app123",
-		PubKey:    "pubkey123",
-		CreatedAt: nostr.Timestamp(1700000000),
-		Kind:      events.KindApp,
-		Tags: nostr.Tags{
-			{"d", "com.example.app"},
-			{"name", "Signal Messenger"},
-			{"summary", "Private messaging app"},
-			{"f", "android-arm64-v8a"},
-		},
-		Content: "Signal is a privacy-focused messaging application with end-to-end encryption.",
-		Sig:     "sig123",
-	}
-
-	if _, err := store.Save(ctx, event); err != nil {
-		t.Fatalf("failed to save event: %v", err)
-	}
-
-	// Verify FTS entry exists
-	var eventID, name, summary, content string
-	err = store.DB.QueryRowContext(ctx,
-		"SELECT id, name, summary, content FROM apps_fts WHERE id = ?",
-		event.ID,
-	).Scan(&eventID, &name, &summary, &content)
-	if err != nil {
-		t.Fatalf("failed to query apps_fts: %v", err)
-	}
-
-	if eventID != event.ID {
-		t.Errorf("id mismatch: got %q, want %q", eventID, event.ID)
-	}
-	if name != "Signal Messenger" {
-		t.Errorf("name mismatch: got %q, want %q", name, "Signal Messenger")
-	}
-	if summary != "Private messaging app" {
-		t.Errorf("summary mismatch: got %q, want %q", summary, "Private messaging app")
-	}
-	if content != event.Content {
-		t.Errorf("content mismatch: got %q, want %q", content, event.Content)
-	}
-
-	deleted, err := store.Delete(ctx, nostr.Filter{IDs: []string{event.ID}})
-	if err != nil {
-		t.Fatalf("failed to delete event: %v", err)
-	}
-	if deleted == 0 {
-		t.Fatal("event was not deleted")
-	}
-
-	// Verify FTS entry is cleaned up
-	var count int
-	err = store.DB.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM apps_fts WHERE id = ?",
-		event.ID,
-	).Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query apps_fts: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("FTS entry not cleaned up: got %d entries, want 0", count)
 	}
 }
 

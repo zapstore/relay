@@ -87,10 +87,9 @@ var ZapstoreFilters = []nostr.Filters{
 		Limit:   4,
 	}},
 	{{
-		// Single filter, looking for specific apps with search
+		// Single filter, looking up an app by repository URL.
 		Kinds:  []int{events.KindApp},
-		Tags:   nostr.TagMap{"f": []string{"android-arm64-v8a"}},
-		Search: "white",
+		Search: "https://github.com/zapstore/zapstore",
 		Limit:  16,
 	}},
 	{

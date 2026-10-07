@@ -26,7 +26,7 @@ bin:
 	mkdir -p dist
 	rm -rf $(BIN)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) \
-		go build $(GOFLAGS) -tags fts5 -ldflags '$(LDFLAGS)' \
+		go build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
 		-o $(BIN) $(CMD)
 
 darwin-arm64:

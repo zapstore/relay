@@ -196,6 +196,8 @@ func findAll(tags nostr.Tags, key string) []string {
 }
 
 // Validate returns an error if the given filters are not supported.
+// Text search is not supported. A repository URL in the search field is an
+// exact match on the repository tag.
 func Validate(filters ...nostr.Filter) error {
 	if len(filters) == 0 {
 		return errors.New("no filter provided")
@@ -204,24 +206,21 @@ func Validate(filters ...nostr.Filter) error {
 		return nil
 	}
 	if len(filters) > 1 {
-		// We don't support multiple filters when at least one is using NIP-50 search
-		// because the order of the result events will inevitably be ambiguous.
-		return fmt.Errorf("%w: there can only be one filter per REQ when using NIP-50 search", ErrUnsupportedREQ)
+		// One search filter per REQ. Several would make the result order ambiguous.
+		return fmt.Errorf("%w: there can only be one filter per REQ when using search", ErrUnsupportedREQ)
 	}
 	if !slices.Equal(filters[0].Kinds, []int{events.KindApp}) {
-		return fmt.Errorf("%w: we allow NIP-50 search only for kind %d", ErrUnsupportedREQ, events.KindApp)
+		return fmt.Errorf("%w: search is only allowed for kind %d", ErrUnsupportedREQ, events.KindApp)
 	}
-	if len(filters[0].Search) < 3 {
-		// The trigram tokenizer requires at least 3 chars, as well as the repoURL search.
-		return fmt.Errorf("%w: search term must be at least 3 characters", ErrUnsupportedREQ)
+	if _, ok := repourl.Parse(filters[0].Search); !ok {
+		return fmt.Errorf("%w: text search is not supported", ErrUnsupportedREQ)
 	}
 	return nil
 }
 
-// queryBuilder handles FTS search for apps when there's exactly one app search filter.
-// When the search term is a repository URL (any host, /:user/:repo path), it performs
-// an exact match on the `repository` tag instead of FTS. Otherwise, it delegates to
-// the default query builder.
+// queryBuilder matches a repository URL in the search field against the
+// repository tag. Any other search is rejected. Filters without a search
+// field use the default query builder.
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if err := Validate(filters...); err != nil {
 		return nil, err
@@ -266,80 +265,14 @@ func repositoryURLQuery(filter nostr.Filter) ([]sqlite.Query, error) {
 	return []sqlite.Query{{SQL: query, Args: []any{canonical, withGit, limit}}}, nil
 }
 
-// appSearchQuery builds an FTS query for searching apps.
-// Results are ordered by BM25 relevance with custom weights.
+// searchQuery matches a repository URL against the repository tag.
 func searchQuery(f nostr.Filter) ([]sqlite.Query, error) {
-	// Repository URL search: exact match on the `repository` tag (no FTS).
-	// Accepts any /:user/:repo URL (GitHub, GitLab, Codeberg, etc.) with or
-	// without a scheme and with or without trailing path/query.
-	if r, ok := repourl.Parse(f.Search); ok {
-		f.Search = r.Canonical
-		return repositoryURLQuery(f)
+	r, ok := repourl.Parse(f.Search)
+	if !ok {
+		return nil, fmt.Errorf("%w: text search is not supported", ErrUnsupportedREQ)
 	}
-
-	f.Search = escapeFTS5(f.Search)
-	conditions, args := appSearchSql(f)
-
-	query := `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM events e
-		JOIN apps_fts fts ON e.id = fts.id
-		WHERE ` + strings.Join(conditions, " AND ") + `
-		ORDER BY bm25(apps_fts, 0, 20, 5, 1)
-		LIMIT ?`
-
-	args = append(args, f.Limit)
-	return []sqlite.Query{{SQL: query, Args: args}}, nil
-}
-
-// appSearchSql converts a nostr.Filter into SQL conditions and arguments.
-// Tags are filtered using subqueries to avoid JOIN and GROUP BY,
-// which would break bm25() ranking.
-func appSearchSql(filter nostr.Filter) (conditions []string, args []any) {
-	conditions = []string{"apps_fts MATCH ?"}
-	args = []any{filter.Search}
-
-	if len(filter.IDs) > 0 {
-		conditions = append(conditions, "e.id"+inClause(len(filter.IDs)))
-		for _, id := range filter.IDs {
-			args = append(args, id)
-		}
-	}
-
-	if len(filter.Authors) > 0 {
-		conditions = append(conditions, "e.pubkey"+inClause(len(filter.Authors)))
-		for _, pk := range filter.Authors {
-			args = append(args, pk)
-		}
-	}
-
-	if filter.Since != nil {
-		conditions = append(conditions, "e.created_at >= ?")
-		args = append(args, filter.Since.Time().Unix())
-	}
-
-	if filter.Until != nil {
-		conditions = append(conditions, "e.created_at <= ?")
-		args = append(args, filter.Until.Time().Unix())
-	}
-
-	for key, vals := range filter.Tags {
-		if len(vals) == 0 {
-			continue
-		}
-		conditions = append(conditions,
-			"EXISTS (SELECT 1 FROM tags WHERE event_id = e.id AND key = ? AND value"+inClause(len(vals))+")")
-		args = append(args, key)
-		for _, v := range vals {
-			args = append(args, v)
-		}
-	}
-	return conditions, args
-}
-
-// escapeFTS5 prepares a search term for SQLite FTS5
-func escapeFTS5(term string) string {
-	term = strings.ReplaceAll(term, `"`, `""`)
-	return `"` + term + `"`
+	f.Search = r.Canonical
+	return repositoryURLQuery(f)
 }
 
 // inClause returns " = ?" for a single value or " IN (?, ?, ...)" for multiple values.

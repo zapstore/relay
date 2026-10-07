@@ -1,7 +1,7 @@
 root = "."
 
 [build]
-  cmd         = "go build -o build/relay -tags \"fts5\" ./cmd/main.go"
+  cmd         = "go build -o build/relay ./cmd/main.go"
   entrypoint  = ["build/relay", "run"]
   include_ext = ["go", "html", "css", "js"]
   exclude_dir = ["build", "cmd", "tests"]
