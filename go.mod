@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/nbd-wtf/go-nostr v0.52.3
