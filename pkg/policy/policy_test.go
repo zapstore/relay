@@ -24,6 +24,17 @@ func testStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(`CREATE TABLE events (
+		id TEXT PRIMARY KEY,
+		pubkey TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		kind INTEGER NOT NULL,
+		tags TEXT NOT NULL,
+		content TEXT NOT NULL,
+		sig TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
 	store, err := Open(db)
 	if err != nil {
 		t.Fatal(err)

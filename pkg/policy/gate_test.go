@@ -2,9 +2,13 @@ package policy
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zapstore/relay/pkg/events"
 )
 
 const (
@@ -56,15 +60,9 @@ func TestGateAdmit(t *testing.T) {
 		}
 	}
 	// Catalog key and paid publisher never reach the web of trust.
+	// Trusted developer and stranger do.
 	if wot.calls != 2 {
 		t.Fatalf("web of trust calls = %d, want 2", wot.calls)
-	}
-	var n int
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admissions WHERE "check" = ?`, CheckPaid).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("paid admissions = %d, %v", n, err)
-	}
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admissions WHERE "check" = ? AND score = 0.9`, CheckWebOfTrust).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("web of trust admissions = %d, %v", n, err)
 	}
 }
 
@@ -135,5 +133,68 @@ func TestAllowedList(t *testing.T) {
 	ok, err := store.Allowed(ctx, pub)
 	if err != nil || ok {
 		t.Fatalf("still allowed: %v %v", ok, err)
+	}
+}
+
+func TestGateSkipsVertexAfterAppPublish(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	wot := &fakeWoT{scores: map[string]float64{devKey: 0.1}}
+	gate := NewGate(store, catalogKey, wot)
+	if _, err := store.db.Exec(`INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig) VALUES ('rel', ?, 1, 30063, '[]', '', 'sig')`, devKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Admit(ctx, devKey); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("release only: %v", err)
+	}
+	if wot.calls != 1 {
+		t.Fatalf("calls = %d, want 1", wot.calls)
+	}
+	if _, err := store.db.Exec(`INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig) VALUES ('app', ?, 1, ?, '[]', '', 'sig')`, devKey, events.KindApp); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Admit(ctx, devKey); err != nil {
+		t.Fatal(err)
+	}
+	if wot.calls != 1 {
+		t.Fatalf("calls after app = %d, want 1", wot.calls)
+	}
+}
+
+func TestMigrateAllowed(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "policy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(`CREATE TABLE events (
+		id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, created_at INTEGER NOT NULL,
+		kind INTEGER NOT NULL, tags TEXT NOT NULL, content TEXT NOT NULL, sig TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE allowed (
+			kind TEXT NOT NULL, id TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL,
+			PRIMARY KEY (kind, id)
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO allowed (kind, id, reason, created_at) VALUES ('nostr', ?, 'paid', 1)`, paidKey); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := store.Allowed(context.Background(), Publisher{Kind: KindNostr, ID: paidKey})
+	if err != nil || !ok {
+		t.Fatalf("migrated paid access: %v %v", ok, err)
+	}
+	var name string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'allowed'`).Scan(&name)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("old table still present: %v %q", err, name)
 	}
 }

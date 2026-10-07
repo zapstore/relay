@@ -145,7 +145,7 @@ func TestLocalUploadWritesBytes(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPut, "http://localhost/upload", bytes.NewReader(payload))
-	hints := blossy.UploadHints{Hash: &hash, Type: "text/plain", Size: int64(len(payload))}
+	hints := blossy.UploadHints{Hash: &hash, Type: "image/png", Size: int64(len(payload))}
 	desc, berr := b.upload(fakeRequest{raw: req, pubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}, hints, bytes.NewReader(payload))
 	if berr != nil {
 		t.Fatalf("upload: %v", berr)
@@ -154,7 +154,7 @@ func TestLocalUploadWritesBytes(t *testing.T) {
 		t.Fatalf("descriptor = %+v", desc)
 	}
 
-	got, err := os.ReadFile(filepath.Join(dir, BlobPath(hash, "text/plain")))
+	got, err := os.ReadFile(filepath.Join(dir, BlobPath(hash, "image/png")))
 	if err != nil {
 		t.Fatal(err)
 	}

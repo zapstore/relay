@@ -23,7 +23,7 @@ type Config struct {
 	// The no-progress timeout for streaming uploads. Default is 30 seconds.
 	StallTimeout time.Duration `env:"BLOSSOM_STALL_TIMEOUT"`
 
-	// PruneInterval is how often unreferenced APKs are removed from Bunny and the local blob directory.
+	// PruneInterval is how often unreferenced blobs are removed from Bunny and the local blob directory.
 	// Zero disables the job. Default is 24 hours.
 	PruneInterval time.Duration `env:"PRUNE_INTERVAL"`
 
@@ -39,15 +39,12 @@ func NewConfig() Config {
 		Address: "localhost:3335",
 		AllowedMedia: []string{
 			"application/vnd.android.package-archive",
-			"application/x-executable",
-			"application/x-mach-binary",
 			"image/jpeg",
 			"image/png",
 			"image/webp",
 			"image/gif",
 			"image/heic",
 			"image/heif",
-			"image/svg+xml",
 		},
 		StallTimeout:  30 * time.Second,
 		PruneInterval: 24 * time.Hour,

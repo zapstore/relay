@@ -64,7 +64,32 @@ func Open(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("policy schema: %w", err)
 	}
+	if err := migrateAllowed(db); err != nil {
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrateAllowed copies the old paid-publisher table when a database still has it.
+func migrateAllowed(db *sql.DB) error {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'allowed'`).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("policy schema: %w", err)
+	}
+	if _, err := db.Exec(`
+		INSERT OR IGNORE INTO paid_access (kind, id, reason, created_at)
+		SELECT kind, id, reason, created_at FROM allowed
+	`); err != nil {
+		return fmt.Errorf("migrate allowed: %w", err)
+	}
+	if _, err := db.Exec(`DROP TABLE allowed`); err != nil {
+		return fmt.Errorf("migrate allowed: %w", err)
+	}
+	return nil
 }
 
 // Normalize checks a publisher id.

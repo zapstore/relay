@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // CreateBundle writes snapshot n+1 and the bundle from n to n+1.
@@ -148,7 +149,12 @@ func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signe
 	if err != nil {
 		return nil, err
 	}
-	next := Resolve(nextEvents, "")
+	info, err := os.Stat(SnapPath(data, to))
+	at := time.Unix(bundledAt, 0)
+	if err == nil {
+		at = info.ModTime()
+	}
+	next := ResolveAt(nextEvents, "", at)
 	diff := Compare(prev, next)
 	if from == 0 {
 		diff.Apps = appIDs(next)

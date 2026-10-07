@@ -2,23 +2,20 @@ package policy
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/zapstore/relay/pkg/events"
 )
 
-// ErrNotAdmitted is returned when a publisher is neither the catalog key, a
-// paid publisher, nor above the web of trust threshold.
+// ErrNotAdmitted is returned when a publisher is not the catalog key, not in
+// paid_access, has not published a kind 32267, and is not above the web of
+// trust threshold.
 var ErrNotAdmitted = errors.New("publisher did not pass the gate")
-
-// Check names which gate a publish or upload passed. The admissions table
-// records it.
-const (
-	CheckWebOfTrust = "web of trust"
-	CheckPaid       = "paid"
-)
 
 // WebOfTrust answers whether a pubkey is above the web of trust threshold,
 // and with what score. Vertex implements it.
@@ -41,8 +38,8 @@ func NewGate(store *Store, catalogKey string, wot WebOfTrust) *Gate {
 }
 
 // Admit returns nil when pubkey may publish and ErrNotAdmitted when it may
-// not. A web of trust outage is a rejection, not a failed check. Every
-// developer admission is recorded with the check that passed.
+// not. Paid access or an existing kind 32267 is checked before Vertex. A web
+// of trust outage is a rejection, not a failed check.
 func (g *Gate) Admit(ctx context.Context, pubkey string) error {
 	if g == nil {
 		return nil
@@ -56,16 +53,22 @@ func (g *Gate) Admit(ctx context.Context, pubkey string) error {
 	}
 	paid, err := g.store.Allowed(ctx, pub)
 	if err != nil {
-		return fmt.Errorf("allowed list: %w", err)
+		return fmt.Errorf("paid access: %w", err)
 	}
 	if paid {
-		g.record(ctx, pub.ID, CheckPaid, 0)
+		return nil
+	}
+	published, err := g.store.PublishedApp(ctx, pub.ID)
+	if err != nil {
+		return fmt.Errorf("published app: %w", err)
+	}
+	if published {
 		return nil
 	}
 	if g.wot == nil {
 		return ErrNotAdmitted
 	}
-	ok, score, err := g.wot.Allow(ctx, pub.ID)
+	ok, _, err := g.wot.Allow(ctx, pub.ID)
 	if err != nil {
 		slog.Error("policy: web of trust unavailable", "err", err, "pubkey", pub.ID)
 		return ErrNotAdmitted
@@ -73,20 +76,28 @@ func (g *Gate) Admit(ctx context.Context, pubkey string) error {
 	if !ok {
 		return ErrNotAdmitted
 	}
-	g.record(ctx, pub.ID, CheckWebOfTrust, score)
 	return nil
 }
 
-func (g *Gate) record(ctx context.Context, pubkey, check string, score float64) {
-	if err := g.store.RecordAdmission(ctx, pubkey, check, score); err != nil {
-		slog.Error("policy: failed to record admission", "err", err, "pubkey", pubkey, "check", check)
+// PublishedApp reports whether pubkey has a kind 32267 in the relay.
+func (s *Store) PublishedApp(ctx context.Context, pubkey string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT 1 FROM events WHERE pubkey = ? AND kind = ? LIMIT 1
+	`, pubkey, events.KindApp).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
 	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Allowed reports whether this publisher is on the paid publisher list.
 func (s *Store) Allowed(ctx context.Context, pub Publisher) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM allowed WHERE kind = ? AND id = ?`, pub.Kind, pub.ID).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM paid_access WHERE kind = ? AND id = ?`, pub.Kind, pub.ID).Scan(&n)
 	if err != nil {
 		return false, err
 	}
@@ -101,7 +112,7 @@ func (s *Store) Allow(ctx context.Context, pub Publisher, reason string) error {
 		return ErrReason
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO allowed (kind, id, reason, created_at) VALUES (?, ?, ?, ?)
+		`INSERT INTO paid_access (kind, id, reason, created_at) VALUES (?, ?, ?, ?)
 		 ON CONFLICT(kind, id) DO UPDATE SET reason = excluded.reason`,
 		pub.Kind, pub.ID, reason, time.Now().Unix())
 	return err
@@ -114,7 +125,7 @@ func (s *Store) Disallow(ctx context.Context, kind, id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM allowed WHERE kind = ? AND id = ?`, pub.Kind, pub.ID)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM paid_access WHERE kind = ? AND id = ?`, pub.Kind, pub.ID)
 	return err
 }
 
@@ -128,7 +139,7 @@ type AllowedRow struct {
 
 // AllowedList returns the paid publisher list, newest first.
 func (s *Store) AllowedList(ctx context.Context) ([]AllowedRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT kind, id, reason, created_at FROM allowed ORDER BY created_at DESC, kind, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT kind, id, reason, created_at FROM paid_access ORDER BY created_at DESC, kind, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -142,12 +153,4 @@ func (s *Store) AllowedList(ctx context.Context) ([]AllowedRow, error) {
 		out = append(out, row)
 	}
 	return out, rows.Err()
-}
-
-// RecordAdmission stores which check a developer publish or upload passed.
-func (s *Store) RecordAdmission(ctx context.Context, pubkey, check string, score float64) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO admissions (pubkey, "check", score, created_at) VALUES (?, ?, ?, ?)`,
-		pubkey, check, score, time.Now().Unix())
-	return err
 }

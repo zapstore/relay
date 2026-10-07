@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
@@ -129,7 +130,12 @@ func (s State) Events() []nostr.Event {
 // stackPubkey selects kind 30267 stacks. An empty stackPubkey keeps every stack in the
 // input. The live relay passes the catalog key. A snapshot file passes empty: it already
 // holds the stacks that epoch shipped, including ones signed before the catalog key.
+// Resolve builds state at the current time.
 func Resolve(snapshot []nostr.Event, stackPubkey string) State {
+	return ResolveAt(snapshot, stackPubkey, time.Now())
+}
+
+func ResolveAt(snapshot []nostr.Event, stackPubkey string, at time.Time) State {
 	current := map[string]nostr.Event{}
 	assets := map[string]nostr.Event{}
 
@@ -209,11 +215,9 @@ func Resolve(snapshot []nostr.Event, stackPubkey string) State {
 	}
 	var listings []Listing
 	for _, group := range candidates {
-		chosen := group[0]
-		for _, listing := range group[1:] {
-			if betterListing(listing, chosen, proofs) {
-				chosen = listing
-			}
+		chosen, ok := chooseListing(group, proofs, at, stackPubkey)
+		if !ok {
+			continue
 		}
 		listings = append(listings, chosen)
 	}
@@ -358,18 +362,68 @@ func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets
 	}, true
 }
 
-func betterListing(next, current Listing, proofs []Proof) bool {
+func chooseListing(group []Listing, proofs []Proof, at time.Time, catalogKey string) (Listing, bool) {
+	appCert := ""
+	if catalogKey != "" {
+		for _, listing := range group {
+			if listing.App.PubKey == catalogKey {
+				if cert, ok := listingCertificate(listing); ok {
+					appCert = cert
+				}
+			}
+		}
+	}
+	var eligible []Listing
+	for _, listing := range group {
+		if catalogKey != "" && listing.App.PubKey != catalogKey && !isDeveloperSlot(listing, proofs, at, appCert) {
+			continue
+		}
+		eligible = append(eligible, listing)
+	}
+	if len(eligible) == 0 {
+		return Listing{}, false
+	}
+	chosen := eligible[0]
+	for _, listing := range eligible[1:] {
+		if betterListing(listing, chosen, proofs, at, catalogKey, appCert) {
+			chosen = listing
+		}
+	}
+	return chosen, true
+}
+
+func betterListing(next, current Listing, proofs []Proof, at time.Time, catalogKey, appCert string) bool {
 	nv := listingVersionCode(next)
 	cv := listingVersionCode(current)
 	if nv != cv {
 		return nv > cv
 	}
-	nextOwner := listingIsC1Owner(next, proofs)
-	currentOwner := listingIsC1Owner(current, proofs)
-	if nextOwner != currentOwner {
-		return nextOwner
+	nextDev := isDeveloperSlot(next, proofs, at, appCertFor(next, current, catalogKey, appCert))
+	currentDev := isDeveloperSlot(current, proofs, at, appCertFor(next, current, catalogKey, appCert))
+	if nextDev != currentDev {
+		return nextDev
 	}
 	return betterEvent(next.App, current.App)
+}
+
+func appCertFor(next, current Listing, catalogKey, appCert string) string {
+	if appCert != "" {
+		return appCert
+	}
+	if catalogKey == "" {
+		return ""
+	}
+	if next.App.PubKey == catalogKey {
+		if cert, ok := listingCertificate(next); ok {
+			return cert
+		}
+	}
+	if current.App.PubKey == catalogKey {
+		if cert, ok := listingCertificate(current); ok {
+			return cert
+		}
+	}
+	return ""
 }
 
 func listingVersionCode(listing Listing) int64 {
@@ -390,13 +444,19 @@ func listingVersionCode(listing Listing) int64 {
 	return max
 }
 
-func listingIsC1Owner(listing Listing, proofs []Proof) bool {
+func isDeveloperSlot(listing Listing, proofs []Proof, at time.Time, appCert string) bool {
 	cert, ok := listingCertificate(listing)
 	if !ok {
 		return false
 	}
-	owner, ok := c1Owner(proofs, cert)
-	return ok && owner == listing.App.PubKey
+	if appCert != "" && cert != appCert {
+		return false
+	}
+	owner, delegate, ok := c1Publisher(proofs, cert, at)
+	if !ok {
+		return false
+	}
+	return listing.App.PubKey == owner || (delegate != "" && listing.App.PubKey == delegate)
 }
 
 func listingCertificate(listing Listing) (string, bool) {
@@ -408,10 +468,18 @@ func listingCertificate(listing Listing) (string, bool) {
 	return "", false
 }
 
-func c1Owner(proofs []Proof, certHash string) (string, bool) {
+func c1Owner(proofs []Proof, certHash string, at time.Time) (string, bool) {
+	owner, _, ok := c1Publisher(proofs, certHash, at)
+	return owner, ok
+}
+
+func c1Publisher(proofs []Proof, certHash string, at time.Time) (owner, delegate string, ok bool) {
 	var best *Proof
 	for i := range proofs {
 		if proofs[i].D != certHash {
+			continue
+		}
+		if !events.ProofActive(proofs[i].Event, at) {
 			continue
 		}
 		if best == nil || betterEvent(proofs[i].Event, best.Event) {
@@ -419,9 +487,10 @@ func c1Owner(proofs []Proof, certHash string) (string, bool) {
 		}
 	}
 	if best == nil {
-		return "", false
+		return "", "", false
 	}
-	return best.Pubkey, true
+	delegate, _ = events.Find(best.Event.Tags, "delegation")
+	return best.Pubkey, delegate, true
 }
 
 func betterEvent(next, current nostr.Event) bool {

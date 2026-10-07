@@ -25,6 +25,14 @@ import (
 	"github.com/zapstore/relay/pkg/rate"
 )
 
+const (
+	apkType             = "application/vnd.android.package-archive"
+	maxAPKBytes   int64 = 300_000_000
+	maxImageBytes int64 = 500_000
+)
+
+var errTooLarge = errors.New("upload exceeds the size limit")
+
 var (
 	ErrClientGone  = &blossom.Error{Code: 499, Reason: "client request was cancelled"}
 	ErrNotFound    = blossom.ErrNotFound("blob not found")
@@ -300,7 +308,12 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 	name := BlobPath(*hints.Hash, hints.Type)
 	sha256 := hints.Hash.Hex()
 
-	reader := newStallReader(r.Context(), data, b.config.StallTimeout)
+	max, ok := maxUploadBytes(hints.Type)
+	if !ok {
+		return blossom.BlobDescriptor{}, blossom.ErrUnsupportedMedia("content type is not allowed")
+	}
+	limited := &byteLimit{r: data, max: max}
+	reader := newStallReader(r.Context(), limited, b.config.StallTimeout)
 	defer reader.Stop()
 
 	var size int64
@@ -308,6 +321,12 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 		size, err = b.files.put(name, reader, (*hints.Hash)[:])
 	} else {
 		err = b.bunny.Upload(reader.Context(), reader, name, sha256)
+	}
+	if errors.Is(err, errTooLarge) || errors.Is(limited.err, errTooLarge) || errors.Is(reader.Err(), errTooLarge) {
+		if rmErr := b.removeBlob(reader.Context(), name); rmErr != nil {
+			slog.Error("blossom: failed to remove oversized blob", "err", rmErr, "name", name)
+		}
+		return blossom.BlobDescriptor{}, blossom.ErrBadRequest("upload exceeds the size limit")
 	}
 	if errors.Is(err, errChecksumMismatch) || errors.Is(err, bunny.ErrChecksumMismatch) || errors.Is(err, bunny.ErrInvalidChecksum) {
 		b.limiter.Penalize(r.IP().Group(), 200)
@@ -481,6 +500,55 @@ func (b *T) removeBlob(ctx context.Context, name string) error {
 		return b.files.remove(name)
 	}
 	return b.bunny.Delete(ctx, name)
+}
+
+func maxUploadBytes(mime string) (int64, bool) {
+	switch mime {
+	case apkType:
+		return maxAPKBytes, true
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif":
+		return maxImageBytes, true
+	default:
+		return 0, false
+	}
+}
+
+// byteLimit counts bytes from r and returns errTooLarge once max is passed.
+type byteLimit struct {
+	r   io.Reader
+	max int64
+	n   int64
+	err error
+}
+
+func (b *byteLimit) Read(p []byte) (int, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	if b.n > b.max {
+		b.err = errTooLarge
+		return 0, errTooLarge
+	}
+	if b.n == b.max {
+		var one [1]byte
+		n, err := b.r.Read(one[:])
+		if n > 0 {
+			b.n += int64(n)
+			b.err = errTooLarge
+			return 0, errTooLarge
+		}
+		if err == nil {
+			err = io.EOF
+		}
+		b.err = err
+		return 0, err
+	}
+	if int64(len(p)) > b.max-b.n {
+		p = p[:b.max-b.n]
+	}
+	n, err := b.r.Read(p)
+	b.n += int64(n)
+	return n, err
 }
 
 func MediaNotAllowed(allowed []string) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {

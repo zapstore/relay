@@ -124,16 +124,17 @@ func main() {
 	ban := func(ctx context.Context, pub policy.Publisher, reason string) error {
 		return relay.ApplyBan(ctx, relayDB, pol, pub, reason)
 	}
-	// The gate: the catalog key, a paid publisher, or a pubkey above the
-	// web of trust threshold may publish. Without VERTEX_SECRET_KEY only the
-	// catalog key and paid publishers may publish.
+	// The gate: the catalog key, paid access, a key that already published a
+	// kind 32267, or a pubkey above the web of trust threshold may publish.
+	// Without VERTEX_SECRET_KEY only the catalog key, paid access, and keys
+	// that already published may publish.
 	var wot policy.WebOfTrust
 	if config.Vertex.Enabled() {
 		client := vertex.NewClient(config.Vertex)
 		wot = client
 		go client.WatchCredits(ctx)
 	} else {
-		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key and paid publishers may publish")
+		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key, paid access, and keys that already published may publish")
 	}
 	gate := policy.NewGate(pol, config.Relay.Info.Pubkey, wot)
 	signer, err := catalog.OpenSigner(ctx, config.Catalog.SignWith)
@@ -216,6 +217,7 @@ func main() {
 	// Step 6.
 	// Run everything
 	socketPath := filepath.Join(dataDir, "relay.sock")
+	nostrSocket := filepath.Join(dataDir, "nostr.sock")
 	mux := http.NewServeMux()
 	mux.Handle("GET /bundle", catalog.Handler{
 		Data:   dataDir,
@@ -226,7 +228,7 @@ func main() {
 	mux.Handle("POST /suggest", policy.Suggest(pol, limiter))
 	mux.Handle("/", relay.Handler())
 
-	workers := 5
+	workers := 6
 	if config.Catalog.Interval > 0 {
 		workers++
 	}
@@ -273,6 +275,14 @@ func main() {
 		}
 	}()
 
+	go func() {
+		defer wg.Done()
+		slog.Info("nostr socket", "path", nostrSocket)
+		if err := relay.ListenNostr(ctx, nostrSocket); err != nil && ctx.Err() == nil {
+			exit <- err
+		}
+	}()
+
 	if config.Catalog.Interval > 0 {
 		go func() {
 			defer wg.Done()
@@ -306,22 +316,22 @@ func notices(ctx context.Context, pol *policy.Store) map[string]string {
 
 func pruneLoop(ctx context.Context, every time.Duration, blobs *blossom.T, db *sql.DB) {
 	run := func() {
-		keep, assets, err := blossom.APKHashes(ctx, db)
+		keep, nEvents, err := blossom.ReferencedHashes(ctx, db)
 		if err != nil {
 			slog.Error("prune", "error", err)
 			return
 		}
-		if assets == 0 {
-			slog.Warn("prune: asset table is empty")
+		if nEvents == 0 {
+			slog.Warn("prune: event table is empty")
 			return
 		}
-		n, err := blobs.PruneAPKs(ctx, keep)
+		n, err := blobs.Prune(ctx, keep)
 		if err != nil {
 			slog.Error("prune", "error", err)
 			return
 		}
 		if n > 0 {
-			slog.Info("prune", "apks", n)
+			slog.Info("prune", "blobs", n)
 		}
 	}
 	run()

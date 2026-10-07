@@ -4,7 +4,6 @@ package relay
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -117,7 +116,8 @@ func Setup(
 		NotAnchored(store),
 		NotAllowed(store, pol, blssm),
 		NotAdmitted(gate),
-		AppOwnership(store, config.Info.Pubkey),
+		ListingSlots(store, config.Info.Pubkey),
+		catalogKeyOnSocket(config.Info.Pubkey),
 	)
 
 	server.Reject.Req.Clear()
@@ -265,6 +265,7 @@ func (r *T) reconcile(ctx context.Context) error {
 				errs = append(errs, fmt.Errorf("failed to delete pending event %s: %w", asset.ID, err))
 				continue
 			}
+			r.replaceOtherDeveloper(ctx, &asset)
 			if err := r.server.Broadcast(&asset); err != nil {
 				errs = append(errs, fmt.Errorf("failed to broadcast event %s: %w", asset.ID, err))
 				continue
@@ -280,47 +281,74 @@ func (r *T) reconcile(ctx context.Context) error {
 }
 
 func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
+	return r.persist(c, event).result()
+}
+
+type persistResult struct {
+	ok        bool
+	broadcast bool
+	msg       string
+}
+
+func (p persistResult) result() rely.EventResult {
+	if !p.ok {
+		return rely.Fail(p.msg)
+	}
+	res := rely.Success()
+	if !p.broadcast {
+		res = res.NoBroadcast()
+	}
+	if p.msg != "" {
+		res = res.WithReply(p.msg)
+	}
+	return res
+}
+
+func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	r.analytics.RecordEvent(c, event)
+	if r.analytics != nil {
+		r.analytics.RecordEvent(c, event)
+	}
 
 	switch {
 	case event.Kind == nostr.KindDeletion:
 		if err := r.handleDelete(ctx, event); err != nil {
 			slog.Error("relay: failed to fullfil delete", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return persistResult{msg: err.Error()}
 		}
 
 	case event.Kind == events.KindAsset:
 		isPending, err := r.saveAsset(ctx, event)
 		if err != nil {
 			slog.Error("relay: failed to save asset event", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return persistResult{msg: err.Error()}
 		}
-
 		if isPending {
-			// avoid broadcasting the event until it is fully saved
-			return rely.Success().NoBroadcast().WithReply("the event will be saved when the referenced blob is uploaded")
+			return persistResult{ok: true, msg: "the event will be saved when the referenced blob is uploaded"}
 		}
 
 	case nostr.IsRegularKind(event.Kind):
 		if _, err := r.store.Save(ctx, event); err != nil {
 			slog.Error("relay: failed to save regular event", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return persistResult{msg: err.Error()}
 		}
 
 	case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
 		saved, err := r.store.Replace(ctx, event)
 		if err != nil {
 			slog.Error("relay: failed to replace event", "event", event.ID, "error", err)
-			return rely.Fail(err.Error())
+			return persistResult{msg: err.Error()}
 		}
 		if saved && event.Kind == events.KindApp {
 			r.enqueueProfile(event.PubKey)
 		}
+		if saved && event.Kind == events.KindRelease {
+			r.replaceOtherDeveloper(ctx, event)
+		}
 	}
-	return rely.Success()
+	return persistResult{ok: true, broadcast: true}
 }
 
 // handleDelete handles deletion events, either from the operator or a regular NIP-09 deletion.
@@ -332,14 +360,18 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 	var deleted int
 	var err error
 
-	if event.PubKey == r.config.Info.Pubkey {
-		// Operator delete request
+	switch {
+	case event.PubKey == r.config.Info.Pubkey:
 		deleted, err = r.store.ForceDeleteRequest(ctx, event)
 		if err != nil {
 			return fmt.Errorf("failed to perform operator delete: %w", err)
 		}
-	} else {
-		// Regular NIP-09 deletion
+	case r.isDeveloperRemoval(ctx, event):
+		deleted, err = r.deleteAppListings(ctx, developerRemovalApp(event))
+		if err != nil {
+			return err
+		}
+	default:
 		deleted, err = r.store.DeleteRequest(ctx, event)
 		if err != nil {
 			return fmt.Errorf("failed to perform delete: %w", err)
@@ -375,6 +407,7 @@ func (r *T) saveAsset(ctx context.Context, event *nostr.Event) (isPending bool, 
 		if _, err := r.store.Save(ctx, event); err != nil {
 			return false, fmt.Errorf("failed to save the asset event: %w", err)
 		}
+		r.replaceOtherDeveloper(ctx, event)
 		return false, nil
 	}
 
@@ -467,7 +500,9 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 		return nil, err
 	}
 
-	r.analytics.RecordReq(c, id, filters, result)
+	if r.analytics != nil {
+		r.analytics.RecordReq(c, id, filters, result)
+	}
 	return result, nil
 }
 
@@ -485,6 +520,9 @@ func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Req
 
 func RateEventIP(limiter rate.Limiter) func(client rely.Client, _ *nostr.Event) error {
 	return func(client rely.Client, _ *nostr.Event) error {
+		if client.UID() == "nostr.sock" {
+			return nil
+		}
 		cost := 5.0
 		ip := client.IP().Group()
 		if !limiter.Allow(ip, cost) {
@@ -498,6 +536,9 @@ func RateEventIP(limiter rate.Limiter) func(client rely.Client, _ *nostr.Event) 
 
 func RateReqIP(limiter rate.Limiter) func(client rely.Client, id string, filters nostr.Filters) error {
 	return func(client rely.Client, id string, filters nostr.Filters) error {
+		if client.UID() == "nostr.sock" {
+			return nil
+		}
 		ip := client.IP().Group()
 		cost := 1.0
 		if len(filters) > 10 {
@@ -587,79 +628,6 @@ func InvalidStructure(_ rely.Client, e *nostr.Event) error {
 
 func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {
 	return store.Validate(filters...)
-}
-
-// AppOwnership enforces one publisher per app ID (kind 32267 d-tag) with role-aware transitions.
-//
-// Transition table:
-//   - same pubkey → same pubkey:         accept (NIP-33 replace)
-//   - indexer → non-indexer:             delete old 32267, accept (indexer takeover)
-//   - non-indexer → indexer:             delete indexer's 32267, accept (developer reclaim)
-//   - anyone else → anyone else:         reject
-func AppOwnership(db store.T, indexerPubkey string) func(_ rely.Client, e *nostr.Event) error {
-	return func(_ rely.Client, e *nostr.Event) error {
-		if e.Kind != events.KindApp {
-			return nil
-		}
-
-		appID, ok := events.Find(e.Tags, "d")
-		if !ok {
-			return nil
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		// Find any existing kind 32267 with this d-tag from a different pubkey
-		query := `SELECT e.id, e.pubkey
-					FROM events AS e JOIN tags AS t ON t.event_id = e.id
-					WHERE e.kind = ?
-					AND e.pubkey != ?
-					AND t.key = 'd' AND t.value = ?
-					LIMIT 1`
-
-		var existingID, existingPubkey string
-		err := db.DB.QueryRowContext(ctx, query, events.KindApp, e.PubKey, appID).Scan(&existingID, &existingPubkey)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			slog.Error("AppOwnership: failed to query existing app", "error", err)
-			return ErrInternal
-		}
-
-		if existingID == "" {
-			// No conflict: new app or a normal replacement by the same pubkey
-			return nil
-		}
-
-		newIsIndexer := e.PubKey == indexerPubkey
-		existingIsIndexer := existingPubkey == indexerPubkey
-
-		switch {
-		// case newIsIndexer && !existingIsIndexer:
-		// 	// Indexer takeover: delete developer's old 32267
-		// 	if err := deleteEvent(ctx, db, existingID); err != nil {
-		// 		slog.Error("AppOwnership: failed to delete old app event for indexer takeover", "event_id", existingID, "error", err)
-		// 		return ErrInternal
-		// 	}
-		// 	slog.Info("AppOwnership: indexer takeover", "app_id", appID, "old_pubkey", existingPubkey[:16])
-		// 	return nil
-
-		case existingIsIndexer && !newIsIndexer:
-			// Developer reclaim: delete indexer's app event
-			deleted, err := db.Delete(ctx, nostr.Filter{IDs: []string{existingID}})
-			if err != nil {
-				slog.Error("AppOwnership: failed to delete indexer app event for developer reclaim", "id", existingID, "error", err)
-				return ErrInternal
-			}
-			if deleted > 0 {
-				slog.Info("AppOwnership: developer reclaim", "app_id", appID, "new_pubkey", e.PubKey)
-			}
-			return nil
-
-		default:
-			// Non-indexer vs non-indexer: reject
-			return ErrAppAlreadyExists
-		}
-	}
 }
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
@@ -780,8 +748,9 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 	}
 }
 
-// NotAdmitted runs the publisher gate for listing events: the catalog key,
-// a paid publisher, or a pubkey above the web-of-trust threshold may publish.
+// NotAdmitted runs the publisher gate for listing events. The catalog key,
+// paid access, a pubkey that already published a kind 32267, or a pubkey
+// above the web-of-trust threshold may publish.
 // Other kinds pass. See the publisher policy.
 func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {

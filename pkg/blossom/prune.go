@@ -5,44 +5,71 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
-	"github.com/zapstore/relay/pkg/events"
 )
 
-const apkType = "application/vnd.android.package-archive"
+var hashInText = regexp.MustCompile(`[0-9a-f]{64}`)
 
-// APKHashes returns the file hashes named by current asset events.
-// assets is how many kind 3063 rows were read. Zero means that table is empty.
-func APKHashes(ctx context.Context, db *sql.DB) (keep map[string]struct{}, assets int, err error) {
-	rows, err := db.QueryContext(ctx, `SELECT tags FROM events WHERE kind = ?`, events.KindAsset)
+// ReferencedHashes returns file hashes named by current events and by pending events.
+// n is how many event rows were read, including pending. Zero means both tables are empty.
+func ReferencedHashes(ctx context.Context, db *sql.DB) (keep map[string]struct{}, n int, err error) {
+	keep = map[string]struct{}{}
+	rows, err := db.QueryContext(ctx, `SELECT tags FROM events`)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	keep = map[string]struct{}{}
 	for rows.Next() {
-		assets++
+		n++
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
-			return nil, assets, err
+			return nil, n, err
 		}
-		var tags nostr.Tags
-		if err := json.Unmarshal([]byte(raw), &tags); err != nil {
-			continue
-		}
-		if hash, ok := events.Find(tags, "x"); ok && hash != "" {
-			keep[hash] = struct{}{}
-		}
+		collectHashes(keep, raw)
 	}
-	return keep, assets, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, n, err
+	}
+	pending, err := db.QueryContext(ctx, `SELECT raw FROM pending_events`)
+	if err != nil {
+		return nil, n, err
+	}
+	defer pending.Close()
+	for pending.Next() {
+		n++
+		var raw string
+		if err := pending.Scan(&raw); err != nil {
+			return nil, n, err
+		}
+		collectHashes(keep, raw)
+	}
+	return keep, n, pending.Err()
 }
 
-// PruneAPKs deletes APK blobs that no current asset event names.
+func collectHashes(keep map[string]struct{}, raw string) {
+	var tags nostr.Tags
+	if err := json.Unmarshal([]byte(raw), &tags); err == nil {
+		for _, tag := range tags {
+			for _, value := range tag {
+				for _, hash := range hashInText.FindAllString(value, -1) {
+					keep[hash] = struct{}{}
+				}
+			}
+		}
+		return
+	}
+	for _, hash := range hashInText.FindAllString(raw, -1) {
+		keep[hash] = struct{}{}
+	}
+}
+
+// Prune deletes blobs that no current or pending event names.
 // keep is the set of hashes to retain. Bunny and the local blob directory are both cleared.
-func (b *T) PruneAPKs(ctx context.Context, keep map[string]struct{}) (int, error) {
-	rows, err := b.store.DB.QueryContext(ctx, `SELECT hash, type FROM blobs WHERE type = ?`, apkType)
+func (b *T) Prune(ctx context.Context, keep map[string]struct{}) (int, error) {
+	rows, err := b.store.DB.QueryContext(ctx, `SELECT hash, type FROM blobs`)
 	if err != nil {
 		return 0, err
 	}
@@ -62,7 +89,7 @@ func (b *T) PruneAPKs(ctx context.Context, keep map[string]struct{}) (int, error
 		}
 		name := BlobPath(parsed, mime)
 		if err := b.removeBlob(ctx, name); err != nil {
-			slog.Error("prune: remove apk", "err", err, "hash", hash)
+			slog.Error("prune: remove blob", "err", err, "hash", hash)
 			continue
 		}
 		if err := b.store.Delete(ctx, parsed); err != nil {

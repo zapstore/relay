@@ -46,7 +46,12 @@ func ReadSnap(path string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	return Resolve(events, ""), nil
+	info, err := os.Stat(path)
+	at := time.Now()
+	if err == nil {
+		at = info.ModTime()
+	}
+	return ResolveAt(events, "", at), nil
 }
 
 func ReadSnapEvents(path string) ([]nostr.Event, error) {

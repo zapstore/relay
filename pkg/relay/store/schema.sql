@@ -19,6 +19,13 @@ CREATE TABLE IF NOT EXISTS pending_events (
 CREATE INDEX IF NOT EXISTS idx_pending_events_kind        ON pending_events(kind);
 CREATE INDEX IF NOT EXISTS idx_pending_events_received_at ON pending_events(received_at);
 
+-- The app certificate is the indexer asset's signing certificate, or the first
+-- accepted developer asset when the indexer has not published that app id.
+CREATE TABLE IF NOT EXISTS app_certificate (
+    app_id TEXT PRIMARY KEY,
+    hash   TEXT NOT NULL
+);
+
 -- Universal single-letter tag indexing for all event kinds.
 -- Covers tags like a, e, f, i, p, t, x, A, E, K, P, etc.
 -- The base schema already indexes 'd' for addressable kinds; INSERT OR IGNORE deduplicates.

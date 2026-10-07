@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS ban_notices (
 );
 
 -- Paid publishers. Not an allow-list: it does not bypass the blacklist.
-CREATE TABLE IF NOT EXISTS allowed (
+CREATE TABLE IF NOT EXISTS paid_access (
     kind       TEXT    NOT NULL,
     id         TEXT    NOT NULL,
     reason     TEXT    NOT NULL,
@@ -25,13 +25,7 @@ CREATE TABLE IF NOT EXISTS allowed (
     PRIMARY KEY (kind, id)
 );
 
--- Which check each developer publish or upload passed.
-CREATE TABLE IF NOT EXISTS admissions (
-    pubkey     TEXT    NOT NULL,
-    "check"    TEXT    NOT NULL,
-    score      REAL    NOT NULL,
-    created_at INTEGER NOT NULL
-);
+DROP TABLE IF EXISTS admissions;
 
 CREATE TABLE IF NOT EXISTS suggestions (
     id               TEXT    PRIMARY KEY,

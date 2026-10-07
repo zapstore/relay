@@ -9,7 +9,8 @@ import (
 )
 
 // Config is the Vertex web-of-trust check. An empty SecretKey disables it,
-// and the publisher gate then admits only the catalog key and paid publishers.
+// and the publisher gate then admits the catalog key, paid access, and keys
+// that have already published a kind 32267.
 type Config struct {
 	// The algorithm to use to decide whether to allow a pubkey.
 	Algorithm Algorithm
