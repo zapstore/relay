@@ -243,23 +243,6 @@ func TestEventVerdictRejectsBlacklistedCert(t *testing.T) {
 	}
 }
 
-func TestUploadVerdictBansUploader(t *testing.T) {
-	store := testStore(t)
-	ctx := context.Background()
-	hash := strings.Repeat("cd", 32)
-	uploader := strings.Repeat("66", 32)
-	if err := store.RecordBan(ctx, Publisher{Kind: KindNostr, ID: strings.Repeat("11", 32)}, "bad blob", []string{hash}, nil); err != nil {
-		t.Fatal(err)
-	}
-	verdict, err := store.UploadVerdict(ctx, uploader, hash)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !verdict.Reject || !verdict.BanPublisher || len(verdict.Publishers) != 1 || verdict.Publishers[0].ID != uploader {
-		t.Fatalf("verdict %+v", verdict.Publishers)
-	}
-}
-
 func TestSuggestNormalizesScheme(t *testing.T) {
 	store := testStore(t)
 	bare, stored, err := store.PutSuggestion(context.Background(), "github.com/good/app", "", "")

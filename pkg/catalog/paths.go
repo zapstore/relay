@@ -16,14 +16,6 @@ func AppDir(data, appID string) string {
 	return filepath.Join(ArtifactDir(data), appID)
 }
 
-// removeAppDir deletes one artifact directory. The id must be a single path segment.
-func removeAppDir(data, appID string) error {
-	if appID == "" || appID != filepath.Base(appID) || strings.Contains(appID, "..") {
-		return fmt.Errorf("app id %q", appID)
-	}
-	return os.RemoveAll(AppDir(data, appID))
-}
-
 // avatarFilename is <64 hex characters>.webp, on disk and in the bundle.
 func avatarFilename(pubkey string) (string, error) {
 	if len(pubkey) != 64 {

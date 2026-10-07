@@ -7,9 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"github.com/nbd-wtf/go-nostr"
-	"github.com/zapstore/relay/pkg/events"
 )
 
 // CreateBundle writes snapshot n+1 and the bundle from n to n+1.
@@ -103,33 +100,6 @@ func appIDs(st State) []string {
 	out := make([]string, len(st.Listings))
 	for i, listing := range st.Listings {
 		out[i] = listing.AppID
-	}
-	return out
-}
-
-func avatarFiles(data string) []string {
-	entries, err := os.ReadDir(ArtifactDir(data))
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if isAvatarFilename(entry.Name()) {
-			out = append(out, entry.Name())
-		}
-	}
-	return out
-}
-
-func keepKind0(in []nostr.Event) []nostr.Event {
-	var out []nostr.Event
-	for _, event := range in {
-		if event.Kind == events.KindProfile {
-			out = append(out, event)
-		}
 	}
 	return out
 }

@@ -201,28 +201,6 @@ func (s *Store) Notices(ctx context.Context) (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// ReadNotices reads ban notices from an already-open database.
-// A missing table returns an empty map.
-func ReadNotices(ctx context.Context, db *sql.DB) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT app_id, reason FROM ban_notices`)
-	if err != nil {
-		if strings.Contains(err.Error(), "no such table") {
-			return map[string]string{}, nil
-		}
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var appID, reason string
-		if err := rows.Scan(&appID, &reason); err != nil {
-			return nil, err
-		}
-		out[appID] = reason
-	}
-	return out, rows.Err()
-}
-
 // PutSuggestion stores a suggestion. A blacklisted forge account or certificate is not stored.
 // stored is false when the row was skipped. id is stable for the same input either way.
 func (s *Store) PutSuggestion(ctx context.Context, repository, releaseSource, certificateHash string) (id string, stored bool, err error) {
@@ -473,28 +451,6 @@ func normalizeURL(raw string) (string, error) {
 		return "", fmt.Errorf("%w: invalid url", ErrSuggest)
 	}
 	return u.String(), nil
-}
-
-// UploadVerdict checks a Blossom upload. A known hash bans the uploading key.
-func (s *Store) UploadVerdict(ctx context.Context, pubkey, hash string) (Verdict, error) {
-	var v Verdict
-	if ok, err := s.blacklistedID(ctx, KindNostr, pubkey); err != nil {
-		return v, err
-	} else if ok {
-		v.Reject = true
-		return v, nil
-	}
-	reason, banned, err := s.HashReason(ctx, hash)
-	if err != nil || !banned {
-		return v, err
-	}
-	v.Reject = true
-	v.BanPublisher = true
-	v.Reason = reason
-	if pub, err := Normalize(KindNostr, pubkey); err == nil {
-		v.Publishers = append(v.Publishers, pub)
-	}
-	return v, nil
 }
 
 // Listing is one stored app, release, or asset event.

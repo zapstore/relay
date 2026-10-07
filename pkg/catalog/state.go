@@ -1,9 +1,6 @@
 package catalog
 
 import (
-	"cmp"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -126,64 +123,6 @@ func (s State) Events() []nostr.Event {
 		out = append(out, relay.Event)
 	}
 	return out
-}
-
-// Hash is the deterministic SHA-256 of canonical catalog state.
-func (s State) Hash() string {
-	sum := sha256.Sum256(s.canonicalBytes())
-	return hex.EncodeToString(sum[:])
-}
-
-func (s State) canonicalBytes() []byte {
-	listings := append([]Listing(nil), s.Listings...)
-	slices.SortFunc(listings, func(a, b Listing) int {
-		return strings.Compare(a.AppID, b.AppID)
-	})
-	proofs := append([]Proof(nil), s.Proofs...)
-	slices.SortFunc(proofs, func(a, b Proof) int {
-		if c := strings.Compare(a.Pubkey, b.Pubkey); c != 0 {
-			return c
-		}
-		return strings.Compare(a.D, b.D)
-	})
-	var b strings.Builder
-	for _, listing := range listings {
-		ids := make([]string, len(listing.Assets))
-		for i, asset := range listing.Assets {
-			ids[i] = asset.ID
-		}
-		slices.Sort(ids)
-		fmt.Fprintf(&b, "L\t%s\t%s\t%s\t%s\n",
-			listing.AppID, listing.App.ID, listing.Release.ID, strings.Join(ids, ","))
-	}
-	for _, proof := range proofs {
-		fmt.Fprintf(&b, "P\t%d\t%s\t%s\t%s\n", events.KindIdentityProof, proof.Pubkey, proof.D, proof.Event.ID)
-	}
-	stacks := append([]Stack(nil), s.Stacks...)
-	slices.SortFunc(stacks, func(a, b Stack) int {
-		if c := strings.Compare(a.Pubkey, b.Pubkey); c != 0 {
-			return c
-		}
-		return strings.Compare(a.D, b.D)
-	})
-	for _, stack := range stacks {
-		fmt.Fprintf(&b, "S\t%d\t%s\t%s\t%s\n", events.KindStack, stack.Pubkey, stack.D, stack.Event.ID)
-	}
-	profiles := append([]Profile(nil), s.Profiles...)
-	slices.SortFunc(profiles, func(a, b Profile) int {
-		return strings.Compare(a.Pubkey, b.Pubkey)
-	})
-	for _, profile := range profiles {
-		fmt.Fprintf(&b, "K\t%d\t%s\t%s\n", events.KindProfile, profile.Pubkey, profile.Event.ID)
-	}
-	relays := append([]Proof(nil), s.Relays...)
-	slices.SortFunc(relays, func(a, b Proof) int {
-		return strings.Compare(a.Pubkey, b.Pubkey)
-	})
-	for _, relay := range relays {
-		fmt.Fprintf(&b, "R\t%d\t%s\t%s\n", events.KindAppRelays, relay.Pubkey, relay.Event.ID)
-	}
-	return []byte(b.String())
 }
 
 // Resolve builds canonical version-1 catalog state from a consistent event snapshot.
@@ -521,26 +460,4 @@ func listingEvents(listing Listing) []nostr.Event {
 	out = append(out, listing.App, listing.Release)
 	out = append(out, listing.Assets...)
 	return out
-}
-
-func eventRole(kind int) int {
-	switch kind {
-	case events.KindApp:
-		return 0
-	case events.KindRelease:
-		return 1
-	case events.KindAsset:
-		return 2
-	default:
-		return 3
-	}
-}
-
-func sortListingEvents(events []nostr.Event) {
-	slices.SortFunc(events, func(a, b nostr.Event) int {
-		if c := cmp.Compare(eventRole(a.Kind), eventRole(b.Kind)); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
 }

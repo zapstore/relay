@@ -6,28 +6,6 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-func TestProfilesForKeepsAuthorsOfMatchingApps(t *testing.T) {
-	st := State{
-		Listings: []Listing{
-			{AppID: "com.hi.one", App: nostrEvent("aa")},
-			{AppID: "com.hi.two", App: nostrEvent("bb")},
-			{AppID: "com.other", App: nostrEvent("cc")},
-		},
-		Profiles: []Profile{{Pubkey: "aa"}, {Pubkey: "bb"}, {Pubkey: "cc"}},
-	}
-	got := profilesFor(st, "com.hi")
-	if len(got) != 2 || got[0].Pubkey != "aa" || got[1].Pubkey != "bb" {
-		t.Fatalf("%v", got)
-	}
-	if all := profilesFor(st, ""); len(all) != 3 {
-		t.Fatalf("empty filter %v", all)
-	}
-}
-
-func nostrEvent(pubkey string) nostr.Event {
-	return nostr.Event{PubKey: pubkey}
-}
-
 func TestOnlyMatchingDropsOtherApps(t *testing.T) {
 	const author = "aa"
 	next := State{Listings: []Listing{

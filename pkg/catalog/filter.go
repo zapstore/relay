@@ -8,26 +8,6 @@ import (
 	"github.com/zapstore/relay/pkg/events"
 )
 
-// profilesFor is every profile, or only authors of listings selected by filter.
-func profilesFor(st State, filter string) []Profile {
-	if filter == "" {
-		return st.Profiles
-	}
-	want := map[string]struct{}{}
-	for _, listing := range st.Listings {
-		if strings.Contains(listing.AppID, filter) && listing.App.PubKey != "" {
-			want[listing.App.PubKey] = struct{}{}
-		}
-	}
-	var out []Profile
-	for _, profile := range st.Profiles {
-		if _, ok := want[profile.Pubkey]; ok {
-			out = append(out, profile)
-		}
-	}
-	return out
-}
-
 // onlyMatching keeps diff entries whose app id contains filter.
 // It does not add listings that were not already in the diff.
 // Profiles and avatars stay when they belong to an author of a matching listing.
