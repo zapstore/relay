@@ -46,17 +46,18 @@ A Nostr relay and Blossom server for the Zapstore app ecosystem.
 ### Build and Run
 
 ```bash
-make release
-make release REF=v1.2.3
+make
+make linux-arm64
+make linux-amd64
 ```
 
-The binary is `dist/relay-<ref>-<arch>`, or `dist/relay-dev-<arch>` when `REF` is empty. `REF` is embedded as the version.
+The binary is `dist/relay-<os>-<arch>`.
 
 ```bash
 cp .env.example .env
-./dist/relay-dev-$(go env GOARCH) run
-./dist/relay-dev-$(go env GOARCH) version
-./dist/relay-dev-$(go env GOARCH) config
+./dist/relay-$(go env GOOS)-$(go env GOARCH) run
+./dist/relay-$(go env GOOS)-$(go env GOARCH) version
+./dist/relay-$(go env GOOS)-$(go env GOARCH) config
 ```
 
 ### Data Directory Structure
