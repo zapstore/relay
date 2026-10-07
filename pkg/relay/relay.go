@@ -146,11 +146,41 @@ func Setup(
 	return relay, nil
 }
 
-// StartAndServe starts the relay, listens to the provided address and handles http requests.
-func (r *T) StartAndServe(ctx context.Context, addr string) error {
+// Handler is the WebSocket relay. Mount it at "/" beside other routes.
+func (r *T) Handler() http.Handler { return r.server }
+
+// StartAndServe starts the relay. handler receives every request; nil serves only the WebSocket relay.
+func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler) error {
 	go r.runReconcile(ctx)
 	go r.runProfileWorker(ctx)
-	return r.server.StartAndServe(ctx, addr)
+	r.server.Start(ctx)
+	if handler == nil {
+		handler = r.server
+	}
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	exit := make(chan error, 1)
+	go func() {
+		slog.Info("serving the relay", "address", addr)
+		err := srv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			exit <- err
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err := srv.Shutdown(shut)
+		r.server.Wait()
+		return err
+	case err := <-exit:
+		return err
+	}
 }
 
 // NotifyUpload notifies the relay that the upload of the blob with the given hash and mime type is complete.

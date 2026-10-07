@@ -5,16 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
+	catalog "github.com/zapstore/relay/pkg/catalog"
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
@@ -22,6 +25,7 @@ import (
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/vertex"
+	"github.com/zapstore/steroid/enrich"
 )
 
 func printHelp() {
@@ -31,6 +35,7 @@ Usage:
 
 Commands:
   run      Start the relay
+  bundle   Write one catalog snapshot
   version  Print the version
   config   Print the active configuration
 `, config.Version)
@@ -61,7 +66,7 @@ func main() {
 		fmt.Println(config)
 		os.Exit(0)
 
-	case "run":
+	case "run", "bundle":
 		// continues below
 
 	default:
@@ -130,6 +135,13 @@ func main() {
 		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key and paid publishers may publish")
 	}
 	gate := policy.NewGate(pol, config.Relay.Info.Pubkey, wot)
+	signer, err := catalog.OpenSigner(ctx, config.Catalog.SignWith)
+	if err != nil {
+		panic(err)
+	}
+	if signer.PubKey != config.Relay.Info.Pubkey {
+		panic(fmt.Errorf("SIGN_WITH public key %s does not match RELAY_PUBKEY", signer.PubKey))
+	}
 
 	// Step 3.
 	// Initialize analytics engine
@@ -187,16 +199,43 @@ func main() {
 		panic(err)
 	}
 
+	enrichApps := func(ctx context.Context, ids []string) error {
+		return enrich.IDs(ctx, dataDir, filepath.Join(dataDir, "relay.db"), ids)
+	}
+
+	if os.Args[1] == "bundle" {
+		n, err := catalog.Bundle(ctx, dataDir, filepath.Join(dataDir, "relay.db"), signer, notices(ctx, pol), enrichApps)
+		if err != nil {
+			panic(err)
+		}
+		slog.Info("bundle", "epoch", n)
+		return
+	}
+
 	// Step 6.
 	// Run everything
 	socketPath := filepath.Join(dataDir, "relay.sock")
-	exit := make(chan error, 5)
+	mux := http.NewServeMux()
+	mux.Handle("GET /bundle", catalog.Handler{
+		Data:   dataDir,
+		Signer: signer,
+		Now:    time.Now,
+		Log:    slog.Default(),
+	})
+	mux.Handle("POST /suggest", policy.Suggest(pol, limiter))
+	mux.Handle("/", relay.Handler())
+
+	workers := 5
+	if config.Catalog.Interval > 0 {
+		workers++
+	}
+	exit := make(chan error, workers)
 	wg := sync.WaitGroup{}
-	wg.Add(5)
+	wg.Add(workers)
 
 	go func() {
 		defer wg.Done()
-		if err := relay.StartAndServe(ctx, config.Relay.Address); err != nil {
+		if err := relay.StartAndServe(ctx, config.Relay.Address, mux); err != nil {
 			exit <- err
 		}
 	}()
@@ -230,6 +269,13 @@ func main() {
 		}
 	}()
 
+	if config.Catalog.Interval > 0 {
+		go func() {
+			defer wg.Done()
+			catalog.Loop(ctx, config.Catalog.Interval, dataDir, filepath.Join(dataDir, "relay.db"), signer, pol.Notices, slog.Default(), enrichApps)
+		}()
+	}
+
 	select {
 	case <-ctx.Done():
 		wg.Wait()
@@ -238,6 +284,14 @@ func main() {
 	case err := <-exit:
 		panic(err)
 	}
+}
+
+func notices(ctx context.Context, pol *policy.Store) map[string]string {
+	notes, err := pol.Notices(ctx)
+	if err != nil {
+		panic(err)
+	}
+	return notes
 }
 
 // Resolver implements [analytics.Resolver]

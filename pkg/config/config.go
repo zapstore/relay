@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 	_ "github.com/joho/godotenv/autoload"
@@ -33,7 +34,45 @@ type Config struct {
 	Relay     relay.Config
 	Blossom   blossom.Config
 	Dashboard dashboard.Config
+	Catalog   CatalogConfig
 	Vertex    vertex.Config
+}
+
+// CatalogConfig is signing and the bundle interval.
+// GET /bundle and POST /suggest are served on the relay listener.
+type CatalogConfig struct {
+	// SignWith is the catalog signing key: 1, 64-char hex, nsec, or a bunker URL.
+	// Its public key must equal RELAY_PUBKEY. A bunker URL is the hotbox signer.
+	SignWith string `env:"SIGN_WITH"`
+
+	// Interval is how often a new snapshot is considered. Default is 5 minutes.
+	// Zero disables the tick. `relay bundle` writes one snapshot anyway.
+	Interval time.Duration `env:"BUNDLE_INTERVAL"`
+}
+
+func NewCatalogConfig() CatalogConfig {
+	return CatalogConfig{Interval: 5 * time.Minute}
+}
+
+func (c CatalogConfig) Validate() error {
+	if strings.TrimSpace(c.SignWith) == "" {
+		return fmt.Errorf("SIGN_WITH is empty")
+	}
+	if c.Interval < 0 {
+		return fmt.Errorf("interval must be zero or greater")
+	}
+	return nil
+}
+
+func (c CatalogConfig) String() string {
+	sign := "set"
+	if strings.TrimSpace(c.SignWith) == "" {
+		sign = "empty"
+	}
+	return fmt.Sprintf("Catalog:\n"+
+		"\tSIGN_WITH: %s\n"+
+		"\tInterval: %s",
+		sign, c.Interval)
 }
 
 type SystemConfig struct {
@@ -129,6 +168,7 @@ func New() Config {
 		Relay:     relay.NewConfig(),
 		Blossom:   blossom.NewConfig(),
 		Dashboard: dashboard.NewConfig(),
+		Catalog:   NewCatalogConfig(),
 		Vertex:    vertex.NewConfig(),
 	}
 }
@@ -152,6 +192,9 @@ func (c Config) Validate() error {
 	if err := c.Dashboard.Validate(); err != nil {
 		return fmt.Errorf("dashboard: %w", err)
 	}
+	if err := c.Catalog.Validate(); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
 	if err := c.Vertex.Validate(); err != nil {
 		return fmt.Errorf("vertex: %w", err)
 	}
@@ -171,6 +214,8 @@ func (c Config) String() string {
 	b.WriteString(c.Blossom.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Dashboard.String())
+	b.WriteByte('\n')
+	b.WriteString(c.Catalog.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Vertex.String())
 	return b.String()
