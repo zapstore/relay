@@ -20,9 +20,10 @@ import (
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
+	"github.com/zapstore/relay/pkg/vertex"
 )
 
-// Version is the version of the relay server, set at build time.
+// Version is the version of the relay, set at build time.
 var Version = "dev"
 
 type Config struct {
@@ -32,6 +33,7 @@ type Config struct {
 	Relay     relay.Config
 	Blossom   blossom.Config
 	Dashboard dashboard.Config
+	Vertex    vertex.Config
 }
 
 type SystemConfig struct {
@@ -127,6 +129,7 @@ func New() Config {
 		Relay:     relay.NewConfig(),
 		Blossom:   blossom.NewConfig(),
 		Dashboard: dashboard.NewConfig(),
+		Vertex:    vertex.NewConfig(),
 	}
 }
 
@@ -149,6 +152,9 @@ func (c Config) Validate() error {
 	if err := c.Dashboard.Validate(); err != nil {
 		return fmt.Errorf("dashboard: %w", err)
 	}
+	if err := c.Vertex.Validate(); err != nil {
+		return fmt.Errorf("vertex: %w", err)
+	}
 	return nil
 }
 
@@ -165,5 +171,7 @@ func (c Config) String() string {
 	b.WriteString(c.Blossom.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Dashboard.String())
+	b.WriteByte('\n')
+	b.WriteString(c.Vertex.String())
 	return b.String()
 }

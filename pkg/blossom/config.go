@@ -27,9 +27,6 @@ type Config struct {
 	// It is always SYSTEM_DIRECTORY_PATH/data/blobs and is set by main.
 	Dir string
 
-	// SkipDefender is set by main when DEFENDER_URL is empty.
-	SkipDefender bool
-
 	Bunny bunny.Config
 }
 
@@ -63,7 +60,6 @@ func (c Config) Validate() error {
 	if c.StallTimeout < 5*time.Second {
 		return fmt.Errorf("stall timeout must be greater than 5s to function reliably")
 	}
-
 	for _, mime := range c.AllowedMedia {
 		if mime == "" {
 			return fmt.Errorf("allowed media type is empty")

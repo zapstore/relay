@@ -1,0 +1,128 @@
+{{define "blacklist"}}
+<p class="section-title">Blacklist</p>
+<p class="section-subtitle">Publishers the relay rejects</p>
+
+{{if .Error}}<p class="bl-error">{{.Error}}</p>{{end}}
+
+{{if .IsAdmin}}
+<form class="bl-form" hx-post="/blacklist" hx-target="#content" hx-swap="innerHTML">
+  <select class="bl-input" name="kind">
+    <option value="nostr">Nostr key</option>
+    <option value="forge">Forge account</option>
+    <option value="cert">Certificate</option>
+  </select>
+  <input class="bl-input" type="text" name="id" placeholder="64 hex, or github.com/user" required>
+  <input class="bl-input" type="text" name="reason" placeholder="Reason" required>
+  <button class="bl-button" type="submit">Ban</button>
+</form>
+{{end}}
+
+<table class="table">
+  <thead>
+    <tr>
+      <th>Publisher</th>
+      <th>Reason</th>
+      <th>Since</th>
+      {{if .IsAdmin}}<th></th>{{end}}
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Publishers}}
+    <tr>
+      <td><div class="cell"><span>{{.Kind}}</span><span>{{.ID}}</span></div></td>
+      <td>{{.Reason}}</td>
+      <td>{{.Created}}</td>
+      {{if $.IsAdmin}}
+      <td>
+        <form hx-post="/blacklist/remove" hx-target="#content" hx-swap="innerHTML" hx-confirm="Remove this publisher from the blacklist? Listings already deleted stay deleted.">
+          <input type="hidden" name="kind" value="{{.Kind}}">
+          <input type="hidden" name="id" value="{{.ID}}">
+          <button class="bl-button" type="submit">Remove</button>
+        </form>
+      </td>
+      {{end}}
+    </tr>
+    {{else}}
+    <tr><td colspan="4" class="bl-empty">No banned publishers</td></tr>
+    {{end}}
+  </tbody>
+</table>
+
+<p class="bl-heading">Banned files</p>
+<table class="table">
+  <thead>
+    <tr>
+      <th>Hash</th>
+      <th>Reason</th>
+      {{if .IsAdmin}}<th></th>{{end}}
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Hashes}}
+    <tr>
+      <td><div class="cell"><span>{{.Hash}}</span></div></td>
+      <td>{{.Reason}}</td>
+      {{if $.IsAdmin}}
+      <td>
+        <form hx-post="/blacklist/hash/remove" hx-target="#content" hx-swap="innerHTML" hx-confirm="Allow this file hash again?">
+          <input type="hidden" name="hash" value="{{.Hash}}">
+          <button class="bl-button" type="submit">Remove</button>
+        </form>
+      </td>
+      {{end}}
+    </tr>
+    {{else}}
+    <tr><td colspan="3" class="bl-empty">No banned files</td></tr>
+    {{end}}
+  </tbody>
+</table>
+
+<style>
+  .bl-error {
+    color: #f87171;
+    text-align: center;
+    margin-bottom: 1rem;
+  }
+  .bl-form {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 2rem;
+  }
+  .bl-input, .bl-button {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: var(--text-normal);
+    padding: 0.5rem 0.75rem;
+  }
+  .bl-input:focus { outline: none; border-color: var(--accent); }
+  .bl-button { cursor: pointer; }
+  .bl-heading {
+    margin: 2.5rem 0 1rem;
+    text-align: center;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-normal);
+  }
+  .table thead th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .table tbody tr { border-bottom: 1px solid var(--border); }
+  .table tbody tr:last-child { border-bottom: none; }
+  .table tbody td { padding: 0.6rem 0.75rem; color: var(--text); }
+  .cell { display: flex; align-items: center; gap: 0.6rem; word-break: break-all; }
+  .bl-empty { text-align: center; padding: 2rem; color: var(--text-muted); }
+</style>
+{{end}}

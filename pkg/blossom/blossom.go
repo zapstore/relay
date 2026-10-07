@@ -18,11 +18,10 @@ import (
 
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
-	defender "github.com/zapstore/defender/pkg/client"
-	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom/bunny"
 	"github.com/zapstore/relay/pkg/blossom/store"
+	"github.com/zapstore/relay/pkg/policy"
 	"github.com/zapstore/relay/pkg/rate"
 )
 
@@ -52,6 +51,8 @@ type T struct {
 	config Config
 
 	limiter   rate.Limiter
+	pol       *policy.Store
+	ban       policy.BanFunc
 	bunny     bunny.Client
 	files     Files
 	store     *store.T
@@ -71,7 +72,9 @@ type Relay interface {
 func Setup(
 	config Config,
 	limiter rate.Limiter,
-	defender defender.T,
+	pol *policy.Store,
+	gate *policy.Gate,
+	ban policy.BanFunc,
 	store *store.T,
 	relay Relay,
 	analytics *analytics.Engine,
@@ -98,10 +101,9 @@ func Setup(
 		MissingAuth(),
 		MissingHints(),
 		MediaNotAllowed(config.AllowedMedia),
+		NotAllowed(pol),
+		NotAdmitted(gate),
 	)
-	if !config.SkipDefender {
-		server.Reject.Upload.Append(NotAllowed(defender))
-	}
 
 	if !config.Bunny.Configured() && config.Dir == "" {
 		return nil, fmt.Errorf("blob directory is required when Bunny is unset")
@@ -116,6 +118,8 @@ func Setup(
 		server:    server,
 		config:    config,
 		limiter:   limiter,
+		pol:       pol,
+		ban:       ban,
 		bunny:     bunny.NewClient(config.Bunny),
 		files:     Files{Dir: config.Dir},
 		store:     store,
@@ -274,7 +278,9 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 	// we check if the blob exists in the store before uploading it.
 	meta, err := b.store.Query(r.Context(), *hints.Hash)
 	if err == nil {
-		// blob already exists
+		if blocked := b.rejectBannedFile(r.Context(), BlobPath(meta.Hash, meta.Type), meta.Hash.Hex(), r.Pubkey()); blocked != nil {
+			return blossom.BlobDescriptor{}, blocked
+		}
 		return blossom.BlobDescriptor{
 			Hash:     meta.Hash,
 			Type:     meta.Type,
@@ -313,6 +319,9 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 	if err != nil {
 		slog.Error("blossom: failed to upload blob", "error", err, "name", name)
 		return blossom.BlobDescriptor{}, ErrInternal
+	}
+	if blocked := b.rejectBannedFile(reader.Context(), name, sha256, r.Pubkey()); blocked != nil {
+		return blossom.BlobDescriptor{}, blocked
 	}
 	if !b.local() {
 		checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -391,29 +400,87 @@ func MissingHints() func(r blossy.Request, hints blossy.UploadHints) *blossom.Er
 	}
 }
 
-func NotAllowed(defender defender.T) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
+func NotAllowed(pol *policy.Store) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
 	return func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
+		if pol == nil || !r.IsAuthed() {
+			return nil
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-
-		meta := models.BlobMeta{
-			Pubkey: r.Pubkey(),
-			Hash:   *hints.Hash,
-			Type:   hints.Type,
-			Size:   hints.Size,
+		pub, normErr := policy.Normalize(policy.KindNostr, r.Pubkey())
+		if normErr != nil {
+			return nil
 		}
-
-		res, err := defender.CheckBlob(ctx, meta)
-		if err != nil {
-			slog.Error("defender: failed to check blob", "err", err, "hash", hints.Hash)
+		banned, checkErr := pol.Blacklisted(ctx, pub)
+		if checkErr != nil {
+			slog.Error("policy: failed to check pubkey", "err", checkErr)
 			return ErrInternal
 		}
-
-		if res.Decision == models.DecisionReject {
+		if banned {
 			return ErrNotAllowed
 		}
 		return nil
 	}
+}
+
+// NotAdmitted runs the publisher gate for uploads. A key that cannot publish
+// cannot upload.
+func NotAdmitted(gate *policy.Gate) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
+	return func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
+		if gate == nil || !r.IsAuthed() {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		err := gate.Admit(ctx, r.Pubkey())
+		if errors.Is(err, policy.ErrNotAdmitted) {
+			return ErrNotAllowed
+		}
+		if err != nil {
+			slog.Error("policy: gate failed", "err", err)
+			return ErrInternal
+		}
+		return nil
+	}
+}
+
+// rejectBannedFile runs after the APK bytes are stored. A known hash deletes
+// that object, bans the uploader, and rejects the upload.
+func (b *T) rejectBannedFile(ctx context.Context, name, hash, pubkey string) *blossom.Error {
+	if b.pol == nil {
+		return nil
+	}
+	reason, banned, err := b.pol.HashReason(ctx, hash)
+	if err != nil {
+		slog.Error("policy: failed to check blob", "err", err, "hash", hash)
+		return ErrInternal
+	}
+	if !banned {
+		return nil
+	}
+	if rmErr := b.removeBlob(ctx, name); rmErr != nil {
+		slog.Error("blossom: failed to remove banned blob", "err", rmErr, "name", name)
+	}
+	if parsed, parseErr := blossom.ParseHash(hash); parseErr == nil {
+		_ = b.store.Delete(ctx, parsed)
+	}
+	if b.ban != nil {
+		pub, normErr := policy.Normalize(policy.KindNostr, pubkey)
+		if normErr == nil {
+			if banErr := b.ban(ctx, pub, reason); banErr != nil {
+				slog.Error("policy: failed to ban uploader", "err", banErr, "publisher", pub.ID)
+				return ErrInternal
+			}
+		}
+	}
+	return blossom.ErrForbidden("file is not allowed")
+}
+
+func (b *T) removeBlob(ctx context.Context, name string) error {
+	if b.local() {
+		return b.files.remove(name)
+	}
+	return b.bunny.Delete(ctx, name)
 }
 
 func MediaNotAllowed(allowed []string) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {

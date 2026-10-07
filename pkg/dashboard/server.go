@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/pippellia-btc/rely/v2"
-	defender "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/policy"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 )
@@ -32,7 +32,8 @@ type T struct {
 
 	auth      authValidator
 	limiter   rate.Limiter
-	defender  defender.T
+	pol       *policy.Store
+	ban       policy.BanFunc
 	relay     relay.DB
 	blossom   blossom.DB
 	analytics analytics.DB
@@ -42,7 +43,8 @@ type T struct {
 func New(
 	config Config,
 	limiter rate.Limiter,
-	defender defender.T,
+	pol *policy.Store,
+	ban policy.BanFunc,
 	relay relay.DB,
 	blossom blossom.DB,
 	analytics analytics.DB,
@@ -70,7 +72,8 @@ func New(
 		config:    config,
 		auth:      authValidator{config},
 		limiter:   limiter,
-		defender:  defender,
+		pol:       pol,
+		ban:       ban,
 		relay:     relay,
 		blossom:   blossom,
 		analytics: analytics,
@@ -106,10 +109,10 @@ func (d *T) StartAndServe(ctx context.Context, addr string) error {
 
 	mux.HandleFunc("GET /tabs/relay", d.rateLimit(d.relayPage))
 	mux.HandleFunc("GET /tabs/blossom", d.rateLimit(d.blossomPage))
-
-	mux.HandleFunc("GET /tabs/defender", d.rateLimit(d.defenderPage))
-	mux.HandleFunc("POST /defender/policies", d.rateLimit(d.createPolicy))
-	mux.HandleFunc("DELETE /defender/policies", d.rateLimit(d.deletePolicy))
+	mux.HandleFunc("GET /tabs/blacklist", d.rateLimit(d.blacklistPage))
+	mux.HandleFunc("POST /blacklist", d.rateLimit(d.addBan))
+	mux.HandleFunc("POST /blacklist/remove", d.rateLimit(d.removeBan))
+	mux.HandleFunc("POST /blacklist/hash/remove", d.rateLimit(d.removeHash))
 
 	server := &http.Server{
 		Addr:              addr,

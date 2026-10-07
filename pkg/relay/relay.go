@@ -16,10 +16,9 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/rely/v2"
-	defender "github.com/zapstore/defender/pkg/client"
-	"github.com/zapstore/defender/pkg/models"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/policy"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay/store"
 )
@@ -27,6 +26,8 @@ import (
 var (
 	ErrEventKindNotAllowed = errors.New("event kind is not in the allowed list")
 	ErrEventPubkeyBlocked  = errors.New("event pubkey is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
+	ErrPublisherNotAllowed = errors.New("publisher is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
+	ErrFileNotAllowed      = errors.New("file is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
 
 	ErrAppAlreadyExists = errors.New(`failed to publish app: another pubkey has already published an app with the same 'd' tag identifier.
 		This is a precautionary measure because Android doesn't allow apps with the same identifier to be installed side by side.
@@ -46,9 +47,6 @@ var RootKinds = []int{
 	events.KindStack,
 }
 
-// indexerPubkeyFallback is the hardcoded zapstore indexer pubkey used when RELAY_PUBKEY is not set.
-const indexerPubkeyFallback = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
-
 // DB is the relay database.
 type DB = store.T
 
@@ -63,7 +61,6 @@ type T struct {
 	config Config
 
 	limiter   rate.Limiter
-	defender  defender.T
 	store     store.T
 	analytics *analytics.Engine
 
@@ -89,7 +86,8 @@ type Blossom interface {
 func Setup(
 	config Config,
 	limiter rate.Limiter,
-	defender defender.T,
+	pol *policy.Store,
+	gate *policy.Gate,
 	store store.T,
 	blssm Blossom,
 	analytics *analytics.Engine,
@@ -117,11 +115,10 @@ func Setup(
 		rely.InvalidSignature,
 		InvalidStructure,
 		NotAnchored(store),
+		NotAllowed(store, pol, blssm),
+		NotAdmitted(gate),
+		AppOwnership(store, config.Info.Pubkey),
 	)
-	if !config.SkipDefender {
-		server.Reject.Event.Append(NotAllowed(defender))
-	}
-	server.Reject.Event.Append(AppOwnership(store, config.Info.Pubkey))
 
 	server.Reject.Req.Clear()
 	server.Reject.Req.Append(
@@ -136,7 +133,6 @@ func Setup(
 		config: config,
 
 		limiter:   limiter,
-		defender:  defender,
 		store:     store,
 		analytics: analytics,
 
@@ -571,9 +567,6 @@ func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {
 //   - non-indexer → indexer:             delete indexer's 32267, accept (developer reclaim)
 //   - anyone else → anyone else:         reject
 func AppOwnership(db store.T, indexerPubkey string) func(_ rely.Client, e *nostr.Event) error {
-	if indexerPubkey == "" {
-		indexerPubkey = indexerPubkeyFallback
-	}
 	return func(_ rely.Client, e *nostr.Event) error {
 		if e.Kind != events.KindApp {
 			return nil
@@ -757,18 +750,82 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 	}
 }
 
-func NotAllowed(defender defender.T) func(_ rely.Client, e *nostr.Event) error {
+// NotAdmitted runs the publisher gate for listing events: the catalog key,
+// a paid publisher, or a pubkey above the web-of-trust threshold may publish.
+// Other kinds pass. See the publisher policy.
+func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if gate == nil {
+			return nil
+		}
+		switch e.Kind {
+		case events.KindApp, events.KindRelease, events.KindAsset:
+		default:
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-
-		res, err := defender.CheckEvent(ctx, e)
+		err := gate.Admit(ctx, e.PubKey)
+		if errors.Is(err, policy.ErrNotAdmitted) {
+			return ErrPublisherNotAllowed
+		}
 		if err != nil {
-			slog.Error("defender: failed to check event", "err", err, "event", e.ID)
+			slog.Error("policy: gate failed", "err", err, "event", e.ID)
 			return ErrInternal
 		}
-		if res.Decision == models.DecisionReject {
-			return ErrEventPubkeyBlocked
+		return nil
+	}
+}
+
+func NotAllowed(db store.T, pol *policy.Store, blobs Blossom) func(_ rely.Client, e *nostr.Event) error {
+	return func(_ rely.Client, e *nostr.Event) error {
+		if pol == nil {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		verdict, err := pol.EventVerdict(ctx, e)
+		if err != nil {
+			slog.Error("policy: failed to check event", "err", err, "event", e.ID)
+			return ErrInternal
+		}
+		if verdict.BanPublisher {
+			// A banned file hash is decided from the stored bytes, not the tag alone.
+			if x, ok := events.Find(e.Tags, "x"); ok {
+				hash, hashErr := blossom.ParseHash(x)
+				if hashErr != nil {
+					return ErrFileNotAllowed
+				}
+				ready, readyErr := blobs.Has(ctx, hash)
+				if readyErr != nil {
+					slog.Error("policy: failed to check blob", "err", readyErr, "event", e.ID)
+					return ErrInternal
+				}
+				if !ready {
+					return nil
+				}
+			}
+			for _, pub := range verdict.Publishers {
+				if err := ApplyBan(ctx, db, pol, pub, verdict.Reason); err != nil {
+					slog.Error("policy: failed to ban publisher", "err", err, "publisher", pub.ID)
+					return ErrInternal
+				}
+			}
+			return ErrFileNotAllowed
+		}
+		if verdict.Reject {
+			pub, normErr := policy.Normalize(policy.KindNostr, e.PubKey)
+			if normErr == nil {
+				banned, banErr := pol.Blacklisted(ctx, pub)
+				if banErr != nil {
+					slog.Error("policy: failed to check publisher", "err", banErr, "event", e.ID)
+					return ErrInternal
+				}
+				if banned {
+					return ErrEventPubkeyBlocked
+				}
+			}
+			return ErrPublisherNotAllowed
 		}
 		return nil
 	}

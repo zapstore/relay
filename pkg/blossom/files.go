@@ -64,6 +64,18 @@ func (f Files) put(rel string, r io.Reader, want []byte) (int64, error) {
 	return n, nil
 }
 
+func (f Files) remove(rel string) error {
+	path, err := f.resolve(rel)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func (f Files) open(rel string) (*os.File, error) {
 	path, err := f.resolve(rel)
 	if err != nil {

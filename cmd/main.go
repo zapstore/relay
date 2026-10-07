@@ -13,14 +13,15 @@ import (
 	"syscall"
 
 	"github.com/nbd-wtf/go-nostr"
-	defenderclient "github.com/zapstore/defender/pkg/client"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
 	"github.com/zapstore/relay/pkg/config"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/policy"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
+	"github.com/zapstore/relay/pkg/vertex"
 )
 
 func printHelp() {
@@ -29,8 +30,8 @@ Usage:
   relay <command>
 
 Commands:
-  run      Start the relay and blossom server
-  version  Print the relay version
+  run      Start the relay
+  version  Print the version
   config   Print the active configuration
 `, config.Version)
 }
@@ -75,8 +76,8 @@ func main() {
 		slog.New(slog.NewTextHandler(os.Stdout, config.Sys.LogOptions())),
 	)
 
-	slog.Info(fmt.Sprintf("-------------------server startup %s-------------------", config.Sys.Version))
-	defer slog.Info("-------------------server shutdown-------------------")
+	slog.Info(fmt.Sprintf("-------------------relay startup %s-------------------", config.Sys.Version))
+	defer slog.Info("-------------------relay shutdown-------------------")
 
 	// Step 1.
 	// Initialize databases and their directories
@@ -108,24 +109,27 @@ func main() {
 	defer analyticsDB.Close()
 
 	// Step 2.
-	// Initialize rate limiter and connect to the defender
+	// Rate limiter and the publisher blacklist. The blacklist lives in relay.db.
 	limiter := rate.NewLimiter(config.Limiter)
-
-	defenderURL := strings.TrimSpace(os.Getenv("DEFENDER_URL"))
-	var defender defenderclient.T
-	if defenderURL == "" {
-		slog.Info("DEFENDER_URL unset: accepting all events and blobs")
-		config.Relay.SkipDefender = true
-		config.Blossom.SkipDefender = true
-	} else {
-		defender, err = defenderclient.Default(defenderURL)
-		if err != nil {
-			panic(err)
-		}
-		if _, err := defender.Health(ctx); err != nil {
-			slog.Error("defender health check failed", "error", err)
-		}
+	pol, err := policy.Open(relayDB.DB)
+	if err != nil {
+		panic(err)
 	}
+	ban := func(ctx context.Context, pub policy.Publisher, reason string) error {
+		return relay.ApplyBan(ctx, relayDB, pol, pub, reason)
+	}
+	// The gate: the catalog key, a paid publisher, or a pubkey above the
+	// web of trust threshold may publish. Without VERTEX_SECRET_KEY only the
+	// catalog key and paid publishers may publish.
+	var wot policy.WebOfTrust
+	if config.Vertex.Enabled() {
+		client := vertex.NewClient(config.Vertex)
+		wot = client
+		go client.WatchCredits(ctx)
+	} else {
+		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key and paid publishers may publish")
+	}
+	gate := policy.NewGate(pol, config.Relay.Info.Pubkey, wot)
 
 	// Step 3.
 	// Initialize analytics engine
@@ -144,7 +148,8 @@ func main() {
 	relay, err := relay.Setup(
 		config.Relay,
 		limiter,
-		defender,
+		pol,
+		gate,
 		relayDB,
 		blossomDB,
 		analytics,
@@ -156,7 +161,9 @@ func main() {
 	blossom, err := blossom.Setup(
 		config.Blossom,
 		limiter,
-		defender,
+		pol,
+		gate,
+		ban,
 		blossomDB,
 		relay,
 		analytics,
@@ -170,7 +177,8 @@ func main() {
 	dashboard, err := dashboard.New(
 		config.Dashboard,
 		limiter,
-		defender,
+		pol,
+		ban,
 		relayDB,
 		blossomDB,
 		analyticsDB,
@@ -181,9 +189,10 @@ func main() {
 
 	// Step 6.
 	// Run everything
-	exit := make(chan error, 4)
+	socketPath := filepath.Join(dataDir, "relay.sock")
+	exit := make(chan error, 5)
 	wg := sync.WaitGroup{}
-	wg.Add(4)
+	wg.Add(5)
 
 	go func() {
 		defer wg.Done()
@@ -209,6 +218,14 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := dashboard.StartAndServe(ctx, config.Dashboard.Address); err != nil {
+			exit <- err
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		slog.Info("relay socket", "path", socketPath)
+		if err := policy.Listen(ctx, socketPath, pol, ban); err != nil && ctx.Err() == nil {
 			exit <- err
 		}
 	}()
