@@ -1,6 +1,6 @@
-# Zapstore Relay
+# Zapstore relay
 
-A Nostr relay and Blossom server for the Zapstore app ecosystem.
+The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle` and `POST /suggest`.
 
 ## Features
 
@@ -19,9 +19,14 @@ A Nostr relay and Blossom server for the Zapstore app ecosystem.
 - Deduplication: blobs are checked before upload to save bandwidth
 - Local SQLite metadata store with CDN redirect for downloads, or local files when Bunny is unset
 
-### Access Control in Defender
-- Access control is delegated to the Zapstore [defender](https://github.com/zapstore/defender) when `DEFENDER_URL` is set
-- Rate-limiting, cryptographic and structural validation is kept in the relay
+### Publisher policy
+- The gate and bans are the [publisher policy](../product/specs/publisher-policy.md). Tables and which kinds the gate applies to are in [SPEC](SPEC.md#publisher-gate)
+
+### Catalog
+- `GET /bundle` and `POST /suggest` are on the relay listener
+- A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits
+- Signing is `SIGN_WITH` in [SPEC](SPEC.md#process). Its public key must equal `RELAY_PUBKEY`
+- `PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in the local blob directory. Zero disables it
 
 ### Analytics
 - Privacy-preserving usage statistics for app impressions and blob downloads
@@ -41,7 +46,7 @@ A Nostr relay and Blossom server for the Zapstore app ecosystem.
 
 - Go 1.25 or later
 - For production: a BunnyCDN account with a storage zone configured
-- A Nostr secret key loaded with Vertex DVM credits
+- Optional: a Nostr secret key loaded with Vertex DVM credits, for the publisher gate
 
 ### Build and Run
 
@@ -56,13 +61,12 @@ The binary is `dist/relay-<os>-<arch>`.
 ```bash
 cp .env.example .env
 ./dist/relay-$(go env GOOS)-$(go env GOARCH) run
-./dist/relay-$(go env GOOS)-$(go env GOARCH) version
-./dist/relay-$(go env GOOS)-$(go env GOARCH) config
+./dist/relay-$(go env GOOS)-$(go env GOARCH) bundle
 ```
 
 ### Data Directory Structure
 
-On first run, the server creates the following structure:
+On first run, the relay creates the following structure:
 
 ```
 $SYSTEM_DIRECTORY_PATH/
@@ -71,14 +75,17 @@ $SYSTEM_DIRECTORY_PATH/
 │   └── geo.mmdb      # MaxMind database for ip geolocation
 │ 
 └── data/
-    ├── relay.db      # SQLite database for relay events
+    ├── relay.db      # SQLite database for relay events and the blacklist
     ├── blossom.db    # SQLite database for blob metadata
-    └── blobs/        # Blob bytes when Bunny is unset
+    ├── blobs/        # Blob bytes when Bunny is unset
+    ├── snapshots/    # Catalog snapshots, one per epoch
+    ├── bundles/      # Signed GET /bundle bodies
+    └── artifacts/    # about, security, vector, and icon files written by steroid
 ```
 
 ### Endpoints
 
-- **Relay**: `ws://localhost:3334` (or your configured port)
+- **Relay**, `GET /bundle`, and `POST /suggest`: `http://localhost:3334` (or your configured port)
 - **Blossom**: `http://localhost:3335` (or your configured port)
 - **Analytics**: `http://localhost:3336` (or your configured port)
 
@@ -88,7 +95,7 @@ All endpoints return a JSON array. Date parameters use the `YYYY-MM-DD` format a
 
 ### `GET /v1/app/impressions`
 
-Returns aggregated app impression counts recorded from Nostr REQs for kind `32267` app detail views.
+Returns aggregated app impression counts recorded from Nostr REQs for kind `32267` app page views.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
