@@ -6,6 +6,10 @@ CMD := ./cmd
 CGO_ENABLED ?= 1
 GOFLAGS := -trimpath
 LDFLAGS := -s -w
+VERSION := $(shell git describe --exact-match --tags HEAD 2>/dev/null)
+ifneq ($(VERSION),)
+LDFLAGS += -X github.com/zapstore/relay/pkg/config.Version=$(VERSION)
+endif
 
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
