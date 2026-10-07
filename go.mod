@@ -61,7 +61,3 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 )
-
-replace github.com/zapstore/steroid => ../steroid
-
-replace github.com/zapstore/zsp => ../zsp
