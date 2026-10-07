@@ -23,6 +23,10 @@ type Config struct {
 	// The no-progress timeout for streaming uploads. Default is 30 seconds.
 	StallTimeout time.Duration `env:"BLOSSOM_STALL_TIMEOUT"`
 
+	// PruneInterval is how often unreferenced APKs are removed from Bunny and the local blob directory.
+	// Zero disables the job. Default is 24 hours.
+	PruneInterval time.Duration `env:"PRUNE_INTERVAL"`
+
 	// Dir holds blob bytes when Bunny is unset.
 	// It is always SYSTEM_DIRECTORY_PATH/data/blobs and is set by main.
 	Dir string
@@ -45,8 +49,9 @@ func NewConfig() Config {
 			"image/heif",
 			"image/svg+xml",
 		},
-		StallTimeout: 30 * time.Second,
-		Bunny:        bunny.NewConfig(),
+		StallTimeout:  30 * time.Second,
+		PruneInterval: 24 * time.Hour,
+		Bunny:         bunny.NewConfig(),
 	}
 }
 
@@ -60,6 +65,10 @@ func (c Config) Validate() error {
 	if c.StallTimeout < 5*time.Second {
 		return fmt.Errorf("stall timeout must be greater than 5s to function reliably")
 	}
+	if c.PruneInterval < 0 {
+		return fmt.Errorf("prune interval must be zero or greater")
+	}
+
 	for _, mime := range c.AllowedMedia {
 		if mime == "" {
 			return fmt.Errorf("allowed media type is empty")
@@ -78,6 +87,7 @@ func (c Config) String() string {
 		"\tAddress: %s\n"+
 		"\tAllowed Media: %v\n"+
 		"\tStall Timeout: %v\n"+
+		"\tPrune Interval: %v\n"+
 		"\tBlob Directory: %s\n"+
-		c.Bunny.String(), c.Hostname, c.Address, c.AllowedMedia, c.StallTimeout, c.Dir)
+		c.Bunny.String(), c.Hostname, c.Address, c.AllowedMedia, c.StallTimeout, c.PruneInterval, c.Dir)
 }

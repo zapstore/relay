@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -229,6 +230,9 @@ func main() {
 	if config.Catalog.Interval > 0 {
 		workers++
 	}
+	if config.Blossom.PruneInterval > 0 {
+		workers++
+	}
 	exit := make(chan error, workers)
 	wg := sync.WaitGroup{}
 	wg.Add(workers)
@@ -275,6 +279,12 @@ func main() {
 			catalog.Loop(ctx, config.Catalog.Interval, dataDir, filepath.Join(dataDir, "relay.db"), signer, pol.Notices, slog.Default(), enrichApps)
 		}()
 	}
+	if config.Blossom.PruneInterval > 0 {
+		go func() {
+			defer wg.Done()
+			pruneLoop(ctx, config.Blossom.PruneInterval, blossom, relayDB.DB)
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -292,6 +302,39 @@ func notices(ctx context.Context, pol *policy.Store) map[string]string {
 		panic(err)
 	}
 	return notes
+}
+
+func pruneLoop(ctx context.Context, every time.Duration, blobs *blossom.T, db *sql.DB) {
+	run := func() {
+		keep, assets, err := blossom.APKHashes(ctx, db)
+		if err != nil {
+			slog.Error("prune", "error", err)
+			return
+		}
+		if assets == 0 {
+			slog.Warn("prune: asset table is empty")
+			return
+		}
+		n, err := blobs.PruneAPKs(ctx, keep)
+		if err != nil {
+			slog.Error("prune", "error", err)
+			return
+		}
+		if n > 0 {
+			slog.Info("prune", "apks", n)
+		}
+	}
+	run()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			run()
+		}
+	}
 }
 
 // Resolver implements [analytics.Resolver]
