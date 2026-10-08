@@ -277,6 +277,24 @@ func TestAPKPrefersArm64(t *testing.T) {
 	}
 }
 
+func TestIsAndroidAPKRequiresARM64(t *testing.T) {
+	if !isAndroidAPK(events.Asset{MimeType: androidAPKMIME, Platforms: []string{preferredABI}}) {
+		t.Fatal("arm64 apk")
+	}
+	if !isAndroidAPK(events.Asset{Platforms: []string{preferredABI}}) {
+		t.Fatal("arm64 without mime")
+	}
+	if isAndroidAPK(events.Asset{MimeType: androidAPKMIME, Platforms: []string{"android-armeabi-v7a"}}) {
+		t.Fatal("v7a")
+	}
+	if !isAndroidAPK(events.Asset{Platforms: []string{preferredABI, "android-armeabi-v7a"}}) {
+		t.Fatal("universal build")
+	}
+	if isAndroidAPK(events.Asset{MimeType: "application/x-executable", Platforms: []string{preferredABI}}) {
+		t.Fatal("non-apk mime")
+	}
+}
+
 func TestPreviousStackSignedByAnotherKeyIsDeleted(t *testing.T) {
 	data := t.TempDir()
 	signer, err := ParseSigner("1")

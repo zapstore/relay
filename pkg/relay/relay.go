@@ -113,6 +113,7 @@ func Setup(
 		rely.InvalidID,
 		rely.InvalidSignature,
 		InvalidStructure,
+		NotARM64,
 		NotAnchored(store),
 		NotAllowed(store, pol, blssm),
 		NotAdmitted(gate),
@@ -624,6 +625,24 @@ func KindNotAllowed(kinds []int) func(_ rely.Client, e *nostr.Event) error {
 
 func InvalidStructure(_ rely.Client, e *nostr.Event) error {
 	return events.Validate(e)
+}
+
+const platformARM64 = "android-arm64-v8a"
+
+// NotARM64 rejects an app, release, asset, or stack that does not include android-arm64-v8a.
+// Other f tags may be present. Other kinds pass.
+func NotARM64(_ rely.Client, e *nostr.Event) error {
+	switch e.Kind {
+	case events.KindApp, events.KindRelease, events.KindAsset, events.KindStack:
+	default:
+		return nil
+	}
+	for _, tag := range e.Tags {
+		if len(tag) >= 2 && tag[0] == "f" && tag[1] == platformARM64 {
+			return nil
+		}
+	}
+	return fmt.Errorf("platform must include %s", platformARM64)
 }
 
 func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {

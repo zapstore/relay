@@ -270,21 +270,16 @@ const (
 	preferredABI   = "android-arm64-v8a"
 )
 
-// isAndroidAPK reports whether the asset is an Android APK, by MIME type when
-// present and otherwise by its platform identifiers.
+// isAndroidAPK reports whether the asset includes android-arm64-v8a.
+// Other platforms may be present. A MIME type, when present, must be an Android package.
 func isAndroidAPK(asset events.Asset) bool {
-	if asset.MimeType != "" {
-		return asset.MimeType == androidAPKMIME
+	if asset.MimeType != "" && asset.MimeType != androidAPKMIME {
+		return false
 	}
-	for _, p := range asset.Platforms {
-		if strings.HasPrefix(p, "android-") {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(asset.Platforms, preferredABI)
 }
 
-// selectListing picks the best main-channel Android release among releases,
+// selectListing picks the best main-channel android-arm64-v8a release among releases,
 // which must all be signed by app.PubKey and name appID in their `i` tag.
 func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets map[string]nostr.Event) (Listing, bool) {
 	var chosen *listingCandidate
