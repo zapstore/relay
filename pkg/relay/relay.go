@@ -114,7 +114,7 @@ func Setup(
 		rely.InvalidSignature,
 		InvalidStructure,
 		NotARM64,
-		NotAnchored(store),
+		NotAnchored(store, config.Info.Pubkey),
 		NotAllowed(store, pol, blssm),
 		NotAdmitted(gate),
 		ListingSlots(store, config.Info.Pubkey),
@@ -651,7 +651,9 @@ func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
 // Anchoring means simply that the event references an existing root event.
-func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
+// A catalog-key app coordinate matches either listing slot for that app id.
+// A coordinate aimed at the current developer slot must name that listing.
+func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if slices.Contains(RootKinds, e.Kind) {
 			// root events do not need to be "anchored" to an existing event
@@ -693,7 +695,7 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
 				}
 
-				found, err := db.Has(ctx, ref.Filter())
+				found, err := addressFound(ctx, db, catalogKey, ref)
 				if err != nil {
 					slog.Error("NotAnchored: failed to check comment", "error", err, "event", e.ID, "tag", aTag)
 					return ErrInternal
@@ -740,7 +742,7 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 					return fmt.Errorf("kind 9735: 'a' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
 				}
 
-				found, err := db.Has(ctx, ref.Filter())
+				found, err := addressFound(ctx, db, catalogKey, ref)
 				if err != nil {
 					slog.Error("NotAnchored: failed to check zap", "error", err, "event", e.ID, "tag", aTag)
 					return ErrInternal
@@ -765,6 +767,20 @@ func NotAnchored(db store.T) func(_ rely.Client, e *nostr.Event) error {
 		}
 		return nil
 	}
+}
+
+// addressFound reports whether an address tag points at a listing this relay keeps.
+// A catalog-key app coordinate matches either slot for that app id, so a
+// developer-only app still anchors comments and zaps. Any other coordinate,
+// including the current developer slot and a kind 30267 stack, must name that event.
+func addressFound(ctx context.Context, db store.T, catalogKey string, ref events.AddressableRef) (bool, error) {
+	if ref.Kind == events.KindApp && ref.Pubkey == catalogKey {
+		return db.Has(ctx, nostr.Filter{
+			Kinds: []int{events.KindApp},
+			Tags:  nostr.TagMap{"d": []string{ref.DTag}},
+		})
+	}
+	return db.Has(ctx, ref.Filter())
 }
 
 // NotAdmitted runs the publisher gate for listing events. The catalog key,
