@@ -5,13 +5,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/zapstore/steroid/artifacts"
 )
 
 func TestBanLineFollowsDelete(t *testing.T) {
@@ -96,20 +95,19 @@ func TestKind0FollowsReplaceableKey(t *testing.T) {
 
 func TestBundleCopiesArtifactDir(t *testing.T) {
 	data := t.TempDir()
-	dir := AppDir(data, "com.example.maps")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "about"), []byte("sum\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "vector"), bytes.Repeat([]byte{1}, 768), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	avatar := strings.Repeat("ab", 32) + ".webp"
-	if err := os.WriteFile(filepath.Join(ArtifactDir(data), avatar), []byte("ava"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	withArtifacts(t, data, func(db *artifacts.DB) {
+		if err := db.SetAbout(t.Context(), "com.example.maps", "sum"); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetVector(t.Context(), "com.example.maps", bytes.Repeat([]byte{1}, 768)); err != nil {
+			t.Fatal(err)
+		}
+		pubkey := strings.TrimSuffix(avatar, ".webp")
+		if err := db.SetAvatar(t.Context(), pubkey, "https://example/p", []byte("ava")); err != nil {
+			t.Fatal(err)
+		}
+	})
 	signer, err := ParseSigner("1")
 	if err != nil {
 		t.Fatal(err)
@@ -148,16 +146,14 @@ func TestLargeBundleManifestFitsBunker(t *testing.T) {
 	data := t.TempDir()
 	const apps = 4080
 	ids := make([]string, apps)
-	for i := range ids {
-		ids[i] = fmt.Sprintf("app.%04d", i)
-		dir := AppDir(data, ids[i])
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
+	withArtifacts(t, data, func(db *artifacts.DB) {
+		for i := range ids {
+			ids[i] = fmt.Sprintf("app.%04d", i)
+			if err := db.SetAbout(t.Context(), ids[i], "sum"); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err := os.WriteFile(filepath.Join(dir, "about"), []byte("sum\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	})
 	signer, err := ParseSigner("1")
 	if err != nil {
 		t.Fatal(err)
@@ -191,19 +187,20 @@ func TestBundleFilesFollowEventKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	const id = "com.example.maps"
-	dir := AppDir(data, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string][]byte{
-		"about": []byte("Offline wallet.\n"), "security": []byte("Stays on the phone.\n"),
-		"facts":  []byte("\"offline_capable\",\"yes\",\"No INTERNET\"\n"),
-		"vector": []byte("vec"), "icon.webp": []byte("ico"),
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+	withArtifacts(t, data, func(db *artifacts.DB) {
+		if err := db.SetAbout(t.Context(), id, "Offline wallet."); err != nil {
 			t.Fatal(err)
 		}
-	}
+		if err := db.SetSecurity(t.Context(), id, "Stays on the phone."); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetVector(t.Context(), id, []byte("vec")); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetIcon(t.Context(), id, []byte("ico")); err != nil {
+			t.Fatal(err)
+		}
+	})
 	listing := nostr.Event{ID: "app", Kind: 32267, Tags: nostr.Tags{{"d", id}}}
 	asset := nostr.Event{ID: "apk", Kind: 3063, Tags: nostr.Tags{{"i", id}}}
 	release := nostr.Event{ID: "rel", Kind: 30063, Tags: nostr.Tags{{"i", id}}}

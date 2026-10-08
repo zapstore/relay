@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -51,19 +50,22 @@ func BuildBundle(ctx context.Context, data string, from, to, bundledAt int64, di
 	if len(raw) > 0 {
 		members = append(members, member{Name: "diff.jsonl", Data: raw})
 	}
+	store, err := openArtifacts(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	if store != nil {
+		defer store.Close()
+	}
 	listing, asset := enrichmentApps(diff.Events)
 	ids := enrichmentIDs(listing, asset, diff.Apps)
 	for _, appID := range ids {
 		if appID == "" || strings.Contains(appID, "/") || strings.Contains(appID, "..") {
 			return nil, fmt.Errorf("app id %q", appID)
 		}
-		dir := AppDir(data, appID)
 		for _, name := range enrichmentFiles(appID, listing, asset) {
-			body, err := os.ReadFile(filepath.Join(dir, name))
+			body, err := artifactMember(ctx, store, appID, name)
 			if err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
 				return nil, err
 			}
 			if len(body) == 0 {
@@ -77,12 +79,12 @@ func BuildBundle(ctx context.Context, data string, from, to, bundledAt int64, di
 		if !isAvatarFilename(name) {
 			return nil, fmt.Errorf("avatar name %q", name)
 		}
-		body, err := os.ReadFile(filepath.Join(ArtifactDir(data), name))
+		body, err := avatarMember(ctx, store, name)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return nil, err
+		}
+		if len(body) == 0 {
+			continue
 		}
 		members = append(members, member{Name: name, Data: body})
 	}

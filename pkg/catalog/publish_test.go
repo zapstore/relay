@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/steroid/artifacts"
 )
 
 func TestPublishMatchAPKOmitsStaleArtifacts(t *testing.T) {
@@ -331,18 +331,28 @@ func apkListing(id, hash string) Listing {
 
 func writeAbout(t *testing.T, data, id string) {
 	t.Helper()
-	dir := AppDir(data, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "about"), []byte("sum\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	withArtifacts(t, data, func(db *artifacts.DB) {
+		if err := db.SetAbout(t.Context(), id, "sum"); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func writeCache(t *testing.T, data, id, apk string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(AppDir(data, id), "cache"), []byte("apk "+apk+"\n"), 0o644); err != nil {
+	withArtifacts(t, data, func(db *artifacts.DB) {
+		if err := db.SetMemo(t.Context(), id, artifacts.Memo{APK: apk}); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func withArtifacts(t *testing.T, data string, fn func(*artifacts.DB)) {
+	t.Helper()
+	db, err := artifacts.Open(t.Context(), artifacts.Path(data))
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
+	fn(db)
 }

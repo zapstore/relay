@@ -8,15 +8,10 @@ import (
 	"strings"
 )
 
-func SnapDir(data string) string     { return filepath.Join(data, "snapshots") }
-func BundleDir(data string) string   { return filepath.Join(data, "bundles") }
-func ArtifactDir(data string) string { return filepath.Join(data, "artifacts") }
+func SnapDir(data string) string   { return filepath.Join(data, "snapshots") }
+func BundleDir(data string) string { return filepath.Join(data, "bundles") }
 
-func AppDir(data, appID string) string {
-	return filepath.Join(ArtifactDir(data), appID)
-}
-
-// avatarFilename is <64 hex characters>.webp, on disk and in the bundle.
+// avatarFilename is <64 hex characters>.webp in the bundle.
 func avatarFilename(pubkey string) (string, error) {
 	if len(pubkey) != 64 {
 		return "", fmt.Errorf("avatar pubkey")

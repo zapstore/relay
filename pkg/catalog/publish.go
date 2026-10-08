@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -38,10 +37,14 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 	}
 	diff := Compare(prev, next)
 	diff.Notices = next.Notices
-	diff.Avatars = pictureAvatars(data, prev.Profiles, next.Profiles)
 	if latest == 0 {
 		diff.Apps = appIDs(next)
-		diff.Avatars = pictureAvatars(data, nil, next.Profiles)
+		diff.Avatars, err = pictureAvatars(ctx, data, nil, next.Profiles)
+	} else {
+		diff.Avatars, err = pictureAvatars(ctx, data, prev.Profiles, next.Profiles)
+	}
+	if err != nil {
+		return 0, err
 	}
 	if filter != "" {
 		diff = onlyMatching(diff, next, filter)
@@ -53,7 +56,11 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 		}
 	}
 	if matchAPK {
-		diff.Apps = appsMatchingAPK(data, next, diff.Apps)
+		matched, err := appsMatchingAPK(ctx, data, next, diff.Apps)
+		if err != nil {
+			return 0, err
+		}
+		diff.Apps = matched
 	}
 	if latest > 0 && len(diff.Events) == 0 && len(diff.AppDeletes) == 0 && len(diff.Coords) == 0 && len(diff.Apps) == 0 && len(diff.Avatars) == 0 {
 		writeBlock("unchanged")
@@ -76,7 +83,12 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 }
 
 // appsMatchingAPK keeps apps whose cache was produced for the listing's current asset hash.
-func appsMatchingAPK(data string, st State, ids []string) []string {
+func appsMatchingAPK(ctx context.Context, data string, st State, ids []string) ([]string, error) {
+	db, err := openArtifacts(ctx, data)
+	if err != nil || db == nil {
+		return nil, err
+	}
+	defer db.Close()
 	hashOf := make(map[string]string, len(st.Listings))
 	for _, listing := range st.Listings {
 		_, hash := apkOf(listing)
@@ -88,13 +100,16 @@ func appsMatchingAPK(data string, st State, ids []string) []string {
 		if hash == "" {
 			continue
 		}
-		m, ok := readMemo(AppDir(data, id))
-		if !ok || strings.ToLower(strings.TrimSpace(m.APK)) != hash {
+		app, err := db.Load(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if !app.Present || strings.ToLower(strings.TrimSpace(app.Memo.APK)) != hash {
 			continue
 		}
 		out = append(out, id)
 	}
-	return out
+	return out, nil
 }
 
 func appIDs(st State) []string {
@@ -105,11 +120,16 @@ func appIDs(st State) []string {
 	return out
 }
 
-func pictureAvatars(data string, prev, next []Profile) []string {
+func pictureAvatars(ctx context.Context, data string, prev, next []Profile) ([]string, error) {
 	old := map[string]string{}
 	for _, profile := range prev {
 		old[profile.Pubkey] = profile.Picture
 	}
+	db, err := openArtifacts(ctx, data)
+	if err != nil || db == nil {
+		return nil, err
+	}
+	defer db.Close()
 	var out []string
 	for _, profile := range next {
 		if profile.Picture == "" || old[profile.Pubkey] == profile.Picture {
@@ -119,14 +139,17 @@ func pictureAvatars(data string, prev, next []Profile) []string {
 		if err != nil {
 			continue
 		}
-		side, err := os.ReadFile(filepath.Join(ArtifactDir(data), profile.Pubkey+".url"))
-		if err != nil || strings.TrimSpace(string(side)) != profile.Picture {
+		avatar, ok, err := db.Avatar(ctx, profile.Pubkey)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || strings.TrimSpace(avatar.Picture) != profile.Picture {
 			continue
 		}
 		out = append(out, name)
 	}
 	slices.Sort(out)
-	return out
+	return out, nil
 }
 
 // EnsureBundle returns the cached from→to bundle, building it when absent.
@@ -158,9 +181,12 @@ func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signe
 	diff := Compare(prev, next)
 	if from == 0 {
 		diff.Apps = appIDs(next)
-		diff.Avatars = pictureAvatars(data, nil, next.Profiles)
+		diff.Avatars, err = pictureAvatars(ctx, data, nil, next.Profiles)
 	} else {
-		diff.Avatars = pictureAvatars(data, prev.Profiles, next.Profiles)
+		diff.Avatars, err = pictureAvatars(ctx, data, prev.Profiles, next.Profiles)
+	}
+	if err != nil {
+		return nil, err
 	}
 	body, err := BuildBundle(ctx, data, from, to, bundledAt, diff, signer)
 	if err != nil {

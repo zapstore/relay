@@ -80,7 +80,7 @@ $SYSTEM_DIRECTORY_PATH/
     ├── blobs/        # Blob bytes when Bunny is unset
     ├── snapshots/    # Catalog snapshots, one per epoch
     ├── bundles/      # Signed GET /bundle bodies
-    └── artifacts/    # about, security, vector, and icon files written by steroid
+    └── artifacts.db  # about, security, vector, icon, and publisher pictures
 ```
 
 ### Endpoints
