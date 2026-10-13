@@ -3,6 +3,7 @@ module github.com/zapstore/relay
 go 1.25.5
 
 require (
+	github.com/avast/apkverifier v0.0.0-20251022140917-74acdc5f8b3f
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
@@ -23,7 +24,6 @@ require (
 require (
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect
 	github.com/avast/apkparser v0.0.0-20251022140151-7294e274bf65 // indirect
-	github.com/avast/apkverifier v0.0.0-20251022140917-74acdc5f8b3f // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4 // indirect
 	github.com/btcsuite/btcd/btcutil v1.1.5 // indirect
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0 // indirect

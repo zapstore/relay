@@ -10,10 +10,6 @@ type AppIdentifier struct {
 	AppID  string
 }
 
-func (a AppIdentifier) String() string {
-	return "32267:" + a.Pubkey + ":" + a.AppID
-}
-
 func (a AppIdentifier) Validate() error {
 	return AddressableRef{Kind: KindApp, Pubkey: a.Pubkey, DTag: a.AppID}.Validate()
 }
@@ -31,17 +27,4 @@ func ParseAppIdentifier(s string) (AppIdentifier, error) {
 		Pubkey: ref.Pubkey,
 		AppID:  ref.DTag,
 	}, nil
-}
-
-// ValidateAppIdentifier validates a stringified app identifier.
-func ValidateAppIdentifier(s string) error {
-	ref, err := ParseAddressableRef(s)
-	if err != nil {
-		return err
-	}
-
-	if ref.Kind != KindApp {
-		return fmt.Errorf("invalid app identifier: expected kind %d, got %d", KindApp, ref.Kind)
-	}
-	return ref.Validate()
 }

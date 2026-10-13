@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -17,150 +17,43 @@ import (
 
 var errCertificate = errors.New("asset certificate does not match this app")
 
-// ListingSlots accepts the catalog key into the indexer slot and the active
-// C1 owner or its delegate into the developer slot. Any other pubkey is
-// rejected. A publish does not delete the other slot.
+// ListingSlots rejects an asset that names none of the app's certificate.
+// Which pubkey holds a slot is decided at promotion, once the APK has been
+// read: a new developer's proof arrives after its listing.
 func ListingSlots(db store.T, catalogKey string) func(rely.Client, *nostr.Event) error {
 	return func(_ rely.Client, event *nostr.Event) error {
-		switch event.Kind {
-		case events.KindApp, events.KindRelease, events.KindAsset:
-		default:
+		if event.Kind != events.KindAsset || event.PubKey == catalogKey {
+			return nil
+		}
+		appID, ok := events.Find(event.Tags, "i")
+		if !ok || appID == "" {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		switch event.Kind {
-		case events.KindApp:
-			return acceptApp(ctx, db, catalogKey, event)
-		case events.KindRelease:
-			return acceptRelease(ctx, db, catalogKey, event)
-		default:
-			return acceptAsset(ctx, db, catalogKey, event)
-		}
-	}
-}
-
-func acceptApp(ctx context.Context, db store.T, catalogKey string, event *nostr.Event) error {
-	if event.PubKey == catalogKey {
-		return nil
-	}
-	appID, ok := events.Find(event.Tags, "d")
-	if !ok || appID == "" {
-		return nil
-	}
-	return requireDeveloper(ctx, db, appID, event.PubKey, true)
-}
-
-func acceptRelease(ctx context.Context, db store.T, catalogKey string, event *nostr.Event) error {
-	if event.PubKey == catalogKey {
-		return nil
-	}
-	appID, ok := events.Find(event.Tags, "i")
-	if !ok || appID == "" {
-		return nil
-	}
-	return requireDeveloper(ctx, db, appID, event.PubKey, false)
-}
-
-func acceptAsset(ctx context.Context, db store.T, catalogKey string, event *nostr.Event) error {
-	asset, err := events.ParseAsset(event)
-	if err != nil || len(asset.APKCertificateHashes) == 0 || asset.I == "" {
-		return nil
-	}
-	cert := strings.ToLower(asset.APKCertificateHashes[0])
-	if event.PubKey == catalogKey {
-		return setAppCertificate(ctx, db, asset.I, cert, true)
-	}
-	pinned, ok, err := appCertificate(ctx, db, asset.I)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if err := requireCertificateDeveloper(ctx, db, cert, event.PubKey); err != nil {
+		pinned, ok, err := appCertificate(ctx, db, appID)
+		if err != nil || !ok {
 			return err
 		}
-		return setAppCertificate(ctx, db, asset.I, cert, false)
-	}
-	if cert != pinned {
-		return errCertificate
-	}
-	return requireCertificateDeveloper(ctx, db, pinned, event.PubKey)
-}
-
-// requireDeveloper checks the signer against the pinned certificate.
-// A missing pin is allowed for the app event, which arrives before the asset.
-func requireDeveloper(ctx context.Context, db store.T, appID, pubkey string, allowUnpinned bool) error {
-	cert, ok, err := appCertificate(ctx, db, appID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if allowUnpinned {
-			known, err := knownDeveloper(ctx, db, pubkey)
-			if err != nil {
-				return err
-			}
-			if known {
-				return nil
-			}
+		if !slices.Contains(assetCerts(*event), pinned) {
+			return errCertificate
 		}
-		return ErrAppAlreadyExists
-	}
-	return requireCertificateDeveloper(ctx, db, cert, pubkey)
-}
-
-func knownDeveloper(ctx context.Context, db store.T, pubkey string) (bool, error) {
-	rows, err := db.DB.QueryContext(ctx, `SELECT pubkey, created_at, tags FROM events WHERE kind = ?`, events.KindIdentityProof)
-	if err != nil {
-		slog.Error("listing slot: read proofs", "err", err)
-		return false, ErrInternal
-	}
-	type proofRow struct {
-		pub     string
-		created int64
-		raw     string
-	}
-	var raws []proofRow
-	for rows.Next() {
-		var row proofRow
-		if err := rows.Scan(&row.pub, &row.created, &row.raw); err != nil {
-			rows.Close()
-			return false, ErrInternal
-		}
-		raws = append(raws, row)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return false, ErrInternal
-	}
-	rows.Close()
-	now := time.Now()
-	for _, row := range raws {
-		var tags nostr.Tags
-		if err := tags.Scan(row.raw); err != nil {
-			continue
-		}
-		event := nostr.Event{Kind: events.KindIdentityProof, PubKey: row.pub, CreatedAt: nostr.Timestamp(row.created), Tags: tags}
-		if !events.ProofActive(event, now) {
-			continue
-		}
-		delegate, _ := events.Find(tags, "delegation")
-		if pubkey == row.pub || (delegate != "" && pubkey == delegate) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func requireCertificateDeveloper(ctx context.Context, db store.T, cert, pubkey string) error {
-	owner, delegate, ok, err := activeDeveloper(ctx, db, cert)
-	if err != nil {
-		return err
-	}
-	if ok && (pubkey == owner || (delegate != "" && pubkey == delegate)) {
 		return nil
 	}
-	return ErrAppAlreadyExists
+}
+
+// holdsDeveloperSlot reports whether pubkey is the active C1 owner or delegate
+// for the app's certificate.
+func holdsDeveloperSlot(ctx context.Context, db store.T, appID, pubkey string) (bool, error) {
+	cert, ok, err := appCertificate(ctx, db, appID)
+	if err != nil || !ok {
+		return false, err
+	}
+	owner, delegate, ok, err := activeDeveloper(ctx, db, cert, nil)
+	if err != nil || !ok {
+		return false, err
+	}
+	return pubkey == owner || (delegate != "" && pubkey == delegate), nil
 }
 
 func appCertificate(ctx context.Context, db store.T, appID string) (string, bool, error) {
@@ -189,7 +82,9 @@ func setAppCertificate(ctx context.Context, db store.T, appID, cert string, over
 	return nil
 }
 
-func activeDeveloper(ctx context.Context, db store.T, cert string) (owner, delegate string, ok bool, err error) {
+// activeDeveloper chooses the C1 owner for cert from the stored proofs and
+// extra, pending proofs already checked against an APK.
+func activeDeveloper(ctx context.Context, db store.T, cert string, extra []nostr.Event) (owner, delegate string, ok bool, err error) {
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT e.pubkey, e.created_at, e.id, e.tags
 		FROM events e
@@ -201,7 +96,7 @@ func activeDeveloper(ctx context.Context, db store.T, cert string) (owner, deleg
 		return "", "", false, ErrInternal
 	}
 	defer rows.Close()
-	var best *nostr.Event
+	current := map[string]nostr.Event{}
 	for rows.Next() {
 		var event nostr.Event
 		var raw string
@@ -214,16 +109,30 @@ func activeDeveloper(ctx context.Context, db store.T, cert string) (owner, deleg
 		if err := event.Tags.Scan(raw); err != nil {
 			return "", "", false, fmt.Errorf("proof tags: %w", err)
 		}
-		if !events.ProofActive(event, time.Now()) {
+		if prev, exists := current[event.PubKey]; exists && !newerProof(event, prev) {
+			continue
+		}
+		current[event.PubKey] = event
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", false, ErrInternal
+	}
+	for _, event := range extra {
+		if prev, exists := current[event.PubKey]; exists && !newerProof(event, prev) {
+			continue
+		}
+		current[event.PubKey] = event
+	}
+	now := time.Now()
+	var best *nostr.Event
+	for _, event := range current {
+		if !events.ProofActive(event, now) {
 			continue
 		}
 		if best == nil || newerProof(event, *best) {
 			copy := event
 			best = &copy
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return "", "", false, ErrInternal
 	}
 	if best == nil {
 		return "", "", false, nil
@@ -408,8 +317,8 @@ func (r *T) isDeveloperRemoval(ctx context.Context, event *nostr.Event) bool {
 	if err != nil {
 		return false
 	}
-	err = requireDeveloper(ctx, r.store, appID, event.PubKey, false)
-	return err == nil
+	holds, err := holdsDeveloperSlot(ctx, r.store, appID, event.PubKey)
+	return err == nil && holds
 }
 
 func developerRemovalApp(event *nostr.Event) string {
@@ -468,5 +377,9 @@ func (r *T) deleteAppListings(ctx context.Context, appID string) (int, error) {
 	if _, err := r.store.DB.ExecContext(ctx, `DELETE FROM app_certificate WHERE app_id = ?`, appID); err != nil {
 		return n, fmt.Errorf("clear certificate %s: %w", appID, err)
 	}
-	return n, nil
+	pending, err := r.dropPendingApp(ctx, appID)
+	if err != nil {
+		return n, err
+	}
+	return n + pending, nil
 }

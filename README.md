@@ -18,6 +18,7 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle
 - Configurable allowed media types (APKs, images)
 - Deduplication: blobs are checked before upload to save bandwidth
 - Local SQLite metadata store with CDN redirect for downloads, or local files when Bunny is unset
+- Uploads stay on local disk, unserved, until a promoted listing names them. A mover then sends them to Bunny. See [buffer zone](SPEC.md#buffer-zone)
 
 ### Publisher policy
 - The gate and bans are the [publisher policy](../product/specs/publisher-policy.md). Tables and which kinds the gate applies to are in [SPEC](SPEC.md#publisher-gate)

@@ -24,6 +24,7 @@ func TestSaveAndQuery(t *testing.T) {
 		Type:      "application/octet-stream",
 		Size:      1024,
 		CreatedAt: time.Now().UTC().Truncate(time.Second), // SQLite stores seconds only
+		State:     Served,
 	}
 
 	// First save should insert

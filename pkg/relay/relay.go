@@ -6,13 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip13"
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/rely/v2"
 	"github.com/zapstore/relay/pkg/analytics"
@@ -27,10 +28,6 @@ var (
 	ErrEventPubkeyBlocked  = errors.New("event pubkey is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
 	ErrPublisherNotAllowed = errors.New("publisher is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
 	ErrFileNotAllowed      = errors.New("file is not allowed. Visit https://zapstore.dev/docs/publish for more information.")
-
-	ErrAppAlreadyExists = errors.New(`failed to publish app: another pubkey has already published an app with the same 'd' tag identifier.
-		This is a precautionary measure because Android doesn't allow apps with the same identifier to be installed side by side.
-		Please use a different identifier or contact the Zapstore team for more information.`)
 
 	ErrTooManyFilters  = errors.New("number of filters exceed the maximum allowed per REQ")
 	ErrFiltersTooVague = errors.New("filters are too vague")
@@ -67,6 +64,8 @@ type T struct {
 	uploads chan upload
 
 	profileJobs chan string
+	apks        *apkReader
+	readAPK     func(io.ReadSeeker) (signing, error)
 }
 
 type upload struct {
@@ -74,10 +73,15 @@ type upload struct {
 	mime string
 }
 
-// Blossom is an interface that represents the subset of the blossom functionalities needed by the relay.
+// Blossom is the subset of blossom the relay uses.
+// Has reports a blob in the buffer zone or served. Open returns its bytes.
+// Promote serves a blob from the buffer zone. Expire deletes blobs still in
+// the buffer zone before the cutoff.
 type Blossom interface {
-	// Has returns whether a hash exists in the blossom database.
 	Has(ctx context.Context, hash blossom.Hash) (bool, error)
+	Open(ctx context.Context, hash blossom.Hash) (io.ReadCloser, error)
+	Promote(ctx context.Context, hash blossom.Hash) error
+	Expire(ctx context.Context, before time.Time) (int, error)
 }
 
 // Setup creates a new relay instance with the given dependencies and configuration.
@@ -114,6 +118,7 @@ func Setup(
 		rely.InvalidSignature,
 		InvalidStructure,
 		NotARM64,
+		TooLittleWork,
 		NotAnchored(store, config.Info.Pubkey),
 		NotAllowed(store, pol, blssm),
 		NotAdmitted(gate),
@@ -140,6 +145,8 @@ func Setup(
 		blossom:     blssm,
 		uploads:     make(chan upload, 100),
 		profileJobs: make(chan string, 100),
+		apks:        newAPKReader(),
+		readAPK:     readSigning,
 	}
 
 	server.On.Event = relay.save
@@ -154,6 +161,7 @@ func (r *T) Handler() http.Handler { return r.server }
 func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler) error {
 	go r.runReconcile(ctx)
 	go r.runProfileWorker(ctx)
+	go r.runAPKReader(ctx)
 	r.server.Start(ctx)
 	if handler == nil {
 		handler = r.server
@@ -237,46 +245,57 @@ func (r *T) runReconcile(ctx context.Context) {
 	}
 }
 
-// reconcile is responsible for checking whether to promote pending events to normal events
-// so they can be served in queries.
+// reconcile promotes what is ready in the buffer zone: listings, and claims
+// checked against a listed app's APK. Then it deletes the events and files
+// that have waited longer than RemovePendingAfter.
 func (r *T) reconcile(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	assets, err := r.store.QueryPending(ctx, events.KindAsset)
+	pending, err := r.store.ListPending(ctx, bufferedKinds())
 	if err != nil {
 		return fmt.Errorf("failed to reconcile events: %w", err)
 	}
 
-	errs := make([]error, 0, len(assets))
-	for _, asset := range assets {
-
-		ready, err := isAssetReady(ctx, r.blossom, &asset)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to check if asset is ready: %w", err))
+	seen := map[string]struct{}{}
+	var errs []error
+	for _, event := range pending {
+		if event.Kind == events.KindIdentityProof {
 			continue
 		}
-
-		if ready {
-			if _, err := r.store.Save(ctx, &asset); err != nil {
-				errs = append(errs, fmt.Errorf("failed to save event %s: %w", asset.ID, err))
-				continue
-			}
-			if err := r.store.DeletePending(ctx, asset.ID); err != nil {
-				errs = append(errs, fmt.Errorf("failed to delete pending event %s: %w", asset.ID, err))
-				continue
-			}
-			r.replaceOtherDeveloper(ctx, &asset)
-			if err := r.server.Broadcast(&asset); err != nil {
-				errs = append(errs, fmt.Errorf("failed to broadcast event %s: %w", asset.ID, err))
-				continue
-			}
+		appID, ok := listingAppID(&event)
+		if !ok {
+			continue
+		}
+		key := event.PubKey + ":" + appID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if _, err := r.promoteListing(ctx, event.PubKey, appID, ""); err != nil {
+			errs = append(errs, fmt.Errorf("promote %s: %w", appID, err))
+		}
+	}
+	for _, event := range pending {
+		if event.Kind != events.KindIdentityProof {
+			continue
+		}
+		if kept, err := pendingHas(ctx, r.store, event.ID); err != nil || !kept {
+			continue
+		}
+		if _, err := r.promoteClaim(ctx, event, ""); err != nil {
+			errs = append(errs, fmt.Errorf("promote proof %s: %w", event.ID, err))
 		}
 	}
 
 	cutoff := time.Now().UTC().Add(-r.config.RemovePendingAfter)
 	if err := r.store.DeleteExpiredPending(ctx, cutoff); err != nil {
 		errs = append(errs, fmt.Errorf("failed to delete expired pending events: %w", err))
+	}
+	if n, err := r.blossom.Expire(ctx, cutoff); err != nil {
+		errs = append(errs, fmt.Errorf("failed to delete expired files: %w", err))
+	} else if n > 0 {
+		slog.Info("buffer zone: expired files", "count", n)
 	}
 	return errors.Join(errs...)
 }
@@ -320,14 +339,16 @@ func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 			return persistResult{msg: err.Error()}
 		}
 
-	case event.Kind == events.KindAsset:
-		isPending, err := r.saveAsset(ctx, event)
-		if err != nil {
-			slog.Error("relay: failed to save asset event", "event", event.ID, "error", err)
-			return persistResult{msg: err.Error()}
-		}
-		if isPending {
-			return persistResult{ok: true, msg: "the event will be saved when the referenced blob is uploaded"}
+	case listingKind(event.Kind):
+		return r.holdListing(ctx, event)
+
+	case event.Kind == events.KindIdentityProof && !events.ProofRevoked(*event):
+		return r.holdProof(ctx, event)
+
+	case event.Kind == events.KindIdentityProof:
+		if err := r.storeRevocation(ctx, event); err != nil {
+			slog.Error("relay: failed to store revocation", "event", event.ID, "error", err)
+			return persistResult{msg: ErrInternal.Error()}
 		}
 
 	case nostr.IsRegularKind(event.Kind):
@@ -337,16 +358,9 @@ func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 		}
 
 	case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
-		saved, err := r.store.Replace(ctx, event)
-		if err != nil {
+		if _, err := r.store.Replace(ctx, event); err != nil {
 			slog.Error("relay: failed to replace event", "event", event.ID, "error", err)
 			return persistResult{msg: err.Error()}
-		}
-		if saved && event.Kind == events.KindApp {
-			r.enqueueProfile(event.PubKey)
-		}
-		if saved && event.Kind == events.KindRelease {
-			r.replaceOtherDeveloper(ctx, event)
 		}
 	}
 	return persistResult{ok: true, broadcast: true}
@@ -367,6 +381,11 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 		if err != nil {
 			return fmt.Errorf("failed to perform operator delete: %w", err)
 		}
+		n, pendingErr := r.dropPendingRefs(ctx, event, "")
+		if pendingErr != nil {
+			return pendingErr
+		}
+		deleted += n
 	case r.isDeveloperRemoval(ctx, event):
 		deleted, err = r.deleteAppListings(ctx, developerRemovalApp(event))
 		if err != nil {
@@ -377,6 +396,11 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 		if err != nil {
 			return fmt.Errorf("failed to perform delete: %w", err)
 		}
+		n, pendingErr := r.dropPendingRefs(ctx, event, event.PubKey)
+		if pendingErr != nil {
+			return pendingErr
+		}
+		deleted += n
 	}
 
 	// Reject deletion events that didn't delete anything
@@ -389,103 +413,6 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 		return fmt.Errorf("failed to save delete request: %w", err)
 	}
 	return nil
-}
-
-// saveAsset saves an asset event to the store.
-// If the asset references a blob that is not in blossom yet, it will be saved as pending, until the
-// runReconcile loop saves it to the store or deletes it if too much time has passed.
-func (r *T) saveAsset(ctx context.Context, event *nostr.Event) (isPending bool, err error) {
-	if event.Kind != events.KindAsset {
-		return false, errors.New("event is not an asset")
-	}
-
-	ready, err := isAssetReady(ctx, r.blossom, event)
-	if err != nil {
-		return false, fmt.Errorf("failed to check if asset is ready: %w", err)
-	}
-
-	if ready {
-		if _, err := r.store.Save(ctx, event); err != nil {
-			return false, fmt.Errorf("failed to save the asset event: %w", err)
-		}
-		r.replaceOtherDeveloper(ctx, event)
-		return false, nil
-	}
-
-	// the asset reference a blob that is not yet in blossom. Save as pending
-	if _, err := r.store.SavePending(ctx, event); err != nil {
-		return false, fmt.Errorf("failed to save the asset event as pending: %w", err)
-	}
-	return true, nil
-}
-
-// assetChecker is used exclusively for HEAD requests in isAssetReady.
-var assetChecker = &http.Client{
-	Timeout: 10 * time.Second,
-	Transport: &http.Transport{
-		MaxIdleConnsPerHost: 4,
-		IdleConnTimeout:     30 * time.Second,
-	},
-}
-
-// isAssetReady returns whether the asset's blob has been correctly uploaded.
-// It first checks the local blossom database, and then falls back to checking all "url" tags in the event.
-func isAssetReady(ctx context.Context, b Blossom, asset *nostr.Event) (bool, error) {
-	if asset.Kind != events.KindAsset {
-		return false, errors.New("event must be an asset event")
-	}
-
-	// first we check the local blossom database
-	xTag, ok := events.Find(asset.Tags, "x")
-	if !ok {
-		return false, errors.New("asset doesn't have an 'x' tag")
-	}
-
-	hash, err := blossom.ParseHash(xTag)
-	if err != nil {
-		return false, fmt.Errorf("invalid x tag: %w", err)
-	}
-
-	found, err := b.Has(ctx, hash)
-	if err != nil {
-		return false, fmt.Errorf("failed to check hash: %w", err)
-	}
-	if found {
-		return true, nil
-	}
-
-	// if the hash is not found locally, we check the "url" tags
-	// by making a HEAD request for each URL
-	urls := events.FindAll(asset.Tags, "url")
-	if len(urls) == 0 {
-		return false, nil
-	}
-
-	for _, url := range urls {
-		if strings.HasPrefix(url, "https://cdn.zapstore.dev") {
-			// skip URLs from the zapstore CDN, because they would have been already in the blossom db
-			continue
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
-		if err != nil {
-			slog.Warn("isAssetReady: skipping malformed url tag", "event", asset.ID, "url", url, "error", err)
-			continue
-		}
-
-		res, err := assetChecker.Do(req)
-		if err != nil {
-			slog.Warn("isAssetReady: skipping url", "event", asset.ID, "url", url, "error", err)
-			continue
-		}
-
-		if res.StatusCode >= 200 && res.StatusCode < 300 {
-			res.Body.Close()
-			return true, nil
-		}
-		res.Body.Close()
-	}
-	return false, nil
 }
 
 func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
@@ -645,14 +572,31 @@ func NotARM64(_ rely.Client, e *nostr.Event) error {
 	return fmt.Errorf("platform must include %s", platformARM64)
 }
 
+const devicePoW = 20
+
+// TooLittleWork rejects a device-private event whose id has fewer than
+// devicePoW leading zero bits: every kind 30078, and a kind 30267 with content.
+func TooLittleWork(_ rely.Client, e *nostr.Event) error {
+	switch {
+	case e.Kind == events.KindAppSettings:
+	case e.Kind == events.KindStack && e.Content != "":
+	default:
+		return nil
+	}
+	if nip13.Difficulty(e.ID) < devicePoW {
+		return fmt.Errorf("pow: difficulty %d is required", devicePoW)
+	}
+	return nil
+}
+
 func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {
 	return store.Validate(filters...)
 }
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
 // Anchoring means simply that the event references an existing root event.
-// A catalog-key app coordinate matches either listing slot for that app id.
-// A coordinate aimed at the current developer slot must name that listing.
+// An app coordinate is accepted for the catalog key, when either listing slot
+// exists, or for the active C1 owner. The delegate is not an anchor.
 func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if slices.Contains(RootKinds, e.Kind) {
@@ -676,111 +620,110 @@ func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Eve
 			}
 
 		case events.KindComment:
-			aTag, hasA := events.Find(e.Tags, "A")
-			eTag, hasE := events.Find(e.Tags, "e")
-			if !hasA && !hasE {
-				return fmt.Errorf("kind 1111: must have an 'A' tag (root) or 'e' tag (reply)")
-			}
-
-			if hasA {
-				// A tag must reference a known app kind:32267 or stack kind:30267 event
-				ref, err := events.ParseAddressableRef(aTag)
-				if err != nil {
-					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %w", err)
-				}
-				if err := ref.Validate(); err != nil {
-					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %w", err)
-				}
-				if ref.Kind != events.KindApp && ref.Kind != events.KindStack {
-					return fmt.Errorf("kind 1111: 'A' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
-				}
-
-				found, err := addressFound(ctx, db, catalogKey, ref)
-				if err != nil {
-					slog.Error("NotAnchored: failed to check comment", "error", err, "event", e.ID, "tag", aTag)
-					return ErrInternal
-				}
-				if !found {
-					return fmt.Errorf("kind 1111: 'A' tag reference not found on this relay")
-				}
-			}
-
-			if hasE {
-				// e tag must reference a known kind:11 or kind:1111 event
-				f := nostr.Filter{
-					IDs:   []string{eTag},
-					Kinds: []int{events.KindForumPost, events.KindComment},
-				}
-
-				found, err := db.Has(ctx, f)
-				if err != nil {
-					slog.Error("NotAnchored: failed to check comment", "error", err, "event", e.ID, "tag", eTag)
-					return ErrInternal
-				}
-				if !found {
-					return fmt.Errorf("kind 1111: 'e' tag reference not found on this relay")
-				}
-			}
-
+			// A reply names a stored kind 11 or 1111 with its e tag.
+			return anchored(ctx, db, catalogKey, e, "A", true, &nostr.Filter{Kinds: []int{events.KindForumPost, events.KindComment}})
 		case events.KindZap:
-			aTag, hasA := events.Find(e.Tags, "a")
-			eTag, hasE := events.Find(e.Tags, "e")
-			if !hasA && !hasE {
-				return fmt.Errorf("kind 9735: must have an 'a' tag or 'e' tag")
-			}
-
-			if hasA {
-				// a tag must reference a known app kind:32267 or stack kind:30267 event
-				ref, err := events.ParseAddressableRef(aTag)
-				if err != nil {
-					return fmt.Errorf("kind 9735: 'a' tag must reference a kind 32267 or kind 30267: %w", err)
-				}
-				if err := ref.Validate(); err != nil {
-					return fmt.Errorf("kind 9735: 'a' tag must reference a kind 32267 or kind 30267: %w", err)
-				}
-				if ref.Kind != events.KindApp && ref.Kind != events.KindStack {
-					return fmt.Errorf("kind 9735: 'a' tag must reference a kind 32267 or kind 30267: %d", ref.Kind)
-				}
-
-				found, err := addressFound(ctx, db, catalogKey, ref)
-				if err != nil {
-					slog.Error("NotAnchored: failed to check zap", "error", err, "event", e.ID, "tag", aTag)
-					return ErrInternal
-				}
-				if !found {
-					return fmt.Errorf("kind 9735: 'a' tag reference not found on this relay")
-				}
-			}
-
-			if hasE {
-				// e tag must reference any known event
-				found, err := db.Has(ctx, nostr.Filter{IDs: []string{eTag}})
-				if err != nil {
-					slog.Error("NotAnchored: failed to check zap", "error", err, "event", e.ID, "tag", eTag)
-					return ErrInternal
-				}
-
-				if !found {
-					return fmt.Errorf("kind 9735: e tag reference not found on this relay")
-				}
-			}
+			return anchored(ctx, db, catalogKey, e, "a", true, &nostr.Filter{})
+		case events.KindReport:
+			return anchored(ctx, db, catalogKey, e, "a", false, nil)
 		}
 		return nil
 	}
 }
 
-// addressFound reports whether an address tag points at a listing this relay keeps.
-// A catalog-key app coordinate matches either slot for that app id, so a
-// developer-only app still anchors comments and zaps. Any other coordinate,
-// including the current developer slot and a kind 30267 stack, must name that event.
-func addressFound(ctx context.Context, db store.T, catalogKey string, ref events.AddressableRef) (bool, error) {
-	if ref.Kind == events.KindApp && ref.Pubkey == catalogKey {
-		return db.Has(ctx, nostr.Filter{
-			Kinds: []int{events.KindApp},
-			Tags:  nostr.TagMap{"d": []string{ref.DTag}},
-		})
+// anchored checks a comment, zap, or report. The address in addrTag must be an
+// app coordinate this relay accepts, or a stored stack when stacks is set. An
+// app coordinate needs an i tag with that app id. When reply is set, an e tag
+// naming a stored event matching reply may stand in for the address.
+func anchored(ctx context.Context, db store.T, catalogKey string, e *nostr.Event, addrTag string, stacks bool, reply *nostr.Filter) error {
+	addr, hasAddr := events.Find(e.Tags, addrTag)
+	var eTag string
+	var hasE bool
+	if reply != nil {
+		eTag, hasE = events.Find(e.Tags, "e")
 	}
-	return db.Has(ctx, ref.Filter())
+	if !hasAddr && !hasE {
+		if reply == nil {
+			return fmt.Errorf("kind %d: must have an '%s' tag", e.Kind, addrTag)
+		}
+		return fmt.Errorf("kind %d: must have an '%s' tag or 'e' tag", e.Kind, addrTag)
+	}
+
+	if hasAddr {
+		ref, err := events.ParseAddressableRef(addr)
+		if err == nil {
+			err = ref.Validate()
+		}
+		if err == nil && ref.Kind != events.KindApp && !(stacks && ref.Kind == events.KindStack) {
+			err = fmt.Errorf("kind %d", ref.Kind)
+		}
+		if err != nil {
+			return fmt.Errorf("kind %d: '%s' tag must reference %s: %w", e.Kind, addrTag, anchorKinds(stacks), err)
+		}
+		if ref.Kind == events.KindApp {
+			if appID, _ := events.Find(e.Tags, "i"); appID != ref.DTag {
+				return fmt.Errorf("kind %d: 'i' tag must be the app id %s", e.Kind, ref.DTag)
+			}
+		}
+		found, err := addressFound(ctx, db, catalogKey, ref)
+		if err != nil {
+			slog.Error("NotAnchored: failed to check address", "error", err, "event", e.ID, "tag", addr)
+			return ErrInternal
+		}
+		if !found {
+			return fmt.Errorf("kind %d: '%s' tag reference not found on this relay", e.Kind, addrTag)
+		}
+	}
+
+	if hasE {
+		filter := *reply
+		filter.IDs = []string{eTag}
+		found, err := db.Has(ctx, filter)
+		if err != nil {
+			slog.Error("NotAnchored: failed to check reference", "error", err, "event", e.ID, "tag", eTag)
+			return ErrInternal
+		}
+		if !found {
+			return fmt.Errorf("kind %d: 'e' tag reference not found on this relay", e.Kind)
+		}
+	}
+	return nil
+}
+
+func anchorKinds(stacks bool) string {
+	if stacks {
+		return "a kind 32267 or kind 30267"
+	}
+	return "a kind 32267"
+}
+
+// addressFound reports whether an address tag points at a listing this relay keeps.
+// A kind 32267 coordinate matches when a listing for that app id exists and
+// the pubkey is the catalog key or the active C1 owner. Any other coordinate,
+// including a kind 30267 stack, must name that event.
+func addressFound(ctx context.Context, db store.T, catalogKey string, ref events.AddressableRef) (bool, error) {
+	if ref.Kind != events.KindApp {
+		return db.Has(ctx, ref.Filter())
+	}
+	listed, err := db.Has(ctx, nostr.Filter{
+		Kinds: []int{events.KindApp},
+		Tags:  nostr.TagMap{"d": []string{ref.DTag}},
+	})
+	if err != nil || !listed {
+		return false, err
+	}
+	if ref.Pubkey == catalogKey {
+		return true, nil
+	}
+	cert, ok, err := appCertificate(ctx, db, ref.DTag)
+	if err != nil || !ok {
+		return false, err
+	}
+	owner, _, ok, err := activeDeveloper(ctx, db, cert, nil)
+	if err != nil || !ok {
+		return false, err
+	}
+	return ref.Pubkey == owner, nil
 }
 
 // NotAdmitted runs the publisher gate for listing events. The catalog key,

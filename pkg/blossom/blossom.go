@@ -61,12 +61,14 @@ type T struct {
 	limiter   rate.Limiter
 	pol       *policy.Store
 	ban       policy.BanFunc
-	bunny     bunny.Client
-	files     Files
+	blobs     Bytes
 	store     *store.T
 	relay     Relay
 	analytics *analytics.Engine
 }
+
+// moveEvery is how often promoted blobs are moved from disk to Bunny.
+const moveEvery = 10 * time.Second
 
 // Relay is an interface that represents the subset of the relay functionalities needed by the blossoms server.
 type Relay interface {
@@ -113,13 +115,11 @@ func Setup(
 		NotAdmitted(gate),
 	)
 
-	if !config.Bunny.Configured() && config.Dir == "" {
-		return nil, fmt.Errorf("blob directory is required when Bunny is unset")
+	if config.Dir == "" {
+		return nil, fmt.Errorf("blob directory is required: it holds the buffer zone")
 	}
-	if config.Dir != "" {
-		if err := os.MkdirAll(config.Dir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create blob directory: %w", err)
-		}
+	if err := os.MkdirAll(config.Dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create blob directory: %w", err)
 	}
 
 	blossom := T{
@@ -128,8 +128,7 @@ func Setup(
 		limiter:   limiter,
 		pol:       pol,
 		ban:       ban,
-		bunny:     bunny.NewClient(config.Bunny),
-		files:     Files{Dir: config.Dir},
+		blobs:     NewBytes(config, store),
 		store:     store,
 		relay:     relay,
 		analytics: analytics,
@@ -144,6 +143,9 @@ func Setup(
 // StartAndServe starts the blossom server, listens to the provided address and handles http requests.
 // It’s a blocking operation, that stops only when the context gets cancelled.
 func (b *T) StartAndServe(ctx context.Context, addr string) error {
+	if !b.local() {
+		go b.blobs.runMover(ctx, moveEvery)
+	}
 	return b.server.StartAndServe(ctx, addr)
 }
 
@@ -175,7 +177,7 @@ func (b *T) check(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaD
 	if errors.Is(err, context.Canceled) {
 		return nil, ErrClientGone
 	}
-	if errors.Is(err, store.ErrBlobNotFound) {
+	if errors.Is(err, store.ErrBlobNotFound) || meta.State == store.Pending {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -194,7 +196,7 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 		if !b.local() {
 			return blossy.Redirect(b.profileURL(hash, r.Raw().URL.RawQuery), http.StatusTemporaryRedirect), nil
 		}
-		f, err := b.files.open(bunny.ProfilePath(hash.Hex()))
+		f, err := b.blobs.Files.open(bunny.ProfilePath(hash.Hex()))
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
@@ -225,8 +227,8 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 		return nil, ErrInternal
 	}
 
-	if errors.Is(err, store.ErrBlobNotFound) {
-		// blob not found locally; if the client opted in, try the relay asset resolution.
+	if errors.Is(err, store.ErrBlobNotFound) || meta.State == store.Pending {
+		// blob not served here; if the client opted in, try the relay asset resolution.
 		redirect := r.Raw().URL.Query().Has("redirect")
 		if !redirect {
 			return nil, ErrNotFound
@@ -253,19 +255,22 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 	if b.analytics != nil {
 		b.analytics.RecordDownload(r, hash)
 	}
-	if b.local() {
-		f, err := b.files.open(BlobPath(hash, meta.Type))
-		if errors.Is(err, os.ErrNotExist) {
+	if b.blobs.onDisk(meta) {
+		f, err := b.blobs.Files.open(BlobPath(hash, meta.Type))
+		switch {
+		case err == nil:
+			return blossy.Serve(blossom.BlobFromStream(f, meta.Size, meta.Type)), nil
+		case errors.Is(err, os.ErrNotExist) && meta.State == store.Moving:
+			// The mover put it on Bunny after the metadata was read.
+		case errors.Is(err, os.ErrNotExist):
 			return nil, ErrNotFound
-		}
-		if err != nil {
+		default:
 			slog.Error("blossom: failed to open local blob", "error", err, "hash", hash)
 			return nil, ErrInternal
 		}
-		return blossy.Serve(blossom.BlobFromStream(f, meta.Size, meta.Type)), nil
 	}
 	query := r.Raw().URL.Query()
-	url := b.bunny.CDNURLWithRawQuery(
+	url := b.blobs.Bunny.CDNURLWithRawQuery(
 		BlobPath(hash, meta.Type),
 		(url.Values{"class": query["class"]}).Encode(),
 	)
@@ -273,7 +278,7 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 }
 
 func (b *T) profileURL(pubkey blossom.Hash, rawQuery string) string {
-	return b.bunny.CDNURLWithRawQuery(bunny.ProfilePath(pubkey.Hex()), rawQuery)
+	return b.blobs.Bunny.CDNURLWithRawQuery(bunny.ProfilePath(pubkey.Hex()), rawQuery)
 }
 
 func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (blossom.BlobDescriptor, *blossom.Error) {
@@ -282,12 +287,16 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 		return blossom.BlobDescriptor{}, blossom.ErrBadRequest("body is empty")
 	}
 
-	// To avoid wasting bandwidth and Bunny credits,
-	// we check if the blob exists in the store before uploading it.
+	// A blob that is already here is not written again. A pending one waits
+	// for its listing from now.
 	meta, err := b.store.Query(r.Context(), *hints.Hash)
 	if err == nil {
-		if blocked := b.rejectBannedFile(r.Context(), BlobPath(meta.Hash, meta.Type), meta.Hash.Hex(), r.Pubkey()); blocked != nil {
+		if blocked := b.rejectBannedFile(r.Context(), meta, r.Pubkey()); blocked != nil {
 			return blossom.BlobDescriptor{}, blocked
+		}
+		if err := b.store.Renew(r.Context(), meta.Hash, time.Now()); err != nil {
+			slog.Error("blossom: failed to renew pending blob", "error", err, "hash", meta.Hash)
+			return blossom.BlobDescriptor{}, ErrInternal
 		}
 		return blossom.BlobDescriptor{
 			Hash:     meta.Hash,
@@ -306,7 +315,6 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 	}
 
 	name := BlobPath(*hints.Hash, hints.Type)
-	sha256 := hints.Hash.Hex()
 
 	max, ok := maxUploadBytes(hints.Type)
 	if !ok {
@@ -316,19 +324,11 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 	reader := newStallReader(r.Context(), limited, b.config.StallTimeout)
 	defer reader.Stop()
 
-	var size int64
-	if b.local() {
-		size, err = b.files.put(name, reader, (*hints.Hash)[:])
-	} else {
-		err = b.bunny.Upload(reader.Context(), reader, name, sha256)
-	}
+	size, err := b.blobs.Files.put(name, reader, (*hints.Hash)[:])
 	if errors.Is(err, errTooLarge) || errors.Is(limited.err, errTooLarge) || errors.Is(reader.Err(), errTooLarge) {
-		if rmErr := b.removeBlob(reader.Context(), name); rmErr != nil {
-			slog.Error("blossom: failed to remove oversized blob", "err", rmErr, "name", name)
-		}
 		return blossom.BlobDescriptor{}, blossom.ErrBadRequest("upload exceeds the size limit")
 	}
-	if errors.Is(err, errChecksumMismatch) || errors.Is(err, bunny.ErrChecksumMismatch) || errors.Is(err, bunny.ErrInvalidChecksum) {
+	if errors.Is(err, errChecksumMismatch) {
 		b.limiter.Penalize(r.IP().Group(), 200)
 		return blossom.BlobDescriptor{}, blossom.ErrBadRequest("checksum mismatch")
 	}
@@ -336,26 +336,8 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 		return blossom.BlobDescriptor{}, &blossom.Error{Code: 499, Reason: rErr.Error()}
 	}
 	if err != nil {
-		slog.Error("blossom: failed to upload blob", "error", err, "name", name)
+		slog.Error("blossom: failed to write blob", "error", err, "name", name)
 		return blossom.BlobDescriptor{}, ErrInternal
-	}
-	if blocked := b.rejectBannedFile(reader.Context(), name, sha256, r.Pubkey()); blocked != nil {
-		return blossom.BlobDescriptor{}, blocked
-	}
-	if !b.local() {
-		checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer checkCancel()
-		_, size, err = b.bunny.Check(checkCtx, name)
-		if err != nil {
-			slog.Error("blossom: failed to check blob", "error", err, "name", name)
-			return blossom.BlobDescriptor{}, ErrInternal
-		}
-	}
-
-	// punish the client for providing bad hints.
-	if hints.Size < size {
-		cost := 100.0
-		b.limiter.Penalize(r.IP().Group(), cost)
 	}
 
 	meta = store.BlobMeta{
@@ -364,6 +346,16 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 		Size:       size,
 		CreatedAt:  time.Now().UTC(),
 		AuthPubkey: r.Pubkey(),
+		State:      store.Pending,
+	}
+	if blocked := b.rejectBannedFile(reader.Context(), meta, r.Pubkey()); blocked != nil {
+		return blossom.BlobDescriptor{}, blocked
+	}
+
+	// punish the client for providing bad hints.
+	if hints.Size < size {
+		cost := 100.0
+		b.limiter.Penalize(r.IP().Group(), cost)
 	}
 
 	saveCtx, saveCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -465,10 +457,11 @@ func NotAdmitted(gate *policy.Gate) func(r blossy.Request, hints blossy.UploadHi
 
 // rejectBannedFile runs after the APK bytes are stored. A known hash deletes
 // that object, bans the uploader, and rejects the upload.
-func (b *T) rejectBannedFile(ctx context.Context, name, hash, pubkey string) *blossom.Error {
+func (b *T) rejectBannedFile(ctx context.Context, meta store.BlobMeta, pubkey string) *blossom.Error {
 	if b.pol == nil {
 		return nil
 	}
+	hash := meta.Hash.Hex()
 	reason, banned, err := b.pol.HashReason(ctx, hash)
 	if err != nil {
 		slog.Error("policy: failed to check blob", "err", err, "hash", hash)
@@ -477,11 +470,8 @@ func (b *T) rejectBannedFile(ctx context.Context, name, hash, pubkey string) *bl
 	if !banned {
 		return nil
 	}
-	if rmErr := b.removeBlob(ctx, name); rmErr != nil {
-		slog.Error("blossom: failed to remove banned blob", "err", rmErr, "name", name)
-	}
-	if parsed, parseErr := blossom.ParseHash(hash); parseErr == nil {
-		_ = b.store.Delete(ctx, parsed)
+	if rmErr := b.blobs.remove(ctx, meta); rmErr != nil {
+		slog.Error("blossom: failed to remove banned blob", "err", rmErr, "hash", hash)
 	}
 	if b.ban != nil {
 		pub, normErr := policy.Normalize(policy.KindNostr, pubkey)
@@ -493,13 +483,6 @@ func (b *T) rejectBannedFile(ctx context.Context, name, hash, pubkey string) *bl
 		}
 	}
 	return blossom.ErrForbidden("file is not allowed")
-}
-
-func (b *T) removeBlob(ctx context.Context, name string) error {
-	if b.local() {
-		return b.files.remove(name)
-	}
-	return b.bunny.Delete(ctx, name)
 }
 
 func maxUploadBytes(mime string) (int64, bool) {

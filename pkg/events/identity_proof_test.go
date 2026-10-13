@@ -28,9 +28,12 @@ func TestValidateIdentityProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sum := sha256.Sum256(der)
 	certHash := hexHash(sum[:])
-	certB64 := base64.StdEncoding.EncodeToString(der)
 	pub := "ab" + repeat("cd", 31)
 	created := int64(1_700_000_100)
 	expiry := int64(1_800_000_000)
@@ -48,10 +51,12 @@ func TestValidateIdentityProof(t *testing.T) {
 			{"d", certHash},
 			{"signature", base64.StdEncoding.EncodeToString(sig)},
 			{"expiry", "1800000000"},
-			{"cert", certB64},
 		},
 	}
 	if err := ValidateIdentityProof(active); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyIdentityProof(active, cert); err != nil {
 		t.Fatal(err)
 	}
 	if !ProofActive(*active, time.Unix(created, 0)) {
@@ -61,25 +66,27 @@ func TestValidateIdentityProof(t *testing.T) {
 		t.Fatal("proof should be inactive at expiry")
 	}
 
-	missing := *active
-	missing.Tags = nostr.Tags{
-		{"d", certHash},
-		{"signature", base64.StdEncoding.EncodeToString(sig)},
-		{"expiry", "1800000000"},
-	}
-	if err := ValidateIdentityProof(&missing); err == nil {
-		t.Fatal("active proof without cert should fail")
-	}
-
 	bad := *active
 	bad.Tags = nostr.Tags{
 		{"d", certHash},
 		{"signature", base64.StdEncoding.EncodeToString([]byte("nope"))},
 		{"expiry", "1800000000"},
-		{"cert", certB64},
 	}
-	if err := ValidateIdentityProof(&bad); err == nil {
+	if err := ValidateIdentityProof(&bad); err != nil {
+		t.Fatal("the signature is checked only against an APK certificate:", err)
+	}
+	if err := VerifyIdentityProof(&bad, cert); err == nil {
 		t.Fatal("bad certificate signature should fail")
+	}
+
+	other := *active
+	other.Tags = nostr.Tags{
+		{"d", repeat("e", 64)},
+		{"signature", base64.StdEncoding.EncodeToString(sig)},
+		{"expiry", "1800000000"},
+	}
+	if err := VerifyIdentityProof(&other, cert); err == nil {
+		t.Fatal("a certificate that is not 'd' should fail")
 	}
 
 	revoked := &nostr.Event{

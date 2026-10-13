@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -22,12 +23,13 @@ type IdentityProof struct {
 	CertHash   string
 	Signature  string
 	Expiry     int64
-	Cert       string
 	Delegation string
 	Revoked    bool
 	Reason     string
 }
 
+// Validate checks the tags. It does not check the certificate signature:
+// that needs a certificate read from an APK. See [VerifyIdentityProof].
 func (p IdentityProof) Validate(event *nostr.Event) error {
 	if err := validateProofTags(event); err != nil {
 		return err
@@ -38,20 +40,29 @@ func (p IdentityProof) Validate(event *nostr.Event) error {
 	if p.Expiry <= event.CreatedAt.Time().Unix() {
 		return fmt.Errorf("'expiry' must be greater than 'created_at'")
 	}
-	if p.Cert == "" {
-		return fmt.Errorf("active proof requires a 'cert' tag")
+	if _, err := base64.StdEncoding.DecodeString(p.Signature); err != nil {
+		return fmt.Errorf("invalid 'signature' tag: %w", err)
 	}
-	der, err := base64.StdEncoding.DecodeString(p.Cert)
+	return nil
+}
+
+// VerifyIdentityProof checks an active proof against cert, a certificate read
+// from an APK. The hash of cert must be the 'd' tag, and its key must have
+// signed the proof message. A 'cert' tag is not used.
+func VerifyIdentityProof(event *nostr.Event, cert *x509.Certificate) error {
+	p, err := ParseIdentityProof(event)
 	if err != nil {
-		return fmt.Errorf("invalid 'cert' tag: %w", err)
+		return err
 	}
-	sum := sha256.Sum256(der)
-	if fmt.Sprintf("%x", sum) != p.CertHash {
-		return fmt.Errorf("'cert' hash does not match 'd'")
+	if err := p.Validate(event); err != nil {
+		return err
 	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		return fmt.Errorf("invalid 'cert' tag: %w", err)
+	if p.Revoked {
+		return fmt.Errorf("a revocation has no certificate signature")
+	}
+	sum := sha256.Sum256(cert.Raw)
+	if hex.EncodeToString(sum[:]) != p.CertHash {
+		return fmt.Errorf("certificate does not match 'd'")
 	}
 	sig, err := base64.StdEncoding.DecodeString(p.Signature)
 	if err != nil {
@@ -79,7 +90,7 @@ func proofMessage(createdAt, expiry int64, pubkey string) string {
 }
 
 func validateProofTags(event *nostr.Event) error {
-	var d, sig, exp, cert, del, rev int
+	var d, sig, exp, del, rev int
 	for _, tag := range event.Tags {
 		if len(tag) < 1 {
 			continue
@@ -91,8 +102,6 @@ func validateProofTags(event *nostr.Event) error {
 			sig++
 		case "expiry":
 			exp++
-		case "cert":
-			cert++
 		case "delegation":
 			del++
 		case "revoked":
@@ -109,12 +118,12 @@ func validateProofTags(event *nostr.Event) error {
 	if err := ValidateHash(hash); err != nil {
 		return fmt.Errorf("invalid 'd' tag: %w", err)
 	}
-	if rev > 1 || sig > 1 || exp > 1 || cert > 1 || del > 1 {
+	if rev > 1 || sig > 1 || exp > 1 || del > 1 {
 		return fmt.Errorf("kind 30509 has a duplicate tag")
 	}
 	if rev == 1 {
-		if sig != 0 || exp != 0 || cert != 0 || del != 0 {
-			return fmt.Errorf("revocation must omit signature, expiry, cert, and delegation")
+		if sig != 0 || exp != 0 || del != 0 {
+			return fmt.Errorf("revocation must omit signature, expiry, and delegation")
 		}
 		return nil
 	}
@@ -172,10 +181,6 @@ func ParseIdentityProof(event *nostr.Event) (IdentityProof, error) {
 				return IdentityProof{}, fmt.Errorf("invalid 'expiry' tag: %w", err)
 			}
 			proof.Expiry = expiry
-		case "cert":
-			if len(tag) > 1 {
-				proof.Cert = tag[1]
-			}
 		case "delegation":
 			if len(tag) > 1 {
 				proof.Delegation = tag[1]
@@ -190,8 +195,7 @@ func ParseIdentityProof(event *nostr.Event) (IdentityProof, error) {
 	return proof, nil
 }
 
-// ValidateIdentityProof parses a kind 30509 and verifies it under NIP-C1.
-// An active proof must carry its certificate. A revocation omits the certificate signature.
+// ValidateIdentityProof parses a kind 30509 and checks its tags.
 // Expiry is not judged here; the snapshot decides whether the proof is still active.
 func ValidateIdentityProof(event *nostr.Event) error {
 	proof, err := ParseIdentityProof(event)
@@ -204,7 +208,7 @@ func ValidateIdentityProof(event *nostr.Event) error {
 // ProofActive reports whether the current kind 30509 is an active proof at at.
 // A revocation is inactive. Expiry at or before at is inactive.
 func ProofActive(event nostr.Event, at time.Time) bool {
-	if _, ok := Find(event.Tags, "revoked"); ok || hasTag(event.Tags, "revoked") {
+	if ProofRevoked(event) {
 		return false
 	}
 	raw, ok := Find(event.Tags, "expiry")
@@ -216,6 +220,11 @@ func ProofActive(event nostr.Event, at time.Time) bool {
 		return false
 	}
 	return expiry > at.Unix()
+}
+
+// ProofRevoked reports whether a kind 30509 is a revocation.
+func ProofRevoked(event nostr.Event) bool {
+	return hasTag(event.Tags, "revoked")
 }
 
 func hasTag(tags nostr.Tags, key string) bool {

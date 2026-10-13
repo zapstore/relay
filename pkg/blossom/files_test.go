@@ -102,7 +102,7 @@ func TestLocalDownloadServesBytes(t *testing.T) {
 	b := &T{
 		server: server,
 		config: Config{Dir: dir},
-		files:  files,
+		blobs:  Bytes{DB: db, Files: files, Local: true},
 		store:  db,
 	}
 	server.On.Check = b.check
@@ -139,7 +139,7 @@ func TestLocalUploadWritesBytes(t *testing.T) {
 	hash := blossom.ComputeHash(payload)
 	b := &T{
 		config: Config{Dir: dir, StallTimeout: 30 * time.Second},
-		files:  Files{Dir: dir},
+		blobs:  Bytes{DB: db, Files: Files{Dir: dir}, Local: true},
 		store:  db,
 		relay:  stubRelay{},
 	}

@@ -1,0 +1,190 @@
+From 6e2c1ba5b67ec49bc17640ad66e8ba198846e98d Mon Sep 17 00:00:00 2001
+From: zapstore <dev@zapstore.dev>
+Date: Tue, 13 Oct 2026 00:06:26 +0000
+Subject: [PATCH] Add WithCompression; cap the inflated message at the max
+ message size
+
+gorilla's read limit counts compressed frame bytes, so with permessage-deflate
+a small frame can inflate far past WithMaxMessageSize. Each message is now read
+through a limited reader; overflow closes the connection with 1009, as the
+uncompressed limit does.
+---
+ client.go           | 41 +++++++++++++++++++++++++--
+ compression_test.go | 69 +++++++++++++++++++++++++++++++++++++++++++++
+ options.go          |  6 ++++
+ 3 files changed, 114 insertions(+), 2 deletions(-)
+ create mode 100644 compression_test.go
+
+diff --git a/client.go b/client.go
+index 887f43e..9387935 100644
+--- a/client.go
++++ b/client.go
+@@ -3,6 +3,7 @@ package rely
+ import (
+ 	"context"
+ 	"fmt"
++	"io"
+ 	"slices"
+ 	"sync"
+ 	"sync/atomic"
+@@ -130,6 +131,31 @@ func (c *client) SendAuth() {
+ 	})
+ }
+ 
++// limitedReader reads at most left bytes, then fails with [ws.ErrReadLimit].
++type limitedReader struct {
++	r        io.Reader
++	left     int64
++	exceeded bool
++}
++
++func (l *limitedReader) Read(p []byte) (int, error) {
++	if l.left <= 0 {
++		var probe [1]byte
++		n, err := l.r.Read(probe[:])
++		if n == 0 && err != nil {
++			return 0, err
++		}
++		l.exceeded = true
++		return 0, ws.ErrReadLimit
++	}
++	if int64(len(p)) > l.left {
++		p = p[:l.left]
++	}
++	n, err := l.r.Read(p)
++	l.left -= int64(n)
++	return n, err
++}
++
+ // The client reads from the websocket and parses the data into the appropriate structure (e.g. [reqRequest]).
+ // It manages creation and cancellation of subscriptions, and sends the request to the [Relay] to be processed.
+ func (c *client) read() {
+@@ -142,12 +168,21 @@ func (c *client) read() {
+ 	c.conn.SetReadDeadline(time.Now().Add(c.relay.settings.WS.pongWait))
+ 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(c.relay.settings.WS.pongWait)); return nil })
+ 
++	var message *limitedReader
+ 	for {
+ 		if c.invalidMessages >= 5 {
+ 			return
+ 		}
++		if message != nil && message.exceeded {
++			c.conn.WriteControl(
++				ws.CloseMessage,
++				ws.FormatCloseMessage(ws.CloseMessageTooBig, ""),
++				time.Now().Add(c.relay.settings.WS.writeWait),
++			)
++			return
++		}
+ 
+-		messageType, reader, err := c.conn.NextReader()
++		messageType, frames, err := c.conn.NextReader()
+ 		if err != nil {
+ 			if isUnexpectedClose(err) {
+ 				c.relay.log.Debug("unexpected close error", "error", err, "client", c.ip)
+@@ -161,7 +196,9 @@ func (c *client) read() {
+ 			continue
+ 		}
+ 
+-		decoder := json.NewDecoder(reader)
++		// The read limit counts compressed bytes, so cap the inflated message too.
++		message = &limitedReader{r: frames, left: c.relay.settings.WS.maxMessageSize}
++		decoder := json.NewDecoder(message)
+ 		label, err := parseLabel(decoder)
+ 		if err != nil {
+ 			c.invalidMessages++
+diff --git a/compression_test.go b/compression_test.go
+new file mode 100644
+index 0000000..33ca891
+--- /dev/null
++++ b/compression_test.go
+@@ -0,0 +1,69 @@
++package rely
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	ws "github.com/gorilla/websocket"
++)
++
++func TestCompression(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++
++	relay := NewRelay(WithCompression(true), WithMaxMessageSize(1000))
++	relay.Start(ctx)
++	server := httptest.NewServer(relay)
++	defer server.Close()
++
++	dialer := ws.Dialer{EnableCompression: true}
++	conn, res, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Close()
++	if ext := res.Header.Get("Sec-WebSocket-Extensions"); !strings.Contains(ext, "permessage-deflate") {
++		t.Fatalf("extensions = %q, want permessage-deflate", ext)
++	}
++
++	if err := conn.WriteMessage(ws.TextMessage, []byte(`["FOO"]`)); err != nil {
++		t.Fatal(err)
++	}
++	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
++	if _, msg, err := conn.ReadMessage(); err != nil || !strings.Contains(string(msg), "NOTICE") {
++		t.Fatalf("small message: %s, %v", msg, err)
++	}
++
++	// Compresses to far less than the limit, inflates to far more.
++	bomb := `["REQ","s",{"ids":["` + strings.Repeat("a", 100_000) + `"]}]`
++	if err := conn.WriteMessage(ws.TextMessage, []byte(bomb)); err != nil {
++		t.Fatal(err)
++	}
++	for {
++		_, _, err := conn.ReadMessage()
++		if err == nil {
++			continue
++		}
++		if !ws.IsCloseError(err, ws.CloseMessageTooBig) {
++			t.Fatalf("err = %v, want close %d", err, ws.CloseMessageTooBig)
++		}
++		return
++	}
++}
++
++func TestLimitedReader(t *testing.T) {
++	exact := &limitedReader{r: strings.NewReader("12345"), left: 5}
++	if b, err := io.ReadAll(exact); err != nil || string(b) != "12345" || exact.exceeded {
++		t.Fatalf("exact: %q, %v, exceeded %v", b, err, exact.exceeded)
++	}
++
++	over := &limitedReader{r: strings.NewReader("123456"), left: 5}
++	if _, err := io.ReadAll(over); !errors.Is(err, ws.ErrReadLimit) || !over.exceeded {
++		t.Fatalf("over: %v, exceeded %v", err, over.exceeded)
++	}
++}
+diff --git a/options.go b/options.go
+index af43013..ae6a38b 100644
+--- a/options.go
++++ b/options.go
+@@ -111,6 +111,12 @@ func WithWriteBufferSize(s int) Option {
+ 	return func(r *Relay) { r.settings.WS.upgrader.WriteBufferSize = s }
+ }
+ 
++// WithCompression enables permessage-deflate (RFC 7692) when the client offers it.
++// The max message size then applies to the inflated message. Default is disabled.
++func WithCompression(enabled bool) Option {
++	return func(r *Relay) { r.settings.WS.upgrader.EnableCompression = enabled }
++}
++
+ // WithWriteWait sets the maximum duration to wait for a websocket write operation (including control messages)
+ // to complete before timing out and closing the connection. Must be greater than 1s.
+ func WithWriteWait(d time.Duration) Option {
+-- 
+2.39.5 (Apple Git-154)
+

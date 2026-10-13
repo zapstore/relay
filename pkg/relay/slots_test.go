@@ -16,51 +16,34 @@ func TestListingSlots(t *testing.T) {
 	db := newSlotDB(t)
 	catalog := strings.Repeat("c", 64)
 	owner := strings.Repeat("a", 64)
-	delegate := strings.Repeat("b", 64)
-	other := strings.Repeat("d", 64)
 	cert := strings.Repeat("e", 64)
+	successor := strings.Repeat("f", 64)
 	appID := "com.example.app"
-	saveSlotEvent(t, db, nostr.Event{
-		ID:        strings.Repeat("1", 64),
-		PubKey:    owner,
-		Kind:      events.KindIdentityProof,
-		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Tags:      nostr.Tags{{"d", cert}, {"expiry", "9999999999"}, {"delegation", delegate}},
-	})
-
 	hook := ListingSlots(db, catalog)
-	app := func(pub string) *nostr.Event {
-		return &nostr.Event{Kind: events.KindApp, PubKey: pub, Tags: nostr.Tags{{"d", appID}}}
+
+	if err := hook(nil, slotAsset(owner, appID, cert)); err != nil {
+		t.Fatalf("an unpinned app waits for promotion: %v", err)
 	}
-	if err := hook(nil, app(catalog)); err != nil {
+	if err := hook(nil, &nostr.Event{Kind: events.KindApp, PubKey: owner, Tags: nostr.Tags{{"d", appID}}}); err != nil {
+		t.Fatalf("an app event waits for promotion: %v", err)
+	}
+
+	if err := setAppCertificate(context.Background(), db, appID, cert, false); err != nil {
 		t.Fatal(err)
-	}
-	if err := hook(nil, app(owner)); err != nil {
-		t.Fatal(err)
-	}
-	if err := hook(nil, app(other)); !errors.Is(err, ErrAppAlreadyExists) {
-		t.Fatalf("stranger app before pin: %v", err)
-	}
-	if err := hook(nil, slotAsset(other, appID, cert)); err == nil {
-		t.Fatal("stranger asset accepted")
 	}
 	if err := hook(nil, slotAsset(owner, appID, cert)); err != nil {
 		t.Fatal(err)
 	}
-	if err := hook(nil, app(other)); !errors.Is(err, ErrAppAlreadyExists) {
-		t.Fatalf("stranger app: %v", err)
+	rotated := slotAsset(owner, appID, successor)
+	rotated.Tags = append(rotated.Tags, nostr.Tag{"apk_certificate_hash", cert})
+	if err := hook(nil, rotated); err != nil {
+		t.Fatalf("a lineage naming the pin: %v", err)
 	}
-	if err := hook(nil, app(delegate)); err != nil {
-		t.Fatal(err)
-	}
-	if err := hook(nil, slotAsset(owner, appID, strings.Repeat("1", 64))); !errors.Is(err, errCertificate) {
+	if err := hook(nil, slotAsset(owner, appID, successor)); !errors.Is(err, errCertificate) {
 		t.Fatalf("wrong cert: %v", err)
 	}
-	if err := hook(nil, slotAsset(catalog, appID, strings.Repeat("2", 64))); err != nil {
-		t.Fatal(err)
-	}
-	if err := hook(nil, slotAsset(owner, appID, cert)); !errors.Is(err, errCertificate) {
-		t.Fatalf("stale cert: %v", err)
+	if err := hook(nil, slotAsset(catalog, appID, successor)); err != nil {
+		t.Fatalf("the indexer moves the pin at promotion: %v", err)
 	}
 }
 

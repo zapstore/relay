@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"regexp"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/pippellia-btc/blossom"
+	"github.com/zapstore/relay/pkg/blossom/store"
 )
 
 var hashInText = regexp.MustCompile(`[0-9a-f]{64}`)
@@ -66,36 +67,23 @@ func collectHashes(keep map[string]struct{}, raw string) {
 	}
 }
 
-// Prune deletes blobs that no current or pending event names.
-// keep is the set of hashes to retain. Bunny and the local blob directory are both cleared.
+// Prune deletes served blobs that no current or pending event names.
+// keep is the set of hashes to retain. A blob in the buffer zone is left to expiry.
 func (b *T) Prune(ctx context.Context, keep map[string]struct{}) (int, error) {
-	rows, err := b.store.DB.QueryContext(ctx, `SELECT hash, type FROM blobs`)
+	served, err := b.store.InState(ctx, store.Served, time.Time{})
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
 	var n int
-	for rows.Next() {
-		var hash, mime string
-		if err := rows.Scan(&hash, &mime); err != nil {
-			return n, err
-		}
-		if _, ok := keep[hash]; ok {
+	for _, meta := range served {
+		if _, ok := keep[meta.Hash.Hex()]; ok {
 			continue
 		}
-		parsed, err := blossom.ParseHash(hash)
-		if err != nil {
+		if err := b.blobs.remove(ctx, meta); err != nil {
+			slog.Error("prune: remove blob", "err", err, "hash", meta.Hash)
 			continue
-		}
-		name := BlobPath(parsed, mime)
-		if err := b.removeBlob(ctx, name); err != nil {
-			slog.Error("prune: remove blob", "err", err, "hash", hash)
-			continue
-		}
-		if err := b.store.Delete(ctx, parsed); err != nil {
-			return n, err
 		}
 		n++
 	}
-	return n, rows.Err()
+	return n, nil
 }

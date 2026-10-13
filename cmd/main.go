@@ -165,7 +165,7 @@ func main() {
 		pol,
 		gate,
 		relayDB,
-		blossomDB,
+		blossom.NewBytes(config.Blossom, blossomDB),
 		analytics,
 	)
 	if err != nil {
@@ -218,15 +218,11 @@ func main() {
 	// Run everything
 	socketPath := filepath.Join(dataDir, "relay.sock")
 	nostrSocket := filepath.Join(dataDir, "nostr.sock")
-	mux := http.NewServeMux()
-	mux.Handle("GET /bundle", catalog.Handler{
-		Data:   dataDir,
-		Signer: signer,
-		Now:    time.Now,
-		Log:    slog.Default(),
-	})
-	mux.Handle("POST /suggest", policy.Suggest(pol, limiter))
-	mux.Handle("/", relay.Handler())
+	mux := routes(
+		catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default()},
+		policy.Suggest(pol, limiter),
+		relay.Handler(),
+	)
 
 	workers := 6
 	if config.Catalog.Interval > 0 {
@@ -304,6 +300,16 @@ func main() {
 	case err := <-exit:
 		panic(err)
 	}
+}
+
+// routes serves GET /bundle and POST /suggest beside the WebSocket relay.
+// The paths carry no method so a wrong method reaches its handler and gets 405.
+func routes(bundle, suggest, ws http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/bundle", bundle)
+	mux.Handle("/suggest", suggest)
+	mux.Handle("/", ws)
+	return mux
 }
 
 func notices(ctx context.Context, pol *policy.Store) map[string]string {
