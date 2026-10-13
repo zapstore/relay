@@ -27,47 +27,73 @@ type Coord struct {
 	D      string
 }
 
+// Compare returns the change from prev to next. A changed listing carries its
+// whole triple, ordered by app id and role. Other events follow, ordered by
+// kind, pubkey, d, and id.
 func Compare(prev, next State) Diff {
-	prevEvents := map[string]nostr.Event{}
-	for _, event := range prev.Events() {
-		prevEvents[event.ID] = event
-	}
-	var d Diff
-	for _, event := range next.Events() {
-		if _, ok := prevEvents[event.ID]; !ok {
-			d.Events = append(d.Events, event)
-		}
-	}
-	slices.SortFunc(d.Events, func(a, b nostr.Event) int {
-		return strings.Compare(a.ID, b.ID)
-	})
-
-	prevApps := map[string]struct{}{}
+	prevIdx := map[string]listingIdentity{}
 	for _, listing := range prev.Listings {
-		prevApps[listing.AppID] = struct{}{}
+		prevIdx[listing.AppID] = listingIndex(listing)
 	}
-	nextApps := map[string]IndexListing{}
-	for _, listing := range next.Index().Listings {
-		nextApps[listing.AppID] = listing
+	nextApps := map[string]struct{}{}
+	listings := slices.Clone(next.Listings)
+	slices.SortFunc(listings, func(a, b Listing) int { return strings.Compare(a.AppID, b.AppID) })
+
+	var d Diff
+	for _, listing := range listings {
+		nextApps[listing.AppID] = struct{}{}
+		old, ok := prevIdx[listing.AppID]
+		if ok && sameListing(old, listingIndex(listing)) {
+			continue
+		}
+		d.Apps = append(d.Apps, listing.AppID)
+		d.Events = append(d.Events, listingEvents(listing)...)
 	}
-	prevIdx := map[string]IndexListing{}
-	for _, listing := range prev.Index().Listings {
-		prevIdx[listing.AppID] = listing
-	}
-	for id := range prevApps {
+	for id := range prevIdx {
 		if _, ok := nextApps[id]; !ok {
 			d.AppDeletes = append(d.AppDeletes, id)
 		}
 	}
 	slices.Sort(d.AppDeletes)
-	for id, cur := range nextApps {
-		old, ok := prevIdx[id]
-		if !ok || old.AppEventID != cur.AppEventID || old.ReleaseEventID != cur.ReleaseEventID || !sameIDs(old.AssetEventIDs, cur.AssetEventIDs) {
-			d.Apps = append(d.Apps, id)
+
+	prevIDs := map[string]struct{}{}
+	for _, event := range prev.replaceables() {
+		prevIDs[event.ID] = struct{}{}
+	}
+	var others []nostr.Event
+	for _, event := range next.replaceables() {
+		if _, ok := prevIDs[event.ID]; !ok {
+			others = append(others, event)
 		}
 	}
-	slices.Sort(d.Apps)
+	slices.SortFunc(others, compareReplaceable)
+	d.Events = append(d.Events, others...)
 	d.Coords = missingCoords(prev, next)
+	return d
+}
+
+func sameListing(a, b listingIdentity) bool {
+	return a.AppEventID == b.AppEventID && a.ReleaseEventID == b.ReleaseEventID && sameIDs(a.AssetEventIDs, b.AssetEventIDs)
+}
+
+func compareReplaceable(a, b nostr.Event) int {
+	if c := a.Kind - b.Kind; c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.PubKey, b.PubKey); c != 0 {
+		return c
+	}
+	if c := strings.Compare(replaceableD(a), replaceableD(b)); c != 0 {
+		return c
+	}
+	return strings.Compare(a.ID, b.ID)
+}
+
+func replaceableD(event nostr.Event) string {
+	if !nostr.IsAddressableKind(event.Kind) {
+		return ""
+	}
+	d, _ := events.Find(event.Tags, "d")
 	return d
 }
 
@@ -111,6 +137,15 @@ func missingCoords(prev, next State) []Coord {
 		key := coordKey(events.KindAppRelays, relay.Pubkey, "")
 		if _, ok := nextKeys[key]; !ok {
 			out = append(out, Coord{Kind: events.KindAppRelays, Pubkey: relay.Pubkey, D: ""})
+		}
+	}
+	for _, profile := range next.Profiles {
+		nextKeys[coordKey(events.KindProfile, profile.Pubkey, "")] = struct{}{}
+	}
+	for _, profile := range prev.Profiles {
+		key := coordKey(events.KindProfile, profile.Pubkey, "")
+		if _, ok := nextKeys[key]; !ok {
+			out = append(out, Coord{Kind: events.KindProfile, Pubkey: profile.Pubkey, D: ""})
 		}
 	}
 	slices.SortFunc(out, func(a, b Coord) int {

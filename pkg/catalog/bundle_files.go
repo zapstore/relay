@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
 )
+
+// artifactFiles are the per-app bundle members, in member order.
+var artifactFiles = []string{"about", "icon.webp", "security", "vector"}
 
 func apkOf(listing Listing) (url, hash string) {
 	var fallback events.Asset
@@ -38,9 +39,8 @@ func apkOf(listing Listing) (url, hash string) {
 	return fallback.URL, fallback.Hash
 }
 
-// BuildBundle writes a client bundle for from→to. Artifact bytes are the latest files.
-// about, vector, and icon.webp ship only when the diff has that app's kind 32267 event.
-// security ships only when the diff has that app's kind 3063 event.
+// BuildBundle writes a client bundle for from→to. Each app in diff.Apps ships
+// every artifact the store holds for it. Artifact bytes are the latest files.
 func BuildBundle(ctx context.Context, data string, from, to, bundledAt int64, diff Diff, signer Signer) ([]byte, error) {
 	raw, err := MarshalDiff(diff)
 	if err != nil {
@@ -57,13 +57,11 @@ func BuildBundle(ctx context.Context, data string, from, to, bundledAt int64, di
 	if store != nil {
 		defer store.Close()
 	}
-	listing, asset := enrichmentApps(diff.Events)
-	ids := enrichmentIDs(listing, asset, diff.Apps)
-	for _, appID := range ids {
+	for _, appID := range diff.Apps {
 		if appID == "" || strings.Contains(appID, "/") || strings.Contains(appID, "..") {
 			return nil, fmt.Errorf("app id %q", appID)
 		}
-		for _, name := range enrichmentFiles(appID, listing, asset) {
+		for _, name := range artifactFiles {
 			body, err := artifactMember(ctx, store, appID, name)
 			if err != nil {
 				return nil, err
@@ -71,8 +69,7 @@ func BuildBundle(ctx context.Context, data string, from, to, bundledAt int64, di
 			if len(body) == 0 {
 				continue
 			}
-			memberName := filepath.ToSlash(filepath.Join(appID, name))
-			members = append(members, member{Name: memberName, Data: body})
+			members = append(members, member{Name: filepath.ToSlash(filepath.Join(appID, name)), Data: body})
 		}
 	}
 	for _, name := range diff.Avatars {
@@ -89,60 +86,4 @@ func BuildBundle(ctx context.Context, data string, from, to, bundledAt int64, di
 		members = append(members, member{Name: name, Data: body})
 	}
 	return pack(ctx, members, from, to, bundledAt, &signer)
-}
-
-func enrichmentApps(list []nostr.Event) (listing, asset map[string]struct{}) {
-	listing = map[string]struct{}{}
-	asset = map[string]struct{}{}
-	for _, event := range list {
-		switch event.Kind {
-		case events.KindApp:
-			if id, ok := events.Find(event.Tags, "d"); ok && id != "" {
-				listing[id] = struct{}{}
-			}
-		case events.KindAsset:
-			if id, ok := events.Find(event.Tags, "i"); ok && id != "" {
-				asset[id] = struct{}{}
-			}
-		}
-	}
-	return listing, asset
-}
-
-func enrichmentIDs(listing, asset map[string]struct{}, allowed []string) []string {
-	okID := map[string]struct{}{}
-	for _, id := range allowed {
-		okID[id] = struct{}{}
-	}
-	seen := map[string]struct{}{}
-	var ids []string
-	for id := range listing {
-		if _, ok := okID[id]; !ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	for id := range asset {
-		if _, ok := okID[id]; !ok {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
-}
-
-func enrichmentFiles(appID string, listing, asset map[string]struct{}) []string {
-	var names []string
-	if _, ok := listing[appID]; ok {
-		names = append(names, "about", "vector", "icon.webp")
-	}
-	if _, ok := asset[appID]; ok {
-		names = append(names, "security")
-	}
-	return names
 }

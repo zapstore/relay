@@ -1,19 +1,20 @@
 package catalog
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Handler serves GET /bundle from snapshots and cached bundles.
+// Notices returns the operator text for removed apps. Nil means none.
 type Handler struct {
-	Data   string
-	Signer Signer
-	Now    func() time.Time
-	Log    *slog.Logger
+	Data    string
+	Signer  Signer
+	Notices func(context.Context) (map[string]string, error)
+	Log     *slog.Logger
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,11 +50,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	now := time.Now()
-	if h.Now != nil {
-		now = h.Now()
-	}
-	body, err := EnsureBundle(r.Context(), h.Data, from, to, h.Signer, now.Unix())
+	body, err := EnsureBundle(r.Context(), h.Data, from, to, h.Signer, h.Notices)
 	if err != nil {
 		h.logErr(err)
 		http.Error(w, "failed to build catalog update", http.StatusInternalServerError)

@@ -20,7 +20,7 @@ func TestC1Owner(t *testing.T) {
 		Tags:      nostr.Tags{{"d", cert}, {"revoked"}},
 	}
 	expired := proof(t, "33", cert, "03", 30, "25")
-	owner, ok := c1Owner([]Proof{
+	owner, _, ok := c1Publisher([]Proof{
 		{Pubkey: older.PubKey, D: cert, Event: older},
 		{Pubkey: revoked.PubKey, D: cert, Event: revoked},
 		{Pubkey: expired.PubKey, D: cert, Event: expired},
@@ -30,7 +30,7 @@ func TestC1Owner(t *testing.T) {
 	}
 
 	newer := proof(t, "44", cert, "04", 50, "100")
-	owner, ok = c1Owner([]Proof{
+	owner, _, ok = c1Publisher([]Proof{
 		{Pubkey: older.PubKey, D: cert, Event: older},
 		{Pubkey: newer.PubKey, D: cert, Event: newer},
 	}, cert, time.Unix(60, 0))
@@ -40,12 +40,36 @@ func TestC1Owner(t *testing.T) {
 
 	low := proof(t, "55", cert, "0a", 50, "100")
 	high := proof(t, "66", cert, "0b", 50, "100")
-	owner, ok = c1Owner([]Proof{
+	owner, _, ok = c1Publisher([]Proof{
 		{Pubkey: high.PubKey, D: cert, Event: high},
 		{Pubkey: low.PubKey, D: cert, Event: low},
 	}, cert, time.Unix(60, 0))
 	if !ok || owner != low.PubKey {
 		t.Fatalf("tie owner = %q ok=%v", owner, ok)
+	}
+
+	replaced := proof(t, "22", cert, "11", 10, "100")
+	revokedCurrent := nostr.Event{
+		Kind:      events.KindIdentityProof,
+		PubKey:    "22",
+		ID:        "19",
+		CreatedAt: 40,
+		Tags:      nostr.Tags{{"d", cert}, {"revoked"}},
+	}
+	other := proof(t, "77", cert, "20", 30, "100")
+	owner, _, ok = c1Publisher([]Proof{
+		{Pubkey: replaced.PubKey, D: cert, Event: replaced},
+		{Pubkey: revokedCurrent.PubKey, D: cert, Event: revokedCurrent},
+		{Pubkey: other.PubKey, D: cert, Event: other},
+	}, cert, at)
+	if !ok || owner != other.PubKey {
+		t.Fatalf("revoked replacement owner = %q ok=%v", owner, ok)
+	}
+	if _, _, ok := c1Publisher([]Proof{
+		{Pubkey: replaced.PubKey, D: cert, Event: replaced},
+		{Pubkey: revokedCurrent.PubKey, D: cert, Event: revokedCurrent},
+	}, cert, at); ok {
+		t.Fatal("revoked replacement still has an owner")
 	}
 }
 

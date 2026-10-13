@@ -21,7 +21,7 @@ func Bundle(ctx context.Context, data, dbPath string, signer Signer, notices map
 	at := time.Now()
 	next := ResolveAt(raw, signer.PubKey, at)
 	next.Notices = notices
-	return CreateBundle(ctx, data, next, signer, at.Unix(), "", true, enrich)
+	return CreateBundle(ctx, data, next, signer, at.Unix(), enrich)
 }
 
 // Loop bundles once, then again every interval, until ctx is cancelled.

@@ -88,8 +88,38 @@ func TestKind0FollowsReplaceableKey(t *testing.T) {
 			t.Fatalf("kind 0 repeated for a release: %+v", event)
 		}
 	}
-	if len(diff.Events) != 1 || diff.Events[0].ID != "rel-2" {
-		t.Fatalf("events %+v", diff.Events)
+	if len(diff.Events) != 2 || diff.Events[0].ID != "app" || diff.Events[1].ID != "rel-2" {
+		t.Fatalf("a release update must carry the whole triple: %+v", diff.Events)
+	}
+}
+
+func TestDiffOrdersListingsThenReplaceables(t *testing.T) {
+	a, b := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
+	listing := func(id string) Listing {
+		return Listing{
+			AppID:   id,
+			App:     nostr.Event{ID: "z-" + id, Kind: 32267},
+			Release: nostr.Event{ID: "y-" + id, Kind: 30063},
+			Assets:  []nostr.Event{{ID: "x2-" + id, Kind: 3063}, {ID: "x1-" + id, Kind: 3063}},
+		}
+	}
+	gone := Profile{Pubkey: a, Event: nostr.Event{ID: "p-old", Kind: 0, PubKey: a}}
+	next := State{
+		Listings: []Listing{listing("com.b"), listing("com.a")},
+		Proofs:   []Proof{{Pubkey: a, D: "c1", Event: nostr.Event{ID: "1", Kind: 30509, PubKey: a, Tags: nostr.Tags{{"d", "c1"}}}}},
+		Profiles: []Profile{{Pubkey: b, Event: nostr.Event{ID: "9", Kind: 0, PubKey: b}}},
+	}
+	diff := Compare(State{Profiles: []Profile{gone}}, next)
+	var got []string
+	for _, event := range diff.Events {
+		got = append(got, event.ID)
+	}
+	want := "z-com.a,y-com.a,x2-com.a,x1-com.a,z-com.b,y-com.b,x2-com.b,x1-com.b,9,1"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("order %s", strings.Join(got, ","))
+	}
+	if len(diff.Coords) != 1 || diff.Coords[0] != (Coord{Kind: 0, Pubkey: a}) {
+		t.Fatalf("a removed kind 0 needs a delete line: %+v", diff.Coords)
 	}
 }
 
@@ -180,7 +210,7 @@ func TestLargeBundleManifestFitsBunker(t *testing.T) {
 	}
 }
 
-func TestBundleFilesFollowEventKind(t *testing.T) {
+func TestBundleShipsEveryArtifactForAChangedApp(t *testing.T) {
 	data := t.TempDir()
 	signer, err := ParseSigner("1")
 	if err != nil {
@@ -201,38 +231,15 @@ func TestBundleFilesFollowEventKind(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	listing := nostr.Event{ID: "app", Kind: 32267, Tags: nostr.Tags{{"d", id}}}
-	asset := nostr.Event{ID: "apk", Kind: 3063, Tags: nostr.Tags{{"i", id}}}
-	release := nostr.Event{ID: "rel", Kind: 30063, Tags: nostr.Tags{{"i", id}}}
-
-	onlyRelease := tarFiles(t, mustBundle(t, data, signer, Diff{Apps: []string{id}, Events: []nostr.Event{release}}))
-	for _, name := range []string{"about", "vector", "icon.webp", "security", "facts"} {
-		if _, ok := onlyRelease[id+"/"+name]; ok {
-			t.Fatalf("release shipped %s", name)
+	files := tarFiles(t, mustBundle(t, data, signer, Diff{Apps: []string{id}}))
+	for _, name := range artifactFiles {
+		if _, ok := files[id+"/"+name]; !ok {
+			t.Fatalf("missing %s in %v", name, keys(files))
 		}
 	}
-	onlyApp := tarFiles(t, mustBundle(t, data, signer, Diff{Apps: []string{id}, Events: []nostr.Event{listing}}))
-	for _, name := range []string{"about", "vector", "icon.webp"} {
-		if _, ok := onlyApp[id+"/"+name]; !ok {
-			t.Fatalf("missing %s", name)
-		}
-	}
-	for _, name := range []string{"security", "facts"} {
-		if _, ok := onlyApp[id+"/"+name]; ok {
-			t.Fatalf("app event shipped %s", name)
-		}
-	}
-	onlyAsset := tarFiles(t, mustBundle(t, data, signer, Diff{Apps: []string{id}, Events: []nostr.Event{asset}}))
-	if _, ok := onlyAsset[id+"/security"]; !ok {
-		t.Fatal("missing security")
-	}
-	if _, ok := onlyAsset[id+"/facts"]; ok {
-		t.Fatal("shipped facts")
-	}
-	for _, name := range []string{"about", "vector", "icon.webp"} {
-		if _, ok := onlyAsset[id+"/"+name]; ok {
-			t.Fatalf("asset shipped %s", name)
-		}
+	files = tarFiles(t, mustBundle(t, data, signer, Diff{}))
+	if _, ok := files[id+"/about"]; ok {
+		t.Fatal("an unchanged app shipped artifacts")
 	}
 }
 

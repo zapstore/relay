@@ -54,63 +54,25 @@ type Stack struct {
 	Event  nostr.Event
 }
 
-// IndexListing is the durable identity of one listing.
-type IndexListing struct {
-	AppID          string   `json:"app_id"`
-	AppEventID     string   `json:"app_event_id"`
-	ReleaseEventID string   `json:"release_event_id"`
-	AssetEventIDs  []string `json:"asset_event_ids"`
+// listingIdentity is the event ids that make up one listing.
+type listingIdentity struct {
+	AppEventID     string
+	ReleaseEventID string
+	AssetEventIDs  []string
 }
 
-// IndexProof is the durable identity of one addressable catalog coordinate.
-type IndexProof struct {
-	Kind    int    `json:"kind"`
-	Pubkey  string `json:"pubkey"`
-	D       string `json:"d"`
-	EventID string `json:"event_id"`
-}
-
-// Index is enough to diff the next snapshot and detect removals.
-type Index struct {
-	Listings []IndexListing `json:"listings"`
-	Proofs   []IndexProof   `json:"proofs"`
-	Stacks   []IndexProof   `json:"stacks"`
-}
-
-func (s State) Index() Index {
-	idx := Index{
-		Listings: make([]IndexListing, len(s.Listings)),
-		Proofs:   make([]IndexProof, len(s.Proofs)),
-		Stacks:   make([]IndexProof, len(s.Stacks)),
-	}
-	for i, listing := range s.Listings {
-		idx.Listings[i] = listingIndex(listing)
-	}
-	for i, proof := range s.Proofs {
-		idx.Proofs[i] = IndexProof{
-			Kind:    events.KindIdentityProof,
-			Pubkey:  proof.Pubkey,
-			D:       proof.D,
-			EventID: proof.Event.ID,
-		}
-	}
-	for i, stack := range s.Stacks {
-		idx.Stacks[i] = IndexProof{
-			Kind:    events.KindStack,
-			Pubkey:  stack.Pubkey,
-			D:       stack.D,
-			EventID: stack.Event.ID,
-		}
-	}
-	return idx
-}
-
-// Events is the current listing triples, proofs, and catalog stacks, without historical releases.
+// Events is the current listing triples and replaceable events, without historical releases.
 func (s State) Events() []nostr.Event {
 	var out []nostr.Event
 	for _, listing := range s.Listings {
 		out = append(out, listingEvents(listing)...)
 	}
+	return append(out, s.replaceables()...)
+}
+
+// replaceables is every event in the state that is not part of a listing.
+func (s State) replaceables() []nostr.Event {
+	var out []nostr.Event
 	for _, proof := range s.Proofs {
 		out = append(out, proof.Event)
 	}
@@ -313,7 +275,7 @@ func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets
 			if err != nil || asset.Validate() != nil {
 				continue
 			}
-			if asset.I != appID || asset.Variant != "" || !isAndroidAPK(asset) {
+			if asset.I != appID || !isAndroidAPK(asset) {
 				continue
 			}
 			code, err := strconv.ParseInt(asset.VersionCode, 10, 64)
@@ -463,22 +425,31 @@ func listingCertificate(listing Listing) (string, bool) {
 	return "", false
 }
 
-func c1Owner(proofs []Proof, certHash string, at time.Time) (string, bool) {
-	owner, _, ok := c1Publisher(proofs, certHash, at)
-	return owner, ok
-}
-
+// c1Publisher selects the active C1 owner for one certificate.
+// Replacement first: one current event per pubkey, greatest created_at, then
+// lowest event id. A revoked or expired current event drops that pubkey.
+// The owner is the newest pubkey that remains.
 func c1Publisher(proofs []Proof, certHash string, at time.Time) (owner, delegate string, ok bool) {
-	var best *Proof
+	current := map[string]Proof{}
 	for i := range proofs {
 		if proofs[i].D != certHash {
 			continue
 		}
-		if !events.ProofActive(proofs[i].Event, at) {
+		key := proofs[i].Event.PubKey
+		prev, exists := current[key]
+		if exists && !betterEvent(proofs[i].Event, prev.Event) {
 			continue
 		}
-		if best == nil || betterEvent(proofs[i].Event, best.Event) {
-			best = &proofs[i]
+		current[key] = proofs[i]
+	}
+	var best *Proof
+	for _, proof := range current {
+		if !events.ProofActive(proof.Event, at) {
+			continue
+		}
+		if best == nil || betterEvent(proof.Event, best.Event) {
+			chosen := proof
+			best = &chosen
 		}
 	}
 	if best == nil {
@@ -505,14 +476,13 @@ func betterCandidate(next, current listingCandidate) bool {
 	return next.release.ID < current.release.ID
 }
 
-func listingIndex(listing Listing) IndexListing {
+func listingIndex(listing Listing) listingIdentity {
 	ids := make([]string, len(listing.Assets))
 	for i, asset := range listing.Assets {
 		ids[i] = asset.ID
 	}
 	slices.Sort(ids)
-	return IndexListing{
-		AppID:          listing.AppID,
+	return listingIdentity{
 		AppEventID:     listing.App.ID,
 		ReleaseEventID: listing.Release.ID,
 		AssetEventIDs:  ids,

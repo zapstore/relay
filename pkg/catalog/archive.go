@@ -41,17 +41,26 @@ func WriteSnap(path string, events []nostr.Event) error {
 	return writeAtomic(path, body)
 }
 
+// ReadSnap resolves a snapshot at the time it was written.
 func ReadSnap(path string) (State, error) {
 	events, err := ReadSnapEvents(path)
 	if err != nil {
 		return State{}, err
 	}
-	info, err := os.Stat(path)
-	at := time.Now()
-	if err == nil {
-		at = info.ModTime()
+	at, err := snapTime(path)
+	if err != nil {
+		return State{}, err
 	}
 	return ResolveAt(events, "", at), nil
+}
+
+// snapTime is when the snapshot was written. CreateBundle sets it to the epoch time.
+func snapTime(path string) (time.Time, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return info.ModTime().Truncate(time.Second), nil
 }
 
 func ReadSnapEvents(path string) ([]nostr.Event, error) {

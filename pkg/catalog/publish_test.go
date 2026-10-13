@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -41,7 +42,7 @@ func TestPublishMatchAPKOmitsStaleArtifacts(t *testing.T) {
 	writeCache(t, data, "com.example.oldcache", current)
 	writeCache(t, data, "com.example.nohash", "")
 
-	n, err := CreateBundle(t.Context(), data, next, signer, 10, "", true, nil)
+	n, err := CreateBundle(t.Context(), data, next, signer, 10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,71 +66,6 @@ func TestPublishMatchAPKOmitsStaleArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(string(files["diff.jsonl"]), "com.example.stale-asset") {
 		t.Fatalf("stale app events missing: %s", files["diff.jsonl"])
-	}
-}
-
-func TestPublishFilterKeepsMatchingApps(t *testing.T) {
-	data := t.TempDir()
-	signer, err := ParseSigner("1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	maps := apkListing("com.example.maps", "aa")
-	maps.App.Tags = nostr.Tags{{"d", maps.AppID}}
-	maps.Release.Tags = nostr.Tags{{"i", maps.AppID}}
-	maps.Assets[0].Tags = append(maps.Assets[0].Tags, nostr.Tag{"i", maps.AppID})
-	other := apkListing("com.example.other", "bb")
-	other.App.Tags = nostr.Tags{{"d", other.AppID}}
-	other.Release.Tags = nostr.Tags{{"i", other.AppID}}
-	other.Assets[0].Tags = append(other.Assets[0].Tags, nostr.Tag{"i", other.AppID})
-	writeAbout(t, data, maps.AppID)
-	writeAbout(t, data, other.AppID)
-	n, err := CreateBundle(t.Context(), data, State{Listings: []Listing{maps, other}}, signer, 10, "maps", false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("epoch = %d", n)
-	}
-	body, err := os.ReadFile(BundlePath(data, 0, 1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	files := tarFiles(t, body)
-	if _, ok := files["com.example.maps/about"]; !ok {
-		t.Fatalf("missing maps about in %v", keys(files))
-	}
-	if _, ok := files["com.example.other/about"]; ok {
-		t.Fatal("shipped other about")
-	}
-	raw := string(files["diff.jsonl"])
-	if !strings.Contains(raw, "com.example.maps") || strings.Contains(raw, "com.example.other") {
-		t.Fatalf("diff %s", raw)
-	}
-}
-
-func TestPublishShipsArtifactsWithoutAPKMatch(t *testing.T) {
-	data := t.TempDir()
-	const current = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	signer, err := ParseSigner("1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeAbout(t, data, "com.example.stale")
-	n, err := CreateBundle(t.Context(), data, State{Listings: []Listing{apkListing("com.example.stale", current)}}, signer, 10, "", false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("epoch = %d", n)
-	}
-	body, err := os.ReadFile(BundlePath(data, 0, 1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	files := tarFiles(t, body)
-	if _, ok := files["com.example.stale/about"]; !ok {
-		t.Fatalf("missing about in %v", keys(files))
 	}
 }
 
@@ -169,16 +105,23 @@ func TestFromZeroMatchesSnapshot(t *testing.T) {
 	if len(state.Listings) != 1 {
 		t.Fatalf("listings = %d", len(state.Listings))
 	}
-	n, err := CreateBundle(t.Context(), data, state, signer, 10, "", false, nil)
+	n, err := CreateBundle(t.Context(), data, state, signer, 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(BundlePath(data, 0, n))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(BundlePath(data, 0, n)); err != nil {
 		t.Fatal(err)
 	}
-	body, err := EnsureBundle(t.Context(), data, 0, n, signer, 10)
+	body, err := EnsureBundle(t.Context(), data, 0, n, signer, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Equal(written, body) {
+		t.Fatal("a rebuilt bundle differs from the one the tick wrote")
 	}
 	snap, err := ReadSnapEvents(SnapPath(data, n))
 	if err != nil {
@@ -192,6 +135,43 @@ func TestFromZeroMatchesSnapshot(t *testing.T) {
 		if !strings.Contains(diff, event.ID) {
 			t.Fatalf("snapshot event %s missing from diff", event.ID)
 		}
+	}
+}
+
+func TestRequestBuiltBundleCarriesBanLines(t *testing.T) {
+	data := t.TempDir()
+	signer, err := ParseSigner("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spy := resolvedListing(t, "com.example.spy")
+	maps := resolvedListing(t, "com.example.maps")
+	other := resolvedListing(t, "com.example.other")
+	for i, st := range []State{
+		{Listings: []Listing{spy, maps, other}},
+		{Listings: []Listing{spy, maps}},
+		{Listings: []Listing{maps}},
+	} {
+		if _, err := CreateBundle(t.Context(), data, st, signer, int64(10+i), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notices := func(context.Context) (map[string]string, error) {
+		return map[string]string{"com.example.spy": "Records the microphone."}, nil
+	}
+	body, err := EnsureBundle(t.Context(), data, 1, 3, signer, notices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := string(tarFiles(t, body)["diff.jsonl"])
+	if !strings.Contains(diff, `"delete":["com.example.other","com.example.spy"]`) {
+		t.Fatalf("diff = %s", diff)
+	}
+	if !strings.Contains(diff, `{"banned":true,"app_id":"com.example.spy","reason":"Records the microphone."}`) {
+		t.Fatalf("missing ban line: %s", diff)
+	}
+	if strings.Contains(diff, `"app_id":"com.example.other"`) {
+		t.Fatalf("ban line for a normal removal: %s", diff)
 	}
 }
 
@@ -215,7 +195,7 @@ func TestBundleEnrichesAppsInTheDiff(t *testing.T) {
 		}
 		return nil
 	}
-	n, err := CreateBundle(t.Context(), data, next, signer, 10, "", true, enrich)
+	n, err := CreateBundle(t.Context(), data, next, signer, 10, enrich)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +224,7 @@ func TestBundleContinuesWhenEnrichFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := CreateBundle(t.Context(), data, State{Listings: []Listing{apkListing("com.example.app", current)}}, signer, 10, "", true, func(context.Context, []string) error {
+	n, err := CreateBundle(t.Context(), data, State{Listings: []Listing{apkListing("com.example.app", current)}}, signer, 10, func(context.Context, []string) error {
 		return errors.New("down")
 	})
 	if err != nil {
@@ -312,7 +292,7 @@ func TestPreviousStackSignedByAnotherKeyIsDeleted(t *testing.T) {
 	if err := WriteSnap(SnapPath(data, 1), []nostr.Event{stack}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := CreateBundle(t.Context(), data, State{}, signer, 20, "", false, nil)
+	n, err := CreateBundle(t.Context(), data, State{}, signer, 20, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,6 +308,28 @@ func TestPreviousStackSignedByAnotherKeyIsDeleted(t *testing.T) {
 	if !strings.Contains(diff, want) {
 		t.Fatalf("diff = %s", diff)
 	}
+}
+
+// resolvedListing is a listing that survives a snapshot round trip.
+func resolvedListing(t *testing.T, appID string) Listing {
+	t.Helper()
+	pub := strings.Repeat("ab", 32)
+	assetID := appID + "-asset"
+	st := Resolve([]nostr.Event{
+		{ID: appID + "-app", Kind: events.KindApp, PubKey: pub, Tags: nostr.Tags{{"d", appID}, {"name", appID}, {"f", preferredABI}}},
+		{ID: appID + "-rel", Kind: events.KindRelease, PubKey: pub, Tags: nostr.Tags{
+			{"i", appID}, {"version", "1.0.0"}, {"d", appID + "@1.0.0"}, {"c", "main"}, {"e", assetID},
+		}},
+		{ID: assetID, Kind: events.KindAsset, PubKey: pub, Tags: nostr.Tags{
+			{"i", appID}, {"x", strings.Repeat("ef", 32)}, {"version", "1.0.0"}, {"f", preferredABI},
+			{"version_code", "1"}, {"apk_certificate_hash", strings.Repeat("cd", 32)},
+			{"url", "https://example.com/" + appID + ".apk"},
+		}},
+	}, "")
+	if len(st.Listings) != 1 {
+		t.Fatalf("%s: listings = %d", appID, len(st.Listings))
+	}
+	return st.Listings[0]
 }
 
 func apkListing(id, hash string) Listing {
