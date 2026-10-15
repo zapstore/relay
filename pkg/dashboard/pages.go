@@ -38,8 +38,19 @@ type relayPageData struct {
 	Chart ChartData
 }
 
+func (d *T) requireAnalytics(w http.ResponseWriter) bool {
+	if d.analytics != nil {
+		return true
+	}
+	http.Error(w, "analytics is disabled", http.StatusNotFound)
+	return false
+}
+
 func (d *T) relayPage(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+	if !d.requireAnalytics(w) {
 		return
 	}
 
@@ -108,6 +119,9 @@ type blossomPageData struct {
 
 func (d *T) blossomPage(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+	if !d.requireAnalytics(w) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -224,6 +238,9 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
 		return
 	}
+	if !d.requireAnalytics(w) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -270,6 +287,9 @@ func (d *T) appsPage(w http.ResponseWriter, r *http.Request) {
 }
 func (d *T) appChartEndpoint(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+	if !d.requireAnalytics(w) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -356,6 +376,9 @@ func (d *T) sourceRankingEndpoint(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
 		return
 	}
+	if !d.requireAnalytics(w) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -420,6 +443,9 @@ func (d *T) topSourcesDownloads(ctx context.Context, from, to string) ([]SourceR
 
 func (d *T) countryRankingEndpoint(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+	if !d.requireAnalytics(w) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -533,6 +559,9 @@ type appRanking struct {
 
 func (d *T) appRankingEndpoint(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticate(w, r); !ok {
+		return
+	}
+	if !d.requireAnalytics(w) {
 		return
 	}
 

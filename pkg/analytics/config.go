@@ -10,7 +10,8 @@ import (
 )
 
 type Config struct {
-	// Address is the address the analytics API server listens on. Default is "localhost:3336".
+	// Address is the address the analytics API server listens on.
+	// Empty disables analytics: no database, no collection, and no API.
 	Address string `env:"ANALYTICS_API_ADDRESS"`
 
 	// FlushInterval is the interval at which the analytics engine flushes data to the database. Default is 5 minutes.
@@ -37,7 +38,6 @@ type Config struct {
 
 func NewConfig() Config {
 	return Config{
-		Address:            "localhost:3336",
 		FlushInterval:      5 * time.Minute,
 		FlushTimeout:       10 * time.Second,
 		FlushSize:          1000,
@@ -48,7 +48,15 @@ func NewConfig() Config {
 	}
 }
 
+// Enabled reports whether ANALYTICS_API_ADDRESS is set.
+func (c Config) Enabled() bool {
+	return c.Address != ""
+}
+
 func (c Config) Validate() error {
+	if !c.Enabled() {
+		return nil
+	}
 	if _, err := net.ResolveTCPAddr("tcp", c.Address); err != nil {
 		return fmt.Errorf("invalid address %q: %w", c.Address, err)
 	}
@@ -82,6 +90,9 @@ func (c Config) Validate() error {
 }
 
 func (c Config) String() string {
+	if !c.Enabled() {
+		return "Analytics:\n\t(unset)\n"
+	}
 	return fmt.Sprintf("Analytics:\n"+
 		"\tAPI Address: %s\n"+
 		"\tFlush Interval: %s\n"+
