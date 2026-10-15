@@ -251,7 +251,7 @@ func TestDeveloperRotationReachesTheSlot(t *testing.T) {
 	saveSlotEvent(t, r.store, *old.proof(t, "4", ownerKey, ""))
 	r.readAPK = readChains(t, map[string]signing{"rotated": {old.cert, next.cert}})
 	app, release, asset := testTriple("b", ownerKey, blobs.put("rotated"), next.hash, 1)
-	asset.Tags = append(asset.Tags, nostr.Tag{"apk_certificate_hash", old.hash})
+	asset.Tags = append(asset.Tags, nostr.Tag{"apk_certificate_ancestor", old.hash})
 
 	r.holdListing(t.Context(), app)
 	r.holdListing(t.Context(), asset)
@@ -266,10 +266,35 @@ func TestDeveloperRotationReachesTheSlot(t *testing.T) {
 	var named int
 	err := r.store.DB.QueryRow(`
 		SELECT COUNT(*) FROM tags
-		WHERE event_id = ? AND key = 'apk_certificate_hash' AND value = ?
+		WHERE event_id = ? AND key = 'apk_certificate_ancestor' AND value = ?
 	`, asset.ID, old.hash).Scan(&named)
 	if err != nil || named != 1 {
 		t.Fatalf("stored asset names the original certificate: %d %v", named, err)
+	}
+}
+
+func TestRetiredCertificateProofDoesNotHoldTheSlot(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	old, next := newTestKey(t), newTestKey(t)
+	prior := testAsset("p", ownerKey, strings.Repeat("0", 64), next.hash, 1)
+	prior.CreatedAt = 1
+	prior.Tags = append(prior.Tags, nostr.Tag{"apk_certificate_ancestor", old.hash})
+	saveSlotEvent(t, r.store, *prior)
+	saveSlotEvent(t, r.store, *old.proof(t, "4", ownerKey, ""))
+	r.readAPK = readChains(t, map[string]signing{"current": {old.cert, next.cert}})
+	app, release, asset := testTriple("b", ownerKey, blobs.put("current"), next.hash, 2)
+	asset.Tags = append(asset.Tags, nostr.Tag{"apk_certificate_ancestor", old.hash})
+
+	r.holdListing(t.Context(), app)
+	r.holdListing(t.Context(), asset)
+	r.holdListing(t.Context(), release)
+	drainReads(t, r)
+	if slotHas(t, r.store, release.ID) {
+		t.Fatal("a proof for a retired certificate promoted the listing")
+	}
+	if pin := pinned(t, r); pin != next.hash {
+		t.Fatalf("certificate %s, want the operator's signer", pin)
 	}
 }
 

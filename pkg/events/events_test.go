@@ -91,6 +91,7 @@ func TestParseAsset_AllowsSigningCertificateLineage(t *testing.T) {
 			{"version_code", "200"},
 			{"apk_certificate_hash", newCertificate},
 			{"apk_certificate_hash", oldCertificate},
+			{"apk_certificate_ancestor", oldCertificate},
 		},
 	}
 
@@ -98,8 +99,11 @@ func TestParseAsset_AllowsSigningCertificateLineage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected parse error for signing lineage: %v", err)
 	}
-	if !slices.Equal(asset.APKCertificateHashes, []string{newCertificate, oldCertificate}) {
-		t.Fatalf("unexpected certificate lineage: %v", asset.APKCertificateHashes)
+	if !slices.Equal(asset.APKCertificateHashes, []string{newCertificate}) {
+		t.Fatalf("signer = %v, want only the first apk_certificate_hash", asset.APKCertificateHashes)
+	}
+	if !slices.Equal(asset.APKCertificateAncestors, []string{oldCertificate}) {
+		t.Fatalf("ancestors = %v", asset.APKCertificateAncestors)
 	}
 	if err := asset.Validate(); err != nil {
 		t.Fatalf("unexpected validation error for signing lineage: %v", err)

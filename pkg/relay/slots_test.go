@@ -36,7 +36,7 @@ func TestListingSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	rotated := slotAsset(owner, appID, successor)
-	rotated.Tags = append(rotated.Tags, nostr.Tag{"apk_certificate_hash", cert})
+	rotated.Tags = append(rotated.Tags, nostr.Tag{"apk_certificate_ancestor", cert})
 	if err := hook(nil, rotated); err != nil {
 		t.Fatalf("a lineage naming the pin: %v", err)
 	}

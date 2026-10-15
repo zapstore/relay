@@ -25,17 +25,18 @@ type Asset struct {
 	Size     string // Size in bytes
 
 	// Software Asset-specific optional fields
-	MinPlatformVersion    string   // Minimum platform version
-	TargetPlatformVersion string   // Target platform version
-	SupportedNIPs         []string // Supported Nostr NIPs
-	Filename              string   // Original filename
-	Variant               string   // Variant (can be empty)
-	Commit                string   // Commit ID for reproducible builds
-	MinAllowedVersion     string   // Minimum allowed version
-	VersionCode           string   // Version code (Android)
-	MinAllowedVersionCode string   // Minimum allowed version code
-	APKCertificateHashes  []string // APK certificate hashes (Android)
-	Executables           []string // Regex paths to executables (CLI)
+	MinPlatformVersion      string   // Minimum platform version
+	TargetPlatformVersion   string   // Target platform version
+	SupportedNIPs           []string // Supported Nostr NIPs
+	Filename                string   // Original filename
+	Variant                 string   // Variant (can be empty)
+	Commit                  string   // Commit ID for reproducible builds
+	MinAllowedVersion       string   // Minimum allowed version
+	VersionCode             string   // Version code (Android)
+	MinAllowedVersionCode   string   // Minimum allowed version code
+	APKCertificateHashes    []string // Current signer. One value. Further hashes are ignored.
+	APKCertificateAncestors []string // Older certificates, oldest first, excluding the signer.
+	Executables             []string // Regex paths to executables (CLI)
 }
 
 // Validate checks that all required fields are present and valid.
@@ -182,7 +183,12 @@ func ParseAsset(event *nostr.Event) (Asset, error) {
 			asset.MinAllowedVersionCode = tag[1]
 
 		case "apk_certificate_hash":
-			asset.APKCertificateHashes = append(asset.APKCertificateHashes, tag[1])
+			if len(asset.APKCertificateHashes) == 0 {
+				asset.APKCertificateHashes = append(asset.APKCertificateHashes, tag[1])
+			}
+
+		case "apk_certificate_ancestor":
+			asset.APKCertificateAncestors = append(asset.APKCertificateAncestors, tag[1])
 
 		case "executable":
 			asset.Executables = append(asset.Executables, tag[1])

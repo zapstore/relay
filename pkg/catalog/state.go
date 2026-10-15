@@ -402,14 +402,19 @@ func listingVersionCode(listing Listing) int64 {
 }
 
 func isDeveloperSlot(listing Listing, proofs []Proof, at time.Time, appCert string) bool {
-	cert, ok := listingCertificate(listing)
+	signer, ancestors, ok := listingChain(listing)
 	if !ok {
 		return false
 	}
-	if appCert != "" && cert != appCert {
-		return false
+	cert := signer
+	if appCert != "" {
+		appCert = strings.ToLower(appCert)
+		if signer != appCert && !slices.Contains(ancestors, appCert) {
+			return false
+		}
+		cert = appCert
 	}
-	owner, delegate, ok := c1Publisher(proofs, cert, at)
+	owner, delegate, ok := c1Publisher(proofs, []string{cert}, at)
 	if !ok {
 		return false
 	}
@@ -417,22 +422,40 @@ func isDeveloperSlot(listing Listing, proofs []Proof, at time.Time, appCert stri
 }
 
 func listingCertificate(listing Listing) (string, bool) {
-	for _, asset := range listing.Assets {
-		if hash, ok := events.Find(asset.Tags, "apk_certificate_hash"); ok && hash != "" {
-			return hash, true
-		}
-	}
-	return "", false
+	signer, _, ok := listingChain(listing)
+	return signer, ok
 }
 
-// c1Publisher selects the active C1 owner for one certificate.
+// listingChain is an asset's signer and its ancestors. Extra apk_certificate_hash
+// values are ignored.
+func listingChain(listing Listing) (signer string, ancestors []string, ok bool) {
+	for _, asset := range listing.Assets {
+		hash, found := events.Find(asset.Tags, "apk_certificate_hash")
+		if !found || hash == "" {
+			continue
+		}
+		older := events.FindAll(asset.Tags, "apk_certificate_ancestor")
+		for i := range older {
+			older[i] = strings.ToLower(older[i])
+		}
+		return strings.ToLower(hash), older, true
+	}
+	return "", nil, false
+}
+
+// c1Publisher selects the active C1 owner for the certificates in certs.
+// Callers pass the app's current signer. Ancestor proofs do not count.
 // Replacement first: one current event per pubkey, greatest created_at, then
 // lowest event id. A revoked or expired current event drops that pubkey.
 // The owner is the newest pubkey that remains.
-func c1Publisher(proofs []Proof, certHash string, at time.Time) (owner, delegate string, ok bool) {
+func c1Publisher(proofs []Proof, certs []string, at time.Time) (owner, delegate string, ok bool) {
+	want := map[string]struct{}{}
+	for _, cert := range certs {
+		want[strings.ToLower(cert)] = struct{}{}
+	}
 	current := map[string]Proof{}
 	for i := range proofs {
-		if proofs[i].D != certHash {
+		if _, ok := want[strings.ToLower(proofs[i].D)]; !ok {
 			continue
 		}
 		key := proofs[i].Event.PubKey

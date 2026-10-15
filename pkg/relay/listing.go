@@ -348,11 +348,11 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 
 	check := releaseCheck{assets: assets}
 	if pubkey == r.config.Info.Pubkey {
-		certs := assetCerts(assets[0])
-		if len(certs) == 0 {
+		signer := assetSigner(assets[0])
+		if signer == "" {
 			return refuse("the asset names no apk_certificate_hash"), nil
 		}
-		check.cert = certs[0]
+		check.cert = signer
 	} else {
 		check, err = r.checkDeveloper(ctx, pubkey, appID, assets)
 		if err != nil || check.assets == nil {
@@ -393,17 +393,20 @@ func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []n
 		if got.cert(appCert) == nil {
 			return refuse("the APK is not signed by the app's certificate or a successor in its lineage"), nil
 		}
-		if !slices.Contains(assetCerts(asset), appCert) {
+		if !claimMatches(asset, got) {
+			return refuse("the asset lineage does not match the APK"), nil
+		}
+		if !assetNames(asset, appCert) {
 			return refuse("%s", errCertificate), nil
 		}
-		chain = got
+		chain = signing{got.cert(appCert)}
 	}
 
-	proofs, err := r.checkedProofs(ctx, appCert, chain.cert(appCert))
+	proofs, err := r.checkedProofs(ctx, chain)
 	if err != nil {
 		return releaseCheck{}, err
 	}
-	owner, delegate, ok, err := activeDeveloper(ctx, r.store, appCert, proofs)
+	owner, delegate, ok, err := activeDeveloper(ctx, r.store, []string{appCert}, proofs)
 	if err != nil {
 		return releaseCheck{}, err
 	}

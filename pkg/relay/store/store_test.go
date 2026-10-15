@@ -129,7 +129,7 @@ func TestStoreQueryRepository(t *testing.T) {
 var (
 	appMultiCharKeys     = []string{"name", "license", "url", "repository"}
 	releaseMultiCharKeys = []string{"version", "commit"}
-	assetMultiCharKeys   = []string{"url", "version", "apk_certificate_hash"}
+	assetMultiCharKeys   = []string{"url", "version", "apk_certificate_hash", "apk_certificate_ancestor"}
 	fileMultiCharKeys    = []string{"url", "fallback", "version", "apk_signature_hash"}
 )
 

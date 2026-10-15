@@ -62,7 +62,8 @@ BEGIN
 END;
 
 -- KindAsset (3063) - multi-character tag indexing
-CREATE TRIGGER IF NOT EXISTS asset_tags_ai AFTER INSERT ON events
+DROP TRIGGER IF EXISTS asset_tags_ai;
+CREATE TRIGGER asset_tags_ai AFTER INSERT ON events
 WHEN NEW.kind = 3063
 BEGIN
 	INSERT OR IGNORE INTO tags (event_id, key, value)
@@ -70,7 +71,7 @@ BEGIN
 	FROM json_each(NEW.tags)
 	WHERE json_type(value) = 'array'
 		AND json_array_length(value) > 1
-		AND json_extract(value, '$[0]') IN ('url', 'version', 'apk_certificate_hash');
+		AND json_extract(value, '$[0]') IN ('url', 'version', 'apk_certificate_hash', 'apk_certificate_ancestor');
 END;
 
 -- KindFile (1063) - multi-character tag indexing

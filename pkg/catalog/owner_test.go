@@ -24,7 +24,7 @@ func TestC1Owner(t *testing.T) {
 		{Pubkey: older.PubKey, D: cert, Event: older},
 		{Pubkey: revoked.PubKey, D: cert, Event: revoked},
 		{Pubkey: expired.PubKey, D: cert, Event: expired},
-	}, cert, at)
+	}, []string{cert}, at)
 	if !ok || owner != older.PubKey {
 		t.Fatalf("owner = %q ok=%v", owner, ok)
 	}
@@ -33,7 +33,7 @@ func TestC1Owner(t *testing.T) {
 	owner, _, ok = c1Publisher([]Proof{
 		{Pubkey: older.PubKey, D: cert, Event: older},
 		{Pubkey: newer.PubKey, D: cert, Event: newer},
-	}, cert, time.Unix(60, 0))
+	}, []string{cert}, time.Unix(60, 0))
 	if !ok || owner != newer.PubKey {
 		t.Fatalf("newest owner = %q ok=%v", owner, ok)
 	}
@@ -43,7 +43,7 @@ func TestC1Owner(t *testing.T) {
 	owner, _, ok = c1Publisher([]Proof{
 		{Pubkey: high.PubKey, D: cert, Event: high},
 		{Pubkey: low.PubKey, D: cert, Event: low},
-	}, cert, time.Unix(60, 0))
+	}, []string{cert}, time.Unix(60, 0))
 	if !ok || owner != low.PubKey {
 		t.Fatalf("tie owner = %q ok=%v", owner, ok)
 	}
@@ -61,14 +61,14 @@ func TestC1Owner(t *testing.T) {
 		{Pubkey: replaced.PubKey, D: cert, Event: replaced},
 		{Pubkey: revokedCurrent.PubKey, D: cert, Event: revokedCurrent},
 		{Pubkey: other.PubKey, D: cert, Event: other},
-	}, cert, at)
+	}, []string{cert}, at)
 	if !ok || owner != other.PubKey {
 		t.Fatalf("revoked replacement owner = %q ok=%v", owner, ok)
 	}
 	if _, _, ok := c1Publisher([]Proof{
 		{Pubkey: replaced.PubKey, D: cert, Event: replaced},
 		{Pubkey: revokedCurrent.PubKey, D: cert, Event: revokedCurrent},
-	}, cert, at); ok {
+	}, []string{cert}, at); ok {
 		t.Fatal("revoked replacement still has an owner")
 	}
 }

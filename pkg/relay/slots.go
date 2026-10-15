@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -36,7 +35,7 @@ func ListingSlots(db store.T, catalogKey string) func(rely.Client, *nostr.Event)
 		if err != nil || !ok {
 			return err
 		}
-		if !slices.Contains(assetCerts(*event), pinned) {
+		if !assetNames(*event, pinned) {
 			return errCertificate
 		}
 		return nil
@@ -50,7 +49,7 @@ func holdsDeveloperSlot(ctx context.Context, db store.T, catalogKey, appID, pubk
 	if err != nil || !ok {
 		return false, err
 	}
-	owner, delegate, ok, err := activeDeveloper(ctx, db, cert, nil)
+	owner, delegate, ok, err := activeDeveloper(ctx, db, []string{cert}, nil)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -82,15 +81,26 @@ func appCertificate(ctx context.Context, db store.T, catalogKey, appID string) (
 	return strings.ToLower(hash), true, nil
 }
 
-// activeDeveloper chooses the C1 owner for cert from the stored proofs and
-// extra, pending proofs already checked against an APK.
-func activeDeveloper(ctx context.Context, db store.T, cert string, extra []nostr.Event) (owner, delegate string, ok bool, err error) {
+// activeDeveloper chooses the C1 owner for the certificates in certs. Callers
+// pass the app's current signer and nothing else. A proof for an ancestor
+// does not count: that key may have been retired because it leaked.
+func activeDeveloper(ctx context.Context, db store.T, certs []string, extra []nostr.Event) (owner, delegate string, ok bool, err error) {
+	if len(certs) == 0 {
+		return "", "", false, nil
+	}
+	args := make([]any, 0, 1+len(certs))
+	args = append(args, events.KindIdentityProof)
+	marks := make([]string, len(certs))
+	for i, cert := range certs {
+		marks[i] = "?"
+		args = append(args, strings.ToLower(cert))
+	}
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT e.pubkey, e.created_at, e.id, e.tags
 		FROM events e
 		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = ? AND t.key = 'd' AND t.value = ?
-	`, events.KindIdentityProof, cert)
+		WHERE e.kind = ? AND t.key = 'd' AND lower(t.value) IN (`+strings.Join(marks, ",")+`)
+	`, args...)
 	if err != nil {
 		slog.Error("listing slot: read proofs", "err", err)
 		return "", "", false, ErrInternal

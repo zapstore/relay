@@ -86,7 +86,7 @@ func (r *T) proofHasAPK(ctx context.Context, proof *nostr.Event) (bool, error) {
 	}
 	publishers := proofPublishers(*proof)
 	for _, asset := range pending {
-		if slices.Contains(publishers, asset.PubKey) && slices.Contains(assetCerts(asset), cert) {
+		if slices.Contains(publishers, asset.PubKey) && assetSigner(asset) == strings.ToLower(cert) {
 			return true, nil
 		}
 	}
@@ -108,7 +108,7 @@ func (r *T) promoteClaim(ctx context.Context, proof nostr.Event, skipBroadcast s
 		if !ok || readErr != "" {
 			continue
 		}
-		if c := chain.cert(cert); c != nil {
+		if c := chain.cert(strings.ToLower(cert)); c != nil {
 			return r.commitCheckedProof(ctx, proof, c, skipBroadcast)
 		}
 	}
@@ -148,16 +148,18 @@ func (r *T) commitProof(ctx context.Context, proof nostr.Event, skipBroadcast st
 	return nil
 }
 
-// checkedProofs returns the pending active proofs for hash whose signature
-// verifies with cert. A proof that does not verify is dropped.
-func (r *T) checkedProofs(ctx context.Context, hash string, cert *x509.Certificate) ([]nostr.Event, error) {
+// checkedProofs returns the pending proofs whose d tag is in chain and whose
+// signature verifies with that certificate. A proof that does not verify is dropped.
+func (r *T) checkedProofs(ctx context.Context, chain signing) ([]nostr.Event, error) {
 	pending, err := r.store.QueryPending(ctx, events.KindIdentityProof)
 	if err != nil {
 		return nil, err
 	}
 	var out []nostr.Event
 	for _, proof := range pending {
-		if d, _ := events.Find(proof.Tags, "d"); d != hash {
+		d, _ := events.Find(proof.Tags, "d")
+		cert := chain.cert(strings.ToLower(d))
+		if cert == nil {
 			continue
 		}
 		if err := events.VerifyIdentityProof(&proof, cert); err != nil {
@@ -195,7 +197,7 @@ func (r *T) listedAssets(ctx context.Context, cert string) ([]nostr.Event, error
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := events.Find(event.Tags, "x"); ok {
+		if _, ok := events.Find(event.Tags, "x"); ok && assetSigner(event) == cert {
 			out = append(out, event)
 		}
 	}
@@ -211,11 +213,37 @@ func proofPublishers(proof nostr.Event) []string {
 	return out
 }
 
-// assetCerts returns an asset's apk_certificate_hash values in lower case.
-func assetCerts(asset nostr.Event) []string {
-	hashes := events.FindAll(asset.Tags, "apk_certificate_hash")
+// assetSigner is the first apk_certificate_hash. Further hashes are ignored.
+func assetSigner(asset nostr.Event) string {
+	hash, ok := events.Find(asset.Tags, "apk_certificate_hash")
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(hash)
+}
+
+// assetAncestors are the apk_certificate_ancestor values, oldest first.
+func assetAncestors(asset nostr.Event) []string {
+	hashes := events.FindAll(asset.Tags, "apk_certificate_ancestor")
 	for i := range hashes {
 		hashes[i] = strings.ToLower(hashes[i])
 	}
 	return hashes
+}
+
+// assetNames reports whether cert is the asset's signer or one of its ancestors.
+func assetNames(asset nostr.Event, cert string) bool {
+	cert = strings.ToLower(cert)
+	if assetSigner(asset) == cert {
+		return true
+	}
+	return slices.Contains(assetAncestors(asset), cert)
+}
+
+// claimMatches reports whether the asset's signer and ancestors are the chain read from the APK.
+func claimMatches(asset nostr.Event, chain signing) bool {
+	if assetSigner(asset) != chain.signer() {
+		return false
+	}
+	return slices.Equal(assetAncestors(asset), chain.ancestors())
 }

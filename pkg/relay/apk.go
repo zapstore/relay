@@ -53,6 +53,27 @@ func (s signing) signer() string {
 	return certHash(s[len(s)-1])
 }
 
+// ancestors are the older certificates, oldest first, excluding the signer.
+func (s signing) ancestors() []string {
+	if len(s) <= 1 {
+		return nil
+	}
+	out := make([]string, len(s)-1)
+	for i, c := range s[:len(s)-1] {
+		out[i] = certHash(c)
+	}
+	return out
+}
+
+// hashes is the chain, oldest first, ending at the signer.
+func (s signing) hashes() []string {
+	out := make([]string, len(s))
+	for i, c := range s {
+		out[i] = certHash(c)
+	}
+	return out
+}
+
 // cert returns the certificate in the chain with this hash, or nil. A match
 // means the APK is signed by that certificate or a successor in its lineage.
 func (s signing) cert(hash string) *x509.Certificate {

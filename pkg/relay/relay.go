@@ -759,7 +759,7 @@ func addressFound(ctx context.Context, db store.T, catalogKey string, ref events
 	if err != nil || !ok {
 		return false, err
 	}
-	owner, _, ok, err := activeDeveloper(ctx, db, cert, nil)
+	owner, _, ok, err := activeDeveloper(ctx, db, []string{cert}, nil)
 	if err != nil || !ok {
 		return false, err
 	}
