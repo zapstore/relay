@@ -82,6 +82,7 @@ type SystemConfig struct {
 
 	// ReadOnly rejects events, Blossom uploads, relay.sock bans, and
 	// dashboard blacklist changes. Bundles are still signed with SIGN_WITH.
+	// The bundle tick still enriches.
 	ReadOnly bool `env:"READ_ONLY"`
 }
 

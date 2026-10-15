@@ -27,7 +27,7 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle
 - `GET /bundle` is on the relay listener
 - A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits
 - Signing is `SIGN_WITH`. Its public key must equal `RELAY_PUBKEY`
-- `READ_ONLY=true` rejects events, Blossom uploads, `relay.sock` bans, and dashboard blacklist changes. Bundles are still signed with `SIGN_WITH`
+- `READ_ONLY=true` rejects events, Blossom uploads, `relay.sock` bans, and dashboard blacklist changes. Bundles are still signed with `SIGN_WITH`. The bundle tick still enriches
 - `PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in the local blob directory. Zero disables it
 
 ### Analytics
