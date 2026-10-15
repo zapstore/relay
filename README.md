@@ -18,15 +18,15 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle
 - Configurable allowed media types (APKs, images)
 - Deduplication: blobs are checked before upload to save bandwidth
 - Local SQLite metadata store with CDN redirect for downloads, or local files when Bunny is unset
-- Uploads stay on local disk, unserved, until a promoted listing names them. A mover then sends them to Bunny. See [buffer zone](SPEC.md#buffer-zone)
+- Uploads stay on local disk, unserved, until a promoted listing names them. A mover then sends them to Bunny
 
 ### Publisher policy
-- The gate and bans are the [publisher policy](../product/specs/publisher-policy.md). Tables and which kinds the gate applies to are in [SPEC](SPEC.md#publisher-gate)
+- The gate and bans are the [publisher policy](../product/specs/publisher-policy.md)
 
 ### Catalog
 - `GET /bundle` and `POST /suggest` are on the relay listener
 - A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits
-- Signing is `SIGN_WITH` in [SPEC](SPEC.md#process). Its public key must equal `RELAY_PUBKEY`
+- Signing is `SIGN_WITH`. Its public key must equal `RELAY_PUBKEY`
 - `PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in the local blob directory. Zero disables it
 
 ### Analytics
