@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -34,6 +35,8 @@ var (
 
 	ErrInternal    = errors.New("internal error, please contact the Zapstore team.")
 	ErrRateLimited = errors.New("rate-limited: slow down chief")
+
+	errNothingDeleted = errors.New("deletion matched nothing")
 )
 
 // RootKinds are the ones that can be published without referencing a parent event.
@@ -58,6 +61,7 @@ type T struct {
 
 	limiter   rate.Limiter
 	store     store.T
+	pol       *policy.Store
 	analytics *analytics.Engine
 
 	blossom Blossom
@@ -120,7 +124,7 @@ func Setup(
 		NotARM64,
 		TooLittleWork,
 		NotAnchored(store, config.Info.Pubkey),
-		NotAllowed(store, pol, blssm),
+		NotAllowed(pol),
 		NotAdmitted(gate),
 		ListingSlots(store, config.Info.Pubkey),
 		catalogKeyOnSocket(config.Info.Pubkey),
@@ -140,6 +144,7 @@ func Setup(
 
 		limiter:   limiter,
 		store:     store,
+		pol:       pol,
 		analytics: analytics,
 
 		blossom:     blssm,
@@ -159,9 +164,22 @@ func (r *T) Handler() http.Handler { return r.server }
 
 // StartAndServe starts the relay. handler receives every request; nil serves only the WebSocket relay.
 func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler) error {
-	go r.runReconcile(ctx)
-	go r.runProfileWorker(ctx)
-	go r.runAPKReader(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		r.runReconcile(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		r.runProfileWorker(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		r.runAPKReader(ctx)
+	}()
 	r.server.Start(ctx)
 	if handler == nil {
 		handler = r.server
@@ -180,16 +198,18 @@ func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler
 			exit <- err
 		}
 	}()
+	var err error
 	select {
 	case <-ctx.Done():
-		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		err := srv.Shutdown(shut)
+		shut, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutCancel()
+		err = srv.Shutdown(shut)
 		r.server.Wait()
-		return err
-	case err := <-exit:
-		return err
+	case err = <-exit:
 	}
+	cancel()
+	wg.Wait()
+	return err
 }
 
 // NotifyUpload notifies the relay that the upload of the blob with the given hash and mime type is complete.
@@ -335,8 +355,11 @@ func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 	switch {
 	case event.Kind == nostr.KindDeletion:
 		if err := r.handleDelete(ctx, event); err != nil {
+			if errors.Is(err, errNothingDeleted) {
+				return persistResult{msg: errNothingDeleted.Error()}
+			}
 			slog.Error("relay: failed to fullfil delete", "event", event.ID, "error", err)
-			return persistResult{msg: err.Error()}
+			return persistResult{msg: ErrInternal.Error()}
 		}
 
 	case listingKind(event.Kind):
@@ -354,13 +377,13 @@ func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 	case nostr.IsRegularKind(event.Kind):
 		if _, err := r.store.Save(ctx, event); err != nil {
 			slog.Error("relay: failed to save regular event", "event", event.ID, "error", err)
-			return persistResult{msg: err.Error()}
+			return persistResult{msg: ErrInternal.Error()}
 		}
 
 	case nostr.IsReplaceableKind(event.Kind) || nostr.IsAddressableKind(event.Kind):
 		if _, err := r.store.Replace(ctx, event); err != nil {
 			slog.Error("relay: failed to replace event", "event", event.ID, "error", err)
-			return persistResult{msg: err.Error()}
+			return persistResult{msg: ErrInternal.Error()}
 		}
 	}
 	return persistResult{ok: true, broadcast: true}
@@ -403,9 +426,8 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 		deleted += n
 	}
 
-	// Reject deletion events that didn't delete anything
 	if deleted == 0 {
-		return nil
+		return errNothingDeleted
 	}
 
 	// Save the delete request. Clients will fetch these to remove the deleted events from their local cache.
@@ -754,7 +776,7 @@ func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 	}
 }
 
-func NotAllowed(db store.T, pol *policy.Store, blobs Blossom) func(_ rely.Client, e *nostr.Event) error {
+func NotAllowed(pol *policy.Store) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if pol == nil {
 			return nil
@@ -766,28 +788,8 @@ func NotAllowed(db store.T, pol *policy.Store, blobs Blossom) func(_ rely.Client
 			slog.Error("policy: failed to check event", "err", err, "event", e.ID)
 			return ErrInternal
 		}
-		if verdict.BanPublisher {
-			// A banned file hash is decided from the stored bytes, not the tag alone.
-			if x, ok := events.Find(e.Tags, "x"); ok {
-				hash, hashErr := blossom.ParseHash(x)
-				if hashErr != nil {
-					return ErrFileNotAllowed
-				}
-				ready, readyErr := blobs.Has(ctx, hash)
-				if readyErr != nil {
-					slog.Error("policy: failed to check blob", "err", readyErr, "event", e.ID)
-					return ErrInternal
-				}
-				if !ready {
-					return nil
-				}
-			}
-			for _, pub := range verdict.Publishers {
-				if err := ApplyBan(ctx, db, pol, pub, verdict.Reason); err != nil {
-					slog.Error("policy: failed to ban publisher", "err", err, "publisher", pub.ID)
-					return ErrInternal
-				}
-			}
+		// A banned file hash rejects the event. It does not blacklist the signer.
+		if verdict.Reason != "" {
 			return ErrFileNotAllowed
 		}
 		if verdict.Reject {

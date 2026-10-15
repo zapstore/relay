@@ -397,16 +397,17 @@ func (s *Store) RemoveSuggestion(ctx context.Context, id string) error {
 	return err
 }
 
-// Verdict is the admission decision for one event or upload.
+// Verdict is the admission decision for one event.
+// Reason is set only when the event names a banned file hash. That rejects
+// the event and does not blacklist the key that signed it.
 type Verdict struct {
-	Reject       bool
-	BanPublisher bool
-	Reason       string
-	Publishers   []Publisher
+	Reject bool
+	Reason string
 }
 
 // EventVerdict checks a listing event against the blacklist and banned hashes.
-// A known file hash bans the key that signed the event. Certificate tags are not banned from the event.
+// A known file hash rejects the event. It does not blacklist the signer.
+// Certificate tags are not banned from the event.
 func (s *Store) EventVerdict(ctx context.Context, event *nostr.Event) (Verdict, error) {
 	var v Verdict
 	if event == nil {
@@ -453,13 +454,7 @@ func (s *Store) EventVerdict(ctx context.Context, event *nostr.Event) (Verdict, 
 		return v, err
 	}
 	v.Reject = true
-	v.BanPublisher = true
 	v.Reason = reason
-	// The certificate tag is the publisher's claim. The relay does not open
-	// the APK, so a banned hash bans only the key that signed this event.
-	if pub, err := Normalize(KindNostr, event.PubKey); err == nil {
-		v.Publishers = append(v.Publishers, pub)
-	}
 	return v, nil
 }
 
@@ -544,30 +539,35 @@ func Affected(pub Publisher, rows []Listing) (eventIDs, hashes, appIDs []string)
 			continue
 		}
 		eventIDs = append(eventIDs, row.ID)
-		if row.Kind != events.KindAsset {
-			if appID, ok := events.Find(row.Tags, "d"); ok {
-				if _, done := seenApp[appID]; !done {
-					seenApp[appID] = struct{}{}
-					appIDs = append(appIDs, appID)
+		switch row.Kind {
+		case events.KindApp:
+			noteApp(seenApp, &appIDs, row.Tags, "d")
+		case events.KindRelease:
+			noteApp(seenApp, &appIDs, row.Tags, "i")
+		case events.KindAsset:
+			if hash, ok := events.Find(row.Tags, "x"); ok {
+				hash = strings.ToLower(hash)
+				if _, done := seenHash[hash]; !done {
+					seenHash[hash] = struct{}{}
+					hashes = append(hashes, hash)
 				}
 			}
-			continue
-		}
-		if hash, ok := events.Find(row.Tags, "x"); ok {
-			hash = strings.ToLower(hash)
-			if _, done := seenHash[hash]; !done {
-				seenHash[hash] = struct{}{}
-				hashes = append(hashes, hash)
-			}
-		}
-		if appID, ok := events.Find(row.Tags, "i"); ok {
-			if _, done := seenApp[appID]; !done {
-				seenApp[appID] = struct{}{}
-				appIDs = append(appIDs, appID)
-			}
+			noteApp(seenApp, &appIDs, row.Tags, "i")
 		}
 	}
 	return eventIDs, hashes, appIDs
+}
+
+func noteApp(seen map[string]struct{}, appIDs *[]string, tags nostr.Tags, key string) {
+	appID, ok := events.Find(tags, key)
+	if !ok {
+		return
+	}
+	if _, done := seen[appID]; done {
+		return
+	}
+	seen[appID] = struct{}{}
+	*appIDs = append(*appIDs, appID)
 }
 
 func markApp(want map[string]struct{}, rows []Listing, pubkey, appID string) {

@@ -4,18 +4,21 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
 	"github.com/zapstore/relay/pkg/blossom/store"
+	"github.com/zapstore/relay/pkg/policy"
 )
 
 func TestFilesPutOpen(t *testing.T) {
@@ -138,7 +141,7 @@ func TestLocalUploadWritesBytes(t *testing.T) {
 	payload := []byte("upload me locally")
 	hash := blossom.ComputeHash(payload)
 	b := &T{
-		config: Config{Dir: dir, StallTimeout: 30 * time.Second},
+		config: Config{Dir: dir, Address: "127.0.0.1:3335", StallTimeout: 30 * time.Second},
 		blobs:  Bytes{DB: db, Files: Files{Dir: dir}, Local: true},
 		store:  db,
 		relay:  stubRelay{},
@@ -153,6 +156,10 @@ func TestLocalUploadWritesBytes(t *testing.T) {
 	if desc.Size != int64(len(payload)) || desc.Hash != hash {
 		t.Fatalf("descriptor = %+v", desc)
 	}
+	wantURL := "http://127.0.0.1:3335/" + hash.Hex() + ".png"
+	if desc.URL != wantURL {
+		t.Fatalf("url = %s, want %s", desc.URL, wantURL)
+	}
 
 	got, err := os.ReadFile(filepath.Join(dir, BlobPath(hash, "image/png")))
 	if err != nil {
@@ -160,6 +167,53 @@ func TestLocalUploadWritesBytes(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("stored = %q, want %q", got, payload)
+	}
+}
+
+func TestUploadBannedHashDoesNotBan(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.New(filepath.Join(dir, "blossom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	pdb, err := sql.Open("sqlite3", filepath.Join(dir, "policy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pdb.Close() })
+	pol, err := policy.Open(pdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("banned apk")
+	hash := blossom.ComputeHash(payload)
+	signer := strings.Repeat("22", 32)
+	if err := pol.RecordBan(context.Background(), policy.Publisher{Kind: policy.KindNostr, ID: strings.Repeat("11", 32)}, "bad file", []string{hash.Hex()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	b := &T{
+		config: Config{Dir: dir, StallTimeout: 30 * time.Second},
+		pol:    pol,
+		blobs:  Bytes{DB: db, Files: Files{Dir: dir}, Local: true},
+		store:  db,
+		relay:  stubRelay{},
+	}
+	req := httptest.NewRequest(http.MethodPut, "http://localhost/upload", bytes.NewReader(payload))
+	hints := blossy.UploadHints{Hash: &hash, Type: apkType, Size: int64(len(payload))}
+	_, berr := b.upload(fakeRequest{raw: req, pubkey: signer}, hints, bytes.NewReader(payload))
+	if berr == nil || berr.Code != http.StatusForbidden {
+		t.Fatalf("upload = %+v", berr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, BlobPath(hash, apkType))); !os.IsNotExist(err) {
+		t.Fatalf("blob left on disk: %v", err)
+	}
+	banned, err := pol.Blacklisted(context.Background(), policy.Publisher{Kind: policy.KindNostr, ID: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if banned {
+		t.Fatal("uploader was blacklisted")
 	}
 }
 

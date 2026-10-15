@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -27,6 +26,7 @@ import (
 	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/vertex"
 	"github.com/zapstore/steroid/enrich"
+	"golang.org/x/sync/errgroup"
 )
 
 func printHelp() {
@@ -47,79 +47,78 @@ func main() {
 		printHelp()
 		os.Exit(1)
 	}
+	if os.Args[1] == "version" {
+		fmt.Println(config.Version)
+		return
+	}
 
-	// Step 0.
-	// Load and validate configuration from .env
-	config, err := config.Load()
+	cfg, err := config.Load()
 	if err != nil {
-		panic(err)
+		fail(err)
 	}
-	if err := config.Validate(); err != nil {
-		panic(err)
+	if err := cfg.Validate(); err != nil {
+		fail(err)
 	}
-
 	switch os.Args[1] {
-	case "version":
-		fmt.Println(config.Sys.Version)
-		os.Exit(0)
-
 	case "config":
-		fmt.Println(config)
-		os.Exit(0)
-
+		fmt.Println(cfg)
 	case "run", "bundle":
-		// continues below
-
+		if err := start(cfg); err != nil {
+			fail(err)
+		}
 	default:
 		printHelp()
 		os.Exit(1)
 	}
+}
 
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "relay: %v\n", err)
+	os.Exit(1)
+}
+
+func start(cfg config.Config) (err error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	slog.SetDefault(
-		slog.New(slog.NewTextHandler(os.Stdout, config.Sys.LogOptions())),
+		slog.New(slog.NewTextHandler(os.Stdout, cfg.Sys.LogOptions())),
 	)
 
-	slog.Info(fmt.Sprintf("-------------------relay startup %s-------------------", config.Sys.Version))
+	slog.Info(fmt.Sprintf("-------------------relay startup %s-------------------", cfg.Sys.Version))
 	defer slog.Info("-------------------relay shutdown-------------------")
 
-	// Step 1.
-	// Initialize databases and their directories
-	dataDir := filepath.Join(config.Sys.Dir, "data")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		panic(err)
+	dataDir := filepath.Join(cfg.Sys.Dir, "data")
+	if err = os.MkdirAll(dataDir, 0755); err != nil {
+		return err
 	}
 	relayDB, err := relay.NewDB(filepath.Join(dataDir, "relay.db"))
 	if err != nil {
-		panic(err)
+		return err
 	}
-	defer relayDB.Close()
-	config.Blossom.Dir = filepath.Join(dataDir, "blobs")
+	defer func() { err = errors.Join(err, relayDB.Close()) }()
+	cfg.Blossom.Dir = filepath.Join(dataDir, "blobs")
 
 	blossomDB, err := blossom.NewDB(filepath.Join(dataDir, "blossom.db"))
 	if err != nil {
-		panic(err)
+		return err
 	}
-	defer blossomDB.Close()
+	defer func() { err = errors.Join(err, blossomDB.Close()) }()
 
-	analyticsDir := filepath.Join(config.Sys.Dir, "analytics")
-	if err := os.MkdirAll(analyticsDir, 0755); err != nil {
-		panic(err)
+	analyticsDir := filepath.Join(cfg.Sys.Dir, "analytics")
+	if err = os.MkdirAll(analyticsDir, 0755); err != nil {
+		return err
 	}
 	analyticsDB, err := analytics.NewDB(filepath.Join(analyticsDir, "analytics.db"))
 	if err != nil {
-		panic(err)
+		return err
 	}
-	defer analyticsDB.Close()
+	defer func() { err = errors.Join(err, analyticsDB.Close()) }()
 
-	// Step 2.
-	// Rate limiter and the publisher blacklist. The blacklist lives in relay.db.
-	limiter := rate.NewLimiter(config.Limiter)
+	limiter := rate.NewLimiter(cfg.Limiter)
 	pol, err := policy.Open(relayDB.DB)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	ban := func(ctx context.Context, pub policy.Publisher, reason string) error {
 		return relay.ApplyBan(ctx, relayDB, pol, pub, reason)
@@ -129,67 +128,62 @@ func main() {
 	// Without VERTEX_SECRET_KEY only the catalog key, paid access, and keys
 	// that already published may publish.
 	var wot policy.WebOfTrust
-	if config.Vertex.Enabled() {
-		client := vertex.NewClient(config.Vertex)
-		wot = client
-		go client.WatchCredits(ctx)
+	var credits vertex.Client
+	watch := false
+	if cfg.Vertex.Enabled() {
+		credits = vertex.NewClient(cfg.Vertex)
+		wot = credits
+		watch = true
 	} else {
 		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key, paid access, and keys that already published may publish")
 	}
-	gate := policy.NewGate(pol, config.Relay.Info.Pubkey, wot)
-	signer, err := catalog.OpenSigner(ctx, config.Catalog.SignWith)
+	gate := policy.NewGate(pol, cfg.Relay.Info.Pubkey, wot)
+	signer, err := catalog.OpenSigner(ctx, cfg.Catalog.SignWith)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	if signer.PubKey != config.Relay.Info.Pubkey {
-		panic(fmt.Errorf("SIGN_WITH public key %s does not match RELAY_PUBKEY", signer.PubKey))
+	if signer.PubKey != cfg.Relay.Info.Pubkey {
+		return fmt.Errorf("SIGN_WITH public key %s does not match RELAY_PUBKEY", signer.PubKey)
 	}
 
-	// Step 3.
-	// Initialize analytics engine
-	analytics, err := analytics.NewEngine(config.Analytics, analyticsDB, resolver{db: relayDB})
+	stats, err := analytics.NewEngine(cfg.Analytics, analyticsDB, resolver{db: relayDB})
 	if err != nil {
-		panic(err)
+		return err
 	}
-	defer analytics.Close()
+	defer stats.Close()
 
-	// Step 4.
-	// Setup relay and blossom server
-	if !config.Blossom.Bunny.Configured() {
-		slog.Info("Bunny unset: writing blobs locally", "dir", config.Blossom.Dir)
+	if !cfg.Blossom.Bunny.Configured() {
+		slog.Info("Bunny unset: writing blobs locally", "dir", cfg.Blossom.Dir)
 	}
 
-	relay, err := relay.Setup(
-		config.Relay,
+	rel, err := relay.Setup(
+		cfg.Relay,
 		limiter,
 		pol,
 		gate,
 		relayDB,
-		blossom.NewBytes(config.Blossom, blossomDB),
-		analytics,
+		blossom.NewBytes(cfg.Blossom, blossomDB),
+		stats,
 	)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	blossom, err := blossom.Setup(
-		config.Blossom,
+	blobs, err := blossom.Setup(
+		cfg.Blossom,
 		limiter,
 		pol,
 		gate,
-		ban,
 		blossomDB,
-		relay,
-		analytics,
+		rel,
+		stats,
 	)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	// Step 5.
-	// Initialize dashboard
-	dashboard, err := dashboard.New(
-		config.Dashboard,
+	dash, err := dashboard.New(
+		cfg.Dashboard,
 		limiter,
 		pol,
 		ban,
@@ -198,7 +192,7 @@ func main() {
 		analyticsDB,
 	)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	enrichApps := func(ctx context.Context, ids []string) error {
@@ -206,100 +200,66 @@ func main() {
 	}
 
 	if os.Args[1] == "bundle" {
-		n, err := catalog.Bundle(ctx, dataDir, filepath.Join(dataDir, "relay.db"), signer, notices(ctx, pol), enrichApps)
+		notes, err := notices(ctx, pol)
 		if err != nil {
-			panic(err)
+			return err
+		}
+		n, err := catalog.Bundle(ctx, dataDir, filepath.Join(dataDir, "relay.db"), signer, notes, enrichApps)
+		if err != nil {
+			return err
 		}
 		slog.Info("bundle", "epoch", n)
-		return
+		return nil
 	}
 
-	// Step 6.
-	// Run everything
 	socketPath := filepath.Join(dataDir, "relay.sock")
 	nostrSocket := filepath.Join(dataDir, "nostr.sock")
 	mux := routes(
-		catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default()},
+		catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default(), Limit: limiter}.Shared(),
 		policy.Suggest(pol, limiter),
-		relay.Handler(),
+		rel.Handler(),
 	)
 
-	workers := 6
-	if config.Catalog.Interval > 0 {
-		workers++
+	g, gctx := errgroup.WithContext(ctx)
+	if watch {
+		g.Go(func() error {
+			credits.WatchCredits(gctx)
+			return nil
+		})
 	}
-	if config.Blossom.PruneInterval > 0 {
-		workers++
-	}
-	exit := make(chan error, workers)
-	wg := sync.WaitGroup{}
-	wg.Add(workers)
-
-	go func() {
-		defer wg.Done()
-		if err := relay.StartAndServe(ctx, config.Relay.Address, mux); err != nil {
-			exit <- err
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		if err := blossom.StartAndServe(ctx, config.Blossom.Address); err != nil {
-			exit <- err
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		if err := analytics.StartAndServe(ctx, config.Analytics.Address); err != nil {
-			exit <- err
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		if err := dashboard.StartAndServe(ctx, config.Dashboard.Address); err != nil {
-			exit <- err
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
+	g.Go(func() error {
+		return rel.StartAndServe(gctx, cfg.Relay.Address, mux)
+	})
+	g.Go(func() error {
+		return blobs.StartAndServe(gctx, cfg.Blossom.Address)
+	})
+	g.Go(func() error {
+		return stats.StartAndServe(gctx, cfg.Analytics.Address)
+	})
+	g.Go(func() error {
+		return dash.StartAndServe(gctx, cfg.Dashboard.Address)
+	})
+	g.Go(func() error {
 		slog.Info("relay socket", "path", socketPath)
-		if err := policy.Listen(ctx, socketPath, pol, ban); err != nil && ctx.Err() == nil {
-			exit <- err
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
+		return policy.Listen(gctx, socketPath, pol, ban)
+	})
+	g.Go(func() error {
 		slog.Info("nostr socket", "path", nostrSocket)
-		if err := relay.ListenNostr(ctx, nostrSocket); err != nil && ctx.Err() == nil {
-			exit <- err
-		}
-	}()
-
-	if config.Catalog.Interval > 0 {
-		go func() {
-			defer wg.Done()
-			catalog.Loop(ctx, config.Catalog.Interval, dataDir, filepath.Join(dataDir, "relay.db"), signer, pol.Notices, slog.Default(), enrichApps)
-		}()
+		return rel.ListenNostr(gctx, nostrSocket)
+	})
+	if cfg.Catalog.Interval > 0 {
+		g.Go(func() error {
+			catalog.Loop(gctx, cfg.Catalog.Interval, dataDir, filepath.Join(dataDir, "relay.db"), signer, pol.Notices, slog.Default(), enrichApps)
+			return nil
+		})
 	}
-	if config.Blossom.PruneInterval > 0 {
-		go func() {
-			defer wg.Done()
-			pruneLoop(ctx, config.Blossom.PruneInterval, blossom, relayDB.DB)
-		}()
+	if cfg.Blossom.PruneInterval > 0 {
+		g.Go(func() error {
+			pruneLoop(gctx, cfg.Blossom.PruneInterval, blobs, relayDB.DB)
+			return nil
+		})
 	}
-
-	select {
-	case <-ctx.Done():
-		wg.Wait()
-		return
-
-	case err := <-exit:
-		panic(err)
-	}
+	return g.Wait()
 }
 
 // routes serves GET /bundle and POST /suggest beside the WebSocket relay.
@@ -312,12 +272,12 @@ func routes(bundle, suggest, ws http.Handler) *http.ServeMux {
 	return mux
 }
 
-func notices(ctx context.Context, pol *policy.Store) map[string]string {
+func notices(ctx context.Context, pol *policy.Store) (map[string]string, error) {
 	notes, err := pol.Notices(ctx)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return notes
+	return notes, nil
 }
 
 func pruneLoop(ctx context.Context, every time.Duration, blobs *blossom.T, db *sql.DB) {

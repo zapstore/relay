@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -118,6 +119,24 @@ func TestAffectedForgeBan(t *testing.T) {
 	}
 }
 
+func TestAffectedReleaseUsesAppID(t *testing.T) {
+	pub := strings.Repeat("aa", 32)
+	rows := []Listing{{
+		ID: "app1", Pubkey: pub, Kind: events.KindApp,
+		Tags: nostr.Tags{{"d", "com.example.spy"}},
+	}, {
+		ID: "rel1", Pubkey: pub, Kind: events.KindRelease,
+		Tags: nostr.Tags{{"d", "com.example.spy@1.0.0"}, {"i", "com.example.spy"}},
+	}, {
+		ID: "apk1", Pubkey: pub, Kind: events.KindAsset,
+		Tags: nostr.Tags{{"i", "com.example.spy"}, {"x", "abc"}},
+	}}
+	_, _, apps := Affected(Publisher{Kind: KindNostr, ID: pub}, rows)
+	if len(apps) != 1 || apps[0] != "com.example.spy" {
+		t.Fatalf("apps %v", apps)
+	}
+}
+
 func TestSocketListAndRemove(t *testing.T) {
 	store := testStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -168,6 +187,113 @@ func TestSocketListAndRemove(t *testing.T) {
 	<-errc
 }
 
+func TestSocketCommands(t *testing.T) {
+	store := testStore(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	path := filepath.Join(t.TempDir(), "relay.sock")
+	var gotKind, gotID, gotReason string
+	errc := make(chan error, 1)
+	go func() {
+		errc <- Listen(ctx, path, store, func(_ context.Context, pub Publisher, reason string) error {
+			gotKind, gotID, gotReason = pub.Kind, pub.ID, reason
+			return nil
+		})
+	}()
+	waitSocket(t, path)
+
+	key := strings.Repeat("ab", 32)
+	if resp := socketCall(t, path, `{"op":"suggestions"}`); !resp.OK || len(resp.Suggestions) != 0 {
+		t.Fatalf("suggestions %+v", resp)
+	}
+	id, stored, err := store.PutSuggestion(t.Context(), "https://github.com/good/app", "", "")
+	if err != nil || !stored {
+		t.Fatal(err, stored)
+	}
+	resp := socketCall(t, path, `{"op":"suggestions"}`)
+	if !resp.OK || len(resp.Suggestions) != 1 || resp.Suggestions[0].ID != id {
+		t.Fatalf("suggestions %+v", resp)
+	}
+	if resp := socketCall(t, path, `{"op":"remove","id":"`+id+`"}`); !resp.OK {
+		t.Fatalf("remove %+v", resp)
+	}
+	rows, err := store.Suggestions(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("queue = %+v", rows)
+	}
+
+	allow := `{"op":"allow","kind":"nostr","id":"` + key + `","reason":"paid"}`
+	if resp := socketCall(t, path, allow); !resp.OK {
+		t.Fatalf("allow %+v", resp)
+	}
+	resp = socketCall(t, path, `{"op":"allowed"}`)
+	if !resp.OK || len(resp.Allowed) != 1 || resp.Allowed[0].ID != key || resp.Allowed[0].Kind != KindNostr {
+		t.Fatalf("allowed %+v", resp)
+	}
+	if resp := socketCall(t, path, `{"op":"disallow","kind":"nostr","id":"`+key+`"}`); !resp.OK {
+		t.Fatalf("disallow %+v", resp)
+	}
+	if resp := socketCall(t, path, `{"op":"allowed"}`); !resp.OK || len(resp.Allowed) != 0 {
+		t.Fatalf("allowed after disallow %+v", resp)
+	}
+
+	ban := `{"op":"ban","kind":"nostr","id":"` + key + `","reason":"spam"}`
+	if resp := socketCall(t, path, ban); !resp.OK {
+		t.Fatalf("ban %+v", resp)
+	}
+	if gotKind != KindNostr || gotID != key || gotReason != "spam" {
+		t.Fatalf("ban recorded %s %s %s", gotKind, gotID, gotReason)
+	}
+	if resp := socketCall(t, path, `{"op":"nope"}`); resp.OK || resp.Error == "" {
+		t.Fatalf("unknown %+v", resp)
+	}
+
+	cancel()
+	<-errc
+}
+
+func waitSocket(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn, err := net.Dial("unix", path)
+		if err == nil {
+			conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+	}
+}
+
+type socketResponse struct {
+	OK          bool         `json:"ok"`
+	Error       string       `json:"error,omitempty"`
+	Suggestions []Suggestion `json:"suggestions"`
+	Allowed     []AllowedRow `json:"allowed"`
+}
+
+func socketCall(t *testing.T, path, line string) socketResponse {
+	t.Helper()
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte(line + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	var resp socketResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func TestSuggestErrors(t *testing.T) {
 	store := testStore(t)
 	lim := rate.NewLimiter(rate.NewConfig())
@@ -209,7 +335,7 @@ func TestSuggestErrors(t *testing.T) {
 	}
 }
 
-func TestEventVerdictHashBansSignerOnly(t *testing.T) {
+func TestEventVerdictBannedHashRejectsWithoutBanning(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	hash := strings.Repeat("ab", 32)
@@ -226,11 +352,15 @@ func TestEventVerdictHashBansSignerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !verdict.Reject || !verdict.BanPublisher || verdict.Reason != "bad file" {
+	if !verdict.Reject || verdict.Reason != "bad file" {
 		t.Fatalf("verdict %+v", verdict)
 	}
-	if len(verdict.Publishers) != 1 || verdict.Publishers[0].Kind != KindNostr || verdict.Publishers[0].ID != signer {
-		t.Fatalf("publishers %+v", verdict.Publishers)
+	banned, err := store.Blacklisted(ctx, Publisher{Kind: KindNostr, ID: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if banned {
+		t.Fatal("signer was blacklisted")
 	}
 }
 
@@ -249,7 +379,7 @@ func TestEventVerdictRejectsBlacklistedCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !verdict.Reject || verdict.BanPublisher || len(verdict.Publishers) != 0 {
+	if !verdict.Reject || verdict.Reason != "" {
 		t.Fatalf("verdict %+v", verdict)
 	}
 }

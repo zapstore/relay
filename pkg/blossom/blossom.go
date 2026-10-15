@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pippellia-btc/blossom"
@@ -60,7 +61,6 @@ type T struct {
 
 	limiter   rate.Limiter
 	pol       *policy.Store
-	ban       policy.BanFunc
 	blobs     Bytes
 	store     *store.T
 	relay     Relay
@@ -84,7 +84,6 @@ func Setup(
 	limiter rate.Limiter,
 	pol *policy.Store,
 	gate *policy.Gate,
-	ban policy.BanFunc,
 	store *store.T,
 	relay Relay,
 	analytics *analytics.Engine,
@@ -127,7 +126,6 @@ func Setup(
 		config:    config,
 		limiter:   limiter,
 		pol:       pol,
-		ban:       ban,
 		blobs:     NewBytes(config, store),
 		store:     store,
 		relay:     relay,
@@ -143,10 +141,20 @@ func Setup(
 // StartAndServe starts the blossom server, listens to the provided address and handles http requests.
 // It’s a blocking operation, that stops only when the context gets cancelled.
 func (b *T) StartAndServe(ctx context.Context, addr string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
 	if !b.local() {
-		go b.blobs.runMover(ctx, moveEvery)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.blobs.runMover(ctx, moveEvery)
+		}()
 	}
-	return b.server.StartAndServe(ctx, addr)
+	err := b.server.StartAndServe(ctx, addr)
+	cancel()
+	wg.Wait()
+	return err
 }
 
 func (b *T) local() bool {
@@ -291,19 +299,19 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 	// for its listing from now.
 	meta, err := b.store.Query(r.Context(), *hints.Hash)
 	if err == nil {
-		if blocked := b.rejectBannedFile(r.Context(), meta, r.Pubkey()); blocked != nil {
+		if blocked := b.rejectBannedFile(r.Context(), meta); blocked != nil {
 			return blossom.BlobDescriptor{}, blocked
 		}
 		if err := b.store.Renew(r.Context(), meta.Hash, time.Now()); err != nil {
 			slog.Error("blossom: failed to renew pending blob", "error", err, "hash", meta.Hash)
 			return blossom.BlobDescriptor{}, ErrInternal
 		}
-		return blossom.BlobDescriptor{
+		return b.localDescriptor(blossom.BlobDescriptor{
 			Hash:     meta.Hash,
 			Type:     meta.Type,
 			Size:     meta.Size,
 			Uploaded: meta.CreatedAt.Unix(),
-		}, nil
+		}), nil
 	}
 	if errors.Is(err, context.Canceled) {
 		return blossom.BlobDescriptor{}, ErrClientGone
@@ -348,7 +356,7 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 		AuthPubkey: r.Pubkey(),
 		State:      store.Pending,
 	}
-	if blocked := b.rejectBannedFile(reader.Context(), meta, r.Pubkey()); blocked != nil {
+	if blocked := b.rejectBannedFile(reader.Context(), meta); blocked != nil {
 		return blossom.BlobDescriptor{}, blocked
 	}
 
@@ -374,12 +382,23 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 	if b.analytics != nil {
 		b.analytics.RecordUpload(r, hints)
 	}
-	return blossom.BlobDescriptor{
+	return b.localDescriptor(blossom.BlobDescriptor{
 		Hash:     *hints.Hash,
 		Type:     hints.Type,
 		Size:     size,
 		Uploaded: meta.CreatedAt.Unix(),
-	}, nil
+	}), nil
+}
+
+// localDescriptor names the blob on this process's listen address.
+// Blossom otherwise advertises https://hostname, which is the CDN name and
+// is not the HTTP port a local server is bound to.
+func (b *T) localDescriptor(desc blossom.BlobDescriptor) blossom.BlobDescriptor {
+	if !b.local() || b.config.Address == "" || desc.URL != "" {
+		return desc
+	}
+	desc.URL = "http://" + b.config.Address + "/" + desc.Hash.Hex() + "." + blossom.ExtFromType(desc.Type)
+	return desc
 }
 
 // BlobPath returns the path to the blob on the blossom server, based on the hash and mime type.
@@ -456,13 +475,13 @@ func NotAdmitted(gate *policy.Gate) func(r blossy.Request, hints blossy.UploadHi
 }
 
 // rejectBannedFile runs after the APK bytes are stored. A known hash deletes
-// that object, bans the uploader, and rejects the upload.
-func (b *T) rejectBannedFile(ctx context.Context, meta store.BlobMeta, pubkey string) *blossom.Error {
+// that object and rejects the upload. The uploader is not blacklisted.
+func (b *T) rejectBannedFile(ctx context.Context, meta store.BlobMeta) *blossom.Error {
 	if b.pol == nil {
 		return nil
 	}
 	hash := meta.Hash.Hex()
-	reason, banned, err := b.pol.HashReason(ctx, hash)
+	_, banned, err := b.pol.HashReason(ctx, hash)
 	if err != nil {
 		slog.Error("policy: failed to check blob", "err", err, "hash", hash)
 		return ErrInternal
@@ -472,15 +491,6 @@ func (b *T) rejectBannedFile(ctx context.Context, meta store.BlobMeta, pubkey st
 	}
 	if rmErr := b.blobs.remove(ctx, meta); rmErr != nil {
 		slog.Error("blossom: failed to remove banned blob", "err", rmErr, "hash", hash)
-	}
-	if b.ban != nil {
-		pub, normErr := policy.Normalize(policy.KindNostr, pubkey)
-		if normErr == nil {
-			if banErr := b.ban(ctx, pub, reason); banErr != nil {
-				slog.Error("policy: failed to ban uploader", "err", banErr, "publisher", pub.ID)
-				return ErrInternal
-			}
-		}
 	}
 	return blossom.ErrForbidden("file is not allowed")
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -29,6 +30,8 @@ func Listen(ctx context.Context, path string, store *Store, ban BanFunc) error {
 		ln.Close()
 		return err
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -42,7 +45,11 @@ func Listen(ctx context.Context, path string, store *Store, ban BanFunc) error {
 			}
 			return err
 		}
-		go serveConn(conn, store, ban)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			serveConn(conn, store, ban)
+		}()
 	}
 }
 

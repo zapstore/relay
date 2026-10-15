@@ -56,7 +56,7 @@ func TestBufferZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := blossom.Setup(bcfg, limiter, nil, nil, nil, blossomDB, r, nil)
+	b, err := blossom.Setup(bcfg, limiter, nil, nil, blossomDB, r, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
 	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/policy"
 )
 
 const testApp = "com.example.app"
@@ -69,6 +70,86 @@ func TestListingStaysPendingUntilComplete(t *testing.T) {
 	}
 	if len(blobs.opened) != 0 {
 		t.Fatal("the indexer's apk was read")
+	}
+}
+
+func TestBannedHashDropsPendingListing(t *testing.T) {
+	r := testRelay(t, newFakeBlossom())
+	pol, err := policy.Open(r.store.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.pol = pol
+	hash := strings.Repeat("ab", 32)
+	if err := pol.RecordBan(t.Context(), policy.Publisher{Kind: policy.KindNostr, ID: strings.Repeat("11", 32)}, "bad file", []string{hash}, nil); err != nil {
+		t.Fatal(err)
+	}
+	app, release, asset := testTriple("b", catalogKey, hash, strings.Repeat("e", 64), 1)
+	if res := r.holdListing(t.Context(), app); !res.ok {
+		t.Fatalf("app: %+v", res)
+	}
+	if res := r.holdListing(t.Context(), release); !res.ok {
+		t.Fatalf("release: %+v", res)
+	}
+	res := r.holdListing(t.Context(), asset)
+	if res.ok || res.broadcast || res.msg != ErrFileNotAllowed.Error() {
+		t.Fatalf("asset: %+v", res)
+	}
+	for _, id := range []string{release.ID, asset.ID} {
+		kept, err := pendingHas(t.Context(), r.store, id)
+		if err != nil || kept {
+			t.Fatalf("pending %s: kept %v err %v", id, kept, err)
+		}
+		if slotHas(t, r.store, id) {
+			t.Fatalf("stored %s", id)
+		}
+	}
+	banned, err := pol.Blacklisted(t.Context(), policy.Publisher{Kind: policy.KindNostr, ID: catalogKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if banned {
+		t.Fatal("catalog key was blacklisted")
+	}
+}
+
+func TestNotAllowedRejectsBannedHash(t *testing.T) {
+	db := newSlotDB(t)
+	pol, err := policy.Open(db.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("cd", 32)
+	if err := pol.RecordBan(t.Context(), policy.Publisher{Kind: policy.KindNostr, ID: strings.Repeat("11", 32)}, "bad file", []string{hash}, nil); err != nil {
+		t.Fatal(err)
+	}
+	err = NotAllowed(pol)(nil, &nostr.Event{
+		Kind: events.KindAsset, PubKey: catalogKey, Tags: nostr.Tags{{"x", hash}},
+	})
+	if !errors.Is(err, ErrFileNotAllowed) {
+		t.Fatalf("err = %v", err)
+	}
+	banned, err := pol.Blacklisted(t.Context(), policy.Publisher{Kind: policy.KindNostr, ID: catalogKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if banned {
+		t.Fatal("catalog key was blacklisted")
+	}
+}
+
+func TestDeletionMatchingNothingIsRejected(t *testing.T) {
+	r := testRelay(t, newFakeBlossom())
+	event := &nostr.Event{
+		ID: strings.Repeat("d", 64), PubKey: ownerKey, Kind: nostr.KindDeletion,
+		Tags: nostr.Tags{{"e", strings.Repeat("e", 64)}},
+	}
+	res := r.persist(nil, event)
+	if res.ok || res.broadcast || res.msg != errNothingDeleted.Error() {
+		t.Fatalf("%+v", res)
+	}
+	if slotHas(t, r.store, event.ID) {
+		t.Fatal("deletion was stored")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -40,6 +41,8 @@ func (r *T) ListenNostr(ctx context.Context, path string) error {
 		ln.Close()
 		return err
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -53,7 +56,11 @@ func (r *T) ListenNostr(ctx context.Context, path string) error {
 			}
 			return err
 		}
-		go r.serveNostr(conn)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.serveNostr(conn)
+		}()
 	}
 }
 

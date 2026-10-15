@@ -47,7 +47,7 @@ func bufferedKinds() []int {
 func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 	if _, err := r.store.SavePending(ctx, event); err != nil {
 		slog.Error("relay: failed to save pending listing", "event", event.ID, "error", err)
-		return persistResult{msg: err.Error()}
+		return persistResult{msg: ErrInternal.Error()}
 	}
 	if err := supersedePending(ctx, r.store, event); err != nil {
 		slog.Error("relay: failed to supersede pending listing", "event", event.ID, "error", err)
@@ -332,6 +332,13 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		if appIDTag, ok := events.Find(asset.Tags, "i"); !ok || appIDTag != appID {
 			return releaseCheck{}, nil
 		}
+		banned, err := r.bannedHash(ctx, &asset)
+		if err != nil {
+			return releaseCheck{}, err
+		}
+		if banned {
+			return refuse("%s", ErrFileNotAllowed.Error()), nil
+		}
 		ready, err := r.assetInBlossom(ctx, &asset)
 		if err != nil || !ready {
 			return releaseCheck{}, err
@@ -500,6 +507,20 @@ func (r *T) lookupAsset(ctx context.Context, id string, pending map[string]nostr
 	return loadEvent(ctx, r.store, `
 		SELECT id, pubkey, created_at, kind, tags, content, sig FROM events WHERE id = ?
 	`, id)
+}
+
+// bannedHash reports whether the asset names a file hash the operator banned.
+// A nil policy store has no banned hashes. The signer is not blacklisted.
+func (r *T) bannedHash(ctx context.Context, asset *nostr.Event) (bool, error) {
+	if r.pol == nil {
+		return false, nil
+	}
+	x, ok := events.Find(asset.Tags, "x")
+	if !ok {
+		return false, nil
+	}
+	_, banned, err := r.pol.HashReason(ctx, x)
+	return banned, err
 }
 
 func (r *T) assetInBlossom(ctx context.Context, asset *nostr.Event) (bool, error) {
