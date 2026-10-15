@@ -37,6 +37,7 @@ type T struct {
 	relay     relay.DB
 	blossom   blossom.DB
 	analytics analytics.DB
+	readOnly  bool
 }
 
 // New parses the embedded templates and returns a ready-to-use Server.
@@ -77,6 +78,7 @@ func New(
 		relay:     relay,
 		blossom:   blossom,
 		analytics: analytics,
+		readOnly:  config.ReadOnly,
 	}, nil
 }
 

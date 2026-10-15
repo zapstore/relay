@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -77,41 +76,6 @@ func (s T) ListPending(ctx context.Context, kinds []int) ([]nostr.Event, error) 
 		all = append(all, got...)
 	}
 	return all, nil
-}
-
-// Signing returns the DER certificates read from the APK with this sha256,
-// oldest first, or the reason it could not be read. ok is false when the APK
-// has not been read.
-func (s T) Signing(ctx context.Context, blob string) (certs [][]byte, readErr string, ok bool, err error) {
-	var raw string
-	err = s.DB.QueryRowContext(ctx, `SELECT certs, error FROM apk_signing WHERE blob = ?`, blob).Scan(&raw, &readErr)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "", false, nil
-	}
-	if err != nil {
-		return nil, "", false, fmt.Errorf("failed to read apk signing %s: %w", blob, err)
-	}
-	if err := json.Unmarshal([]byte(raw), &certs); err != nil {
-		return nil, "", false, fmt.Errorf("apk signing %s: %w", blob, err)
-	}
-	return certs, readErr, true, nil
-}
-
-// SaveSigning stores what was read from the APK with this sha256.
-func (s T) SaveSigning(ctx context.Context, blob string, certs [][]byte, readErr string) error {
-	if certs == nil {
-		certs = [][]byte{}
-	}
-	raw, err := json.Marshal(certs)
-	if err != nil {
-		return err
-	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO apk_signing (blob, certs, error) VALUES (?, ?, ?)
-		ON CONFLICT(blob) DO UPDATE SET certs = excluded.certs, error = excluded.error`, blob, string(raw), readErr)
-	if err != nil {
-		return fmt.Errorf("failed to save apk signing %s: %w", blob, err)
-	}
-	return nil
 }
 
 // QueryPending returns all pending events of the given kind.

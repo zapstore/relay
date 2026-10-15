@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip11"
 	"github.com/nbd-wtf/go-nostr/nip13"
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/rely/v2"
@@ -35,6 +36,7 @@ var (
 
 	ErrInternal    = errors.New("internal error, please contact the Zapstore team.")
 	ErrRateLimited = errors.New("rate-limited: slow down chief")
+	ErrReadOnly    = errors.New("relay is read-only")
 
 	errNothingDeleted = errors.New("deletion matched nothing")
 )
@@ -98,11 +100,12 @@ func Setup(
 	store store.T,
 	blssm Blossom,
 	analytics *analytics.Engine,
+	readOnly bool,
 ) (*T, error) {
 
 	server := rely.NewRelay(
 		rely.WithAuthURL(config.Hostname),
-		rely.WithInfo(config.Info.NIP11()),
+		rely.WithInfo(nip11Doc(config.Info, readOnly)),
 		rely.WithQueueCapacity(config.QueueCapacity),
 		rely.WithMaxMessageSize(config.MaxMessageBytes),
 		rely.WithClientResponseLimit(config.ResponseLimit),
@@ -115,6 +118,9 @@ func Setup(
 	)
 
 	server.Reject.Event.Clear()
+	if readOnly {
+		server.Reject.Event.Append(readOnlyEvent)
+	}
 	server.Reject.Event.Append(
 		RateEventIP(limiter),
 		KindNotAllowed(config.AllowedKinds),
@@ -157,6 +163,18 @@ func Setup(
 	server.On.Event = relay.save
 	server.On.Req = relay.query
 	return relay, nil
+}
+
+func nip11Doc(info Info, readOnly bool) nip11.RelayInformationDocument {
+	doc := info.NIP11()
+	if readOnly {
+		doc.Limitation = &nip11.RelayLimitationDocument{RestrictedWrites: true}
+	}
+	return doc
+}
+
+func readOnlyEvent(rely.Client, *nostr.Event) error {
+	return ErrReadOnly
 }
 
 // Handler is the WebSocket relay. Mount it at "/" beside other routes.
@@ -737,7 +755,7 @@ func addressFound(ctx context.Context, db store.T, catalogKey string, ref events
 	if ref.Pubkey == catalogKey {
 		return true, nil
 	}
-	cert, ok, err := appCertificate(ctx, db, ref.DTag)
+	cert, ok, err := appCertificate(ctx, db, catalogKey, ref.DTag)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -749,8 +767,8 @@ func addressFound(ctx context.Context, db store.T, catalogKey string, ref events
 }
 
 // NotAdmitted runs the publisher gate for listing events. The catalog key,
-// paid access, a pubkey that already published a kind 32267, or a pubkey
-// above the web-of-trust threshold may publish.
+// a pubkey that already published a kind 32267, or a pubkey above the
+// web-of-trust threshold may publish.
 // Other kinds pass. See the publisher policy.
 func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {

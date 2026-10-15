@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -31,7 +32,7 @@ func ListingSlots(db store.T, catalogKey string) func(rely.Client, *nostr.Event)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		pinned, ok, err := appCertificate(ctx, db, appID)
+		pinned, ok, err := appCertificate(ctx, db, catalogKey, appID)
 		if err != nil || !ok {
 			return err
 		}
@@ -44,8 +45,8 @@ func ListingSlots(db store.T, catalogKey string) func(rely.Client, *nostr.Event)
 
 // holdsDeveloperSlot reports whether pubkey is the active C1 owner or delegate
 // for the app's certificate.
-func holdsDeveloperSlot(ctx context.Context, db store.T, appID, pubkey string) (bool, error) {
-	cert, ok, err := appCertificate(ctx, db, appID)
+func holdsDeveloperSlot(ctx context.Context, db store.T, catalogKey, appID, pubkey string) (bool, error) {
+	cert, ok, err := appCertificate(ctx, db, catalogKey, appID)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -56,9 +57,21 @@ func holdsDeveloperSlot(ctx context.Context, db store.T, appID, pubkey string) (
 	return pubkey == owner || (delegate != "" && pubkey == delegate), nil
 }
 
-func appCertificate(ctx context.Context, db store.T, appID string) (string, bool, error) {
+// appCertificate is the current signer: the first apk_certificate_hash on
+// the current promoted asset for appID. It is not the lineage root. The
+// catalog key's asset wins over a developer asset. Otherwise the newest
+// asset wins. There is no separate pin row.
+func appCertificate(ctx context.Context, db store.T, catalogKey, appID string) (string, bool, error) {
 	var hash string
-	err := db.DB.QueryRowContext(ctx, `SELECT hash FROM app_certificate WHERE app_id = ?`, appID).Scan(&hash)
+	err := db.DB.QueryRowContext(ctx, `
+		SELECT tcert.value
+		FROM events e
+		JOIN tags tapp ON tapp.event_id = e.id AND tapp.key = 'i' AND tapp.value = ?
+		JOIN tags tcert ON tcert.event_id = e.id AND tcert.key = 'apk_certificate_hash'
+		WHERE e.kind = ?
+		ORDER BY CASE WHEN e.pubkey = ? THEN 0 ELSE 1 END, e.created_at DESC, e.id DESC, tcert.rowid
+		LIMIT 1
+	`, appID, events.KindAsset, catalogKey).Scan(&hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -66,20 +79,7 @@ func appCertificate(ctx context.Context, db store.T, appID string) (string, bool
 		slog.Error("listing slot: read certificate", "err", err, "app_id", appID)
 		return "", false, ErrInternal
 	}
-	return hash, true, nil
-}
-
-func setAppCertificate(ctx context.Context, db store.T, appID, cert string, overwrite bool) error {
-	query := `INSERT INTO app_certificate (app_id, hash) VALUES (?, ?) ON CONFLICT(app_id) DO NOTHING`
-	if overwrite {
-		query = `INSERT INTO app_certificate (app_id, hash) VALUES (?, ?)
-			ON CONFLICT(app_id) DO UPDATE SET hash = excluded.hash`
-	}
-	if _, err := db.DB.ExecContext(ctx, query, appID, cert); err != nil {
-		slog.Error("listing slot: pin certificate", "err", err, "app_id", appID)
-		return ErrInternal
-	}
-	return nil
+	return strings.ToLower(hash), true, nil
 }
 
 // activeDeveloper chooses the C1 owner for cert from the stored proofs and
@@ -317,7 +317,7 @@ func (r *T) isDeveloperRemoval(ctx context.Context, event *nostr.Event) bool {
 	if err != nil {
 		return false
 	}
-	holds, err := holdsDeveloperSlot(ctx, r.store, appID, event.PubKey)
+	holds, err := holdsDeveloperSlot(ctx, r.store, r.config.Info.Pubkey, appID, event.PubKey)
 	return err == nil && holds
 }
 
@@ -373,9 +373,6 @@ func (r *T) deleteAppListings(ctx context.Context, appID string) (int, error) {
 	n, err := r.store.Delete(ctx, nostr.Filter{IDs: ids})
 	if err != nil {
 		return 0, fmt.Errorf("delete app %s: %w", appID, err)
-	}
-	if _, err := r.store.DB.ExecContext(ctx, `DELETE FROM app_certificate WHERE app_id = ?`, appID); err != nil {
-		return n, fmt.Errorf("clear certificate %s: %w", appID, err)
 	}
 	pending, err := r.dropPendingApp(ctx, appID)
 	if err != nil {

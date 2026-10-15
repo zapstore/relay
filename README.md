@@ -1,6 +1,6 @@
 # Zapstore relay
 
-The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle` and `POST /suggest`.
+The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle`.
 
 ## Features
 
@@ -24,12 +24,14 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle
 - The gate and bans are the [publisher policy](../product/specs/publisher-policy.md)
 
 ### Catalog
-- `GET /bundle` and `POST /suggest` are on the relay listener
+- `GET /bundle` is on the relay listener
 - A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits
 - Signing is `SIGN_WITH`. Its public key must equal `RELAY_PUBKEY`
+- `READ_ONLY=true` rejects events, Blossom uploads, `relay.sock` bans, and dashboard blacklist changes. Bundles are still signed with `SIGN_WITH`
 - `PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in the local blob directory. Zero disables it
 
 ### Analytics
+- Off unless `ANALYTICS_API_ADDRESS` is set. Unset means no database, no collection, and no API
 - Privacy-preserving usage statistics for app impressions and blob downloads
 - Counts impressions derived from Nostr REQs
 - Counts downloads from blossom downloads
@@ -71,7 +73,7 @@ On first run, the relay creates the following structure:
 
 ```
 $SYSTEM_DIRECTORY_PATH/
-├── analytics/
+├── analytics/        # only when ANALYTICS_API_ADDRESS is set
 │   ├── analytics.db  # SQLite database for analytics
 │   └── geo.mmdb      # MaxMind database for ip geolocation
 │ 
@@ -86,9 +88,9 @@ $SYSTEM_DIRECTORY_PATH/
 
 ### Endpoints
 
-- **Relay**, `GET /bundle`, and `POST /suggest`: `http://localhost:3334` (or your configured port)
+- **Relay** and `GET /bundle`: `http://localhost:3334` (or your configured port)
 - **Blossom**: `http://localhost:3335` (or your configured port)
-- **Analytics**: `http://localhost:3336` (or your configured port)
+- **Analytics**: off unless `ANALYTICS_API_ADDRESS` is set (for example `localhost:3336`)
 
 ## Analytics API
 

@@ -36,9 +36,6 @@ func (f *fakeWoT) Allow(_ context.Context, pubkey string) (bool, float64, error)
 func TestGateAdmit(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Allow(ctx, Publisher{Kind: KindNostr, ID: paidKey}, "paid 2026-10"); err != nil {
-		t.Fatal(err)
-	}
 	wot := &fakeWoT{scores: map[string]float64{devKey: 0.9}}
 	gate := NewGate(store, strings.ToUpper(catalogKey), wot)
 
@@ -48,7 +45,7 @@ func TestGateAdmit(t *testing.T) {
 		want   error
 	}{
 		{"catalog key", catalogKey, nil},
-		{"paid publisher", paidKey, nil},
+		{"unknown key", paidKey, ErrNotAdmitted},
 		{"trusted developer", devKey, nil},
 		{"stranger", "ab" + devKey[2:], ErrNotAdmitted},
 		{"invalid pubkey", "nope", ErrNotAdmitted},
@@ -59,28 +56,24 @@ func TestGateAdmit(t *testing.T) {
 			t.Fatalf("%s: got %v, want %v", test.name, err, test.want)
 		}
 	}
-	// Catalog key and paid publisher never reach the web of trust.
-	// Trusted developer and stranger do.
-	if wot.calls != 2 {
-		t.Fatalf("web of trust calls = %d, want 2", wot.calls)
+	// The catalog key and an invalid pubkey never reach the web of trust.
+	if wot.calls != 3 {
+		t.Fatalf("web of trust calls = %d, want 3", wot.calls)
 	}
 }
 
-func TestGateRequiresPaymentWithoutWebOfTrust(t *testing.T) {
+func TestGateRejectsWithoutWebOfTrust(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Allow(ctx, Publisher{Kind: KindNostr, ID: paidKey}, "paid"); err != nil {
-		t.Fatal(err)
-	}
 	gate := NewGate(store, catalogKey, nil)
 	if err := gate.Admit(ctx, catalogKey); err != nil {
 		t.Fatal(err)
 	}
-	if err := gate.Admit(ctx, paidKey); err != nil {
-		t.Fatal(err)
+	if err := gate.Admit(ctx, paidKey); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("unknown key: %v", err)
 	}
 	if err := gate.Admit(ctx, devKey); !errors.Is(err, ErrNotAdmitted) {
-		t.Fatalf("unpaid: %v", err)
+		t.Fatalf("developer: %v", err)
 	}
 	var nilGate *Gate
 	if err := nilGate.Admit(ctx, devKey); err != nil {
@@ -88,51 +81,19 @@ func TestGateRequiresPaymentWithoutWebOfTrust(t *testing.T) {
 	}
 }
 
-func TestGateWebOfTrustFailureRequiresPayment(t *testing.T) {
+func TestGateWebOfTrustFailureRejects(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Allow(ctx, Publisher{Kind: KindNostr, ID: paidKey}, "paid"); err != nil {
-		t.Fatal(err)
-	}
 	wot := &fakeWoT{err: errors.New("vertex down")}
 	gate := NewGate(store, catalogKey, wot)
-	if err := gate.Admit(ctx, paidKey); err != nil {
-		t.Fatal(err)
-	}
-	if wot.calls != 0 {
-		t.Fatalf("paid publisher called web of trust %d times", wot.calls)
+	if err := gate.Admit(ctx, paidKey); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("unknown key: %v", err)
 	}
 	if err := gate.Admit(ctx, devKey); !errors.Is(err, ErrNotAdmitted) {
-		t.Fatalf("unpaid: %v", err)
+		t.Fatalf("developer: %v", err)
 	}
-}
-
-func TestAllowedList(t *testing.T) {
-	store := testStore(t)
-	ctx := context.Background()
-	pub := Publisher{Kind: KindNostr, ID: paidKey}
-	if err := store.Allow(ctx, pub, ""); !errors.Is(err, ErrReason) {
-		t.Fatalf("empty reason: %v", err)
-	}
-	if err := store.Allow(ctx, pub, "paid"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Allow(ctx, pub, "paid again"); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := store.AllowedList(ctx)
-	if err != nil || len(rows) != 1 || rows[0].Reason != "paid again" {
-		t.Fatalf("rows %+v, %v", rows, err)
-	}
-	if err := store.Disallow(ctx, KindNostr, paidKey); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Disallow(ctx, KindNostr, paidKey); err != nil {
-		t.Fatalf("second disallow: %v", err)
-	}
-	ok, err := store.Allowed(ctx, pub)
-	if err != nil || ok {
-		t.Fatalf("still allowed: %v %v", ok, err)
+	if wot.calls != 2 {
+		t.Fatalf("web of trust calls = %d, want 2", wot.calls)
 	}
 }
 
@@ -161,7 +122,7 @@ func TestGateSkipsVertexAfterAppPublish(t *testing.T) {
 	}
 }
 
-func TestMigrateAllowed(t *testing.T) {
+func TestOpenDropsPaidAndSuggestionTables(t *testing.T) {
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "policy.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -173,28 +134,23 @@ func TestMigrateAllowed(t *testing.T) {
 	)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`
-		CREATE TABLE allowed (
-			kind TEXT NOT NULL, id TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL,
-			PRIMARY KEY (kind, id)
-		)
-	`); err != nil {
+	for _, query := range []string{
+		`CREATE TABLE allowed (kind TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY (kind, id))`,
+		`CREATE TABLE paid_access (kind TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY (kind, id))`,
+		`CREATE TABLE suggestions (id TEXT PRIMARY KEY)`,
+	} {
+		if _, err := db.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Open(db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO allowed (kind, id, reason, created_at) VALUES ('nostr', ?, 'paid', 1)`, paidKey); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ok, err := store.Allowed(context.Background(), Publisher{Kind: KindNostr, ID: paidKey})
-	if err != nil || !ok {
-		t.Fatalf("migrated paid access: %v %v", ok, err)
-	}
-	var name string
-	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'allowed'`).Scan(&name)
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("old table still present: %v %q", err, name)
+	for _, name := range []string{"allowed", "paid_access", "suggestions"} {
+		var got string
+		err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&got)
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("%s still present: %v %q", name, err, got)
+		}
 	}
 }

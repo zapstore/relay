@@ -170,9 +170,9 @@ func TestIndexerPinsCertificateAtPromotion(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	old, next := strings.Repeat("1", 64), strings.Repeat("2", 64)
-	if err := setAppCertificate(t.Context(), r.store, testApp, old, false); err != nil {
-		t.Fatal(err)
-	}
+	prior := testAsset("p", catalogKey, strings.Repeat("0", 64), old, 1)
+	prior.CreatedAt = 1
+	saveSlotEvent(t, r.store, *prior)
 	app, release, asset := testTriple("a", catalogKey, blobs.put("apk"), next, 1)
 
 	r.holdListing(t.Context(), asset)
@@ -220,9 +220,9 @@ func TestDeveloperAPKMustBeSignedByTheAppCertificate(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	app, other := newTestKey(t), newTestKey(t)
-	if err := setAppCertificate(t.Context(), r.store, testApp, app.hash, false); err != nil {
-		t.Fatal(err)
-	}
+	prior := testAsset("p", ownerKey, strings.Repeat("0", 64), app.hash, 1)
+	prior.CreatedAt = 1
+	saveSlotEvent(t, r.store, *prior)
 	saveSlotEvent(t, r.store, *app.proof(t, "4", ownerKey, ""))
 	r.readAPK = readChains(t, map[string]signing{"dev-apk": {other.cert}})
 	appEvent, release, asset := testTriple("b", ownerKey, blobs.put("dev-apk"), app.hash, 1)
@@ -245,9 +245,9 @@ func TestDeveloperRotationReachesTheSlot(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	old, next := newTestKey(t), newTestKey(t)
-	if err := setAppCertificate(t.Context(), r.store, testApp, old.hash, false); err != nil {
-		t.Fatal(err)
-	}
+	prior := testAsset("p", ownerKey, strings.Repeat("0", 64), old.hash, 1)
+	prior.CreatedAt = 1
+	saveSlotEvent(t, r.store, *prior)
 	saveSlotEvent(t, r.store, *old.proof(t, "4", ownerKey, ""))
 	r.readAPK = readChains(t, map[string]signing{"rotated": {old.cert, next.cert}})
 	app, release, asset := testTriple("b", ownerKey, blobs.put("rotated"), next.hash, 1)
@@ -260,8 +260,16 @@ func TestDeveloperRotationReachesTheSlot(t *testing.T) {
 	if !slotHas(t, r.store, release.ID) {
 		t.Fatal("an apk signed by a successor in the lineage was not promoted")
 	}
-	if pin := pinned(t, r); pin != old.hash {
-		t.Fatalf("pin %s, want the original certificate", pin)
+	if pin := pinned(t, r); pin != next.hash {
+		t.Fatalf("certificate %s, want the current asset's signer", pin)
+	}
+	var named int
+	err := r.store.DB.QueryRow(`
+		SELECT COUNT(*) FROM tags
+		WHERE event_id = ? AND key = 'apk_certificate_hash' AND value = ?
+	`, asset.ID, old.hash).Scan(&named)
+	if err != nil || named != 1 {
+		t.Fatalf("stored asset names the original certificate: %d %v", named, err)
 	}
 }
 
@@ -457,7 +465,7 @@ func readChains(t *testing.T, chains map[string]signing) func(io.ReadSeeker) (si
 
 func pinned(t *testing.T, r *T) string {
 	t.Helper()
-	pin, _, err := appCertificate(t.Context(), r.store, testApp)
+	pin, _, err := appCertificate(t.Context(), r.store, catalogKey, testApp)
 	if err != nil {
 		t.Fatal(err)
 	}

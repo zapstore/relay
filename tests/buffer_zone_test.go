@@ -52,11 +52,11 @@ func TestBufferZone(t *testing.T) {
 	rcfg.Hostname = "localhost"
 	limiter := rate.NewLimiter(rate.NewConfig())
 
-	r, err := relay.Setup(rcfg, limiter, nil, nil, relayDB, blossom.NewBytes(bcfg, blossomDB), nil)
+	r, err := relay.Setup(rcfg, limiter, nil, nil, relayDB, blossom.NewBytes(bcfg, blossomDB), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := blossom.Setup(bcfg, limiter, nil, nil, blossomDB, r, nil)
+	b, err := blossom.Setup(bcfg, limiter, nil, nil, blossomDB, r, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

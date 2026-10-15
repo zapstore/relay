@@ -371,18 +371,18 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 }
 
 // checkDeveloper reads every APK of a developer release and checks it against
-// the app's certificate: the pin, or for a new app the signer of its APK.
+// the certificate on the current asset, or for a new app the signer of its APK.
 func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []nostr.Event) (releaseCheck, error) {
-	appCert, _, err := appCertificate(ctx, r.store, appID)
+	appCert, _, err := appCertificate(ctx, r.store, r.config.Info.Pubkey, appID)
 	if err != nil {
 		return releaseCheck{}, err
 	}
 	var chain signing
 	for _, asset := range assets {
 		x, _ := events.Find(asset.Tags, "x")
-		got, readErr, ok, err := r.apkSigning(ctx, x, "")
-		if err != nil || !ok {
-			return releaseCheck{}, err
+		got, readErr, ok := r.apkSigning(x, "")
+		if !ok {
+			return releaseCheck{}, nil
 		}
 		if readErr != "" {
 			return refuse("the APK could not be verified: %s", readErr), nil
@@ -618,10 +618,6 @@ func (r *T) commitListing(ctx context.Context, app *nostr.Event, release *nostr.
 	}
 
 	appID := listingAppIDOrEmpty(release)
-	indexer := release.PubKey == r.config.Info.Pubkey
-	if err := setAppCertificate(ctx, r.store, appID, check.cert, indexer); err != nil {
-		return err
-	}
 	for _, proof := range check.proofs {
 		if err := r.commitProof(ctx, proof, skipBroadcast); err != nil {
 			return err

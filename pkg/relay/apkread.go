@@ -42,6 +42,13 @@ type apkJob struct {
 	url  string
 }
 
+// readAPKResult is a signing chain read during this process. A restart reads
+// the file again.
+type readAPKResult struct {
+	chain   signing
+	readErr string
+}
+
 // apkReader reads APK certificates one at a time, off the event path.
 type apkReader struct {
 	jobs chan apkJob
@@ -49,6 +56,7 @@ type apkReader struct {
 	mu      sync.Mutex
 	queued  map[string]struct{}
 	retryAt map[string]time.Time
+	read    map[string]readAPKResult
 }
 
 func newAPKReader() *apkReader {
@@ -56,7 +64,21 @@ func newAPKReader() *apkReader {
 		jobs:    make(chan apkJob, readQueueSize),
 		queued:  map[string]struct{}{},
 		retryAt: map[string]time.Time{},
+		read:    map[string]readAPKResult{},
 	}
+}
+
+func (a *apkReader) remember(blob string, chain signing, readErr string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.read[blob] = readAPKResult{chain: chain, readErr: readErr}
+}
+
+func (a *apkReader) cached(blob string) (signing, string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	hit, ok := a.read[blob]
+	return hit.chain, hit.readErr, ok
 }
 
 // request queues a read unless the blob is queued or waiting to retry.
@@ -107,9 +129,10 @@ func (r *T) runAPKReader(ctx context.Context) {
 	}
 }
 
-// readAPKJob reads one APK and stores its certificates. A file that is not a
-// verifiable APK is stored with the reason, since the same bytes will not
-// verify later. An APK that could not be fetched returns an error.
+// readAPKJob reads one APK and remembers its certificates until the process
+// exits. A file that is not a verifiable APK is remembered with the reason,
+// since the same bytes will not verify later. An APK that could not be
+// fetched returns an error.
 func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
@@ -121,10 +144,12 @@ func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	chain, readErr := r.readAPK(body)
 	if readErr != nil {
 		slog.Warn("apk reader: not a verifiable apk", "blob", job.blob, "error", readErr)
-		return r.store.SaveSigning(ctx, job.blob, nil, readErr.Error())
+		r.apks.remember(job.blob, nil, readErr.Error())
+		return nil
 	}
 	slog.Info("apk reader: read apk", "blob", job.blob, "signer", chain.signer())
-	return r.store.SaveSigning(ctx, job.blob, chain.der(), "")
+	r.apks.remember(job.blob, chain, "")
+	return nil
 }
 
 // openAPK returns the APK from Blossom, buffer zone first, else from job.url.
@@ -198,22 +223,15 @@ func tempAPK(r io.Reader, blob string) (io.ReadSeeker, func(), error) {
 }
 
 // apkSigning returns the chain of the APK with sha256 blob. ok is false until
-// the APK has been read; the read is then queued. readErr is set when the file
-// is not a verifiable APK.
-func (r *T) apkSigning(ctx context.Context, blob, url string) (chain signing, readErr string, ok bool, err error) {
-	ders, readErr, ok, err := r.store.Signing(ctx, blob)
-	if err != nil {
-		return nil, "", false, err
-	}
+// the APK has been read during this process; the read is then queued. readErr
+// is set when the file is not a verifiable APK.
+func (r *T) apkSigning(blob, url string) (chain signing, readErr string, ok bool) {
+	chain, readErr, ok = r.apks.cached(blob)
 	if !ok {
 		r.apks.request(apkJob{blob: blob, url: url})
-		return nil, "", false, nil
+		return nil, "", false
 	}
-	if readErr != "" {
-		return nil, readErr, true, nil
-	}
-	chain, err = parseSigning(ders)
-	return chain, "", err == nil, err
+	return chain, readErr, true
 }
 
 // assetURL is a download URL named by an asset, for an APK that Blossom does

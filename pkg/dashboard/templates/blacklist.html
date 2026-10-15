@@ -1,10 +1,11 @@
 {{define "blacklist"}}
 <p class="section-title">Blacklist</p>
 <p class="section-subtitle">Publishers the relay rejects</p>
+{{if .ReadOnly}}<p class="section-subtitle">This relay is read-only</p>{{end}}
 
 {{if .Error}}<p class="bl-error">{{.Error}}</p>{{end}}
 
-{{if .IsAdmin}}
+{{if and .IsAdmin (not .ReadOnly)}}
 <form class="bl-form" hx-post="/blacklist" hx-target="#content" hx-swap="innerHTML">
   <select class="bl-input" name="kind">
     <option value="nostr">Nostr key</option>
@@ -23,7 +24,7 @@
       <th>Publisher</th>
       <th>Reason</th>
       <th>Since</th>
-      {{if .IsAdmin}}<th></th>{{end}}
+      {{if and .IsAdmin (not .ReadOnly)}}<th></th>{{end}}
     </tr>
   </thead>
   <tbody>
@@ -32,7 +33,7 @@
       <td><div class="cell"><span>{{.Kind}}</span><span>{{.ID}}</span></div></td>
       <td>{{.Reason}}</td>
       <td>{{.Created}}</td>
-      {{if $.IsAdmin}}
+      {{if and $.IsAdmin (not $.ReadOnly)}}
       <td>
         <form hx-post="/blacklist/remove" hx-target="#content" hx-swap="innerHTML" hx-confirm="Remove this publisher from the blacklist? Listings already deleted stay deleted.">
           <input type="hidden" name="kind" value="{{.Kind}}">
@@ -54,7 +55,7 @@
     <tr>
       <th>Hash</th>
       <th>Reason</th>
-      {{if .IsAdmin}}<th></th>{{end}}
+      {{if and .IsAdmin (not .ReadOnly)}}<th></th>{{end}}
     </tr>
   </thead>
   <tbody>
@@ -62,7 +63,7 @@
     <tr>
       <td><div class="cell"><span>{{.Hash}}</span></div></td>
       <td>{{.Reason}}</td>
-      {{if $.IsAdmin}}
+      {{if and $.IsAdmin (not $.ReadOnly)}}
       <td>
         <form hx-post="/blacklist/hash/remove" hx-target="#content" hx-swap="innerHTML" hx-confirm="Allow this file hash again?">
           <input type="hidden" name="hash" value="{{.Hash}}">

@@ -18,3 +18,16 @@ func TestCatalogKeyOnSocket(t *testing.T) {
 		t.Fatalf("other key: %v", err)
 	}
 }
+
+func TestReadOnlyEvent(t *testing.T) {
+	if err := readOnlyEvent(nil, &nostr.Event{}); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("read-only: %v", err)
+	}
+	doc := nip11Doc(Info{}, true)
+	if doc.Limitation == nil || !doc.Limitation.RestrictedWrites {
+		t.Fatalf("limitation: %+v", doc.Limitation)
+	}
+	if nip11Doc(Info{}, false).Limitation != nil {
+		t.Fatal("writes advertised as restricted")
+	}
+}

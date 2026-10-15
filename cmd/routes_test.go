@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	catalog "github.com/zapstore/relay/pkg/catalog"
-	"github.com/zapstore/relay/pkg/policy"
-	"github.com/zapstore/relay/pkg/rate"
 )
 
 func TestWrongMethodIs405(t *testing.T) {
@@ -16,12 +14,10 @@ func TestWrongMethodIs405(t *testing.T) {
 	})
 	mux := routes(
 		catalog.Handler{Data: t.TempDir()},
-		policy.Suggest(nil, rate.NewLimiter(rate.NewConfig())),
 		ws,
 	)
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/bundle"},
-		{http.MethodGet, "/suggest"},
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))

@@ -20,6 +20,9 @@ type Config struct {
 
 	// AdminPubkeys is the list of the pubkeys that can access the dashboard admin panel.
 	AdminPubkeys []string `env:"DASHBOARD_ADMIN_PUBKEYS"`
+
+	// ReadOnly rejects blacklist changes. The process sets it from READ_ONLY.
+	ReadOnly bool
 }
 
 func NewConfig() Config {

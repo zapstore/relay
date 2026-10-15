@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/pippellia-btc/blossy"
 )
 
 func TestByteLimit(t *testing.T) {
@@ -18,6 +20,13 @@ func TestByteLimit(t *testing.T) {
 	got, err = io.ReadAll(over)
 	if !errors.Is(err, errTooLarge) || string(got) != "abcd" {
 		t.Fatalf("over: %q %v", got, err)
+	}
+}
+
+func TestReadOnlyUpload(t *testing.T) {
+	err := readOnlyUpload(nil, blossy.UploadHints{})
+	if err == nil || err.Code != 403 || err.Reason != "relay is read-only" {
+		t.Fatalf("upload: %+v", err)
 	}
 }
 

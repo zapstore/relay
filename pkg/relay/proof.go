@@ -102,33 +102,15 @@ func (r *T) promoteClaim(ctx context.Context, proof nostr.Event, skipBroadcast s
 	if err != nil || len(assets) == 0 {
 		return false, err
 	}
-	var unread *nostr.Event
 	for i := range assets {
 		x, _ := events.Find(assets[i].Tags, "x")
-		ders, readErr, ok, err := r.store.Signing(ctx, x)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			if unread == nil {
-				unread = &assets[i]
-			}
+		chain, readErr, ok := r.apkSigning(x, assetURL(assets[i].Tags))
+		if !ok || readErr != "" {
 			continue
-		}
-		if readErr != "" {
-			continue
-		}
-		chain, err := parseSigning(ders)
-		if err != nil {
-			return false, err
 		}
 		if c := chain.cert(cert); c != nil {
 			return r.commitCheckedProof(ctx, proof, c, skipBroadcast)
 		}
-	}
-	if unread != nil {
-		x, _ := events.Find(unread.Tags, "x")
-		r.apks.request(apkJob{blob: x, url: assetURL(unread.Tags)})
 	}
 	return false, nil
 }
@@ -196,11 +178,13 @@ func (r *T) listedAssets(ctx context.Context, cert string) ([]nostr.Event, error
 	rows, err := r.store.DB.QueryContext(ctx, `
 		SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
 		FROM events e
-		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = ? AND t.key = 'i'
-		  AND t.value IN (SELECT app_id FROM app_certificate WHERE hash = ?)
+		WHERE e.kind = ?
+		  AND e.id IN (
+		    SELECT event_id FROM tags
+		    WHERE key = 'apk_certificate_hash' AND lower(value) = ?
+		  )
 		ORDER BY e.created_at DESC
-	`, events.KindAsset, cert)
+	`, events.KindAsset, strings.ToLower(cert))
 	if err != nil {
 		return nil, err
 	}

@@ -39,7 +39,7 @@ type Config struct {
 }
 
 // CatalogConfig is signing and the bundle interval.
-// GET /bundle and POST /suggest are served on the relay listener.
+// GET /bundle is served on the relay listener.
 type CatalogConfig struct {
 	// SignWith is the catalog signing key: 1, 64-char hex, nsec, or a bunker URL.
 	// Its public key must equal RELAY_PUBKEY. A bunker URL is the hotbox signer.
@@ -79,6 +79,10 @@ type SystemConfig struct {
 	Version  string   // no env variable, it's set at build time
 	Dir      string   `env:"SYSTEM_DIRECTORY_PATH"`
 	LogLevel LogLevel `env:"SYSTEM_LOG_LEVEL"`
+
+	// ReadOnly rejects events, Blossom uploads, relay.sock bans, and
+	// dashboard blacklist changes. Bundles are still signed with SIGN_WITH.
+	ReadOnly bool `env:"READ_ONLY"`
 }
 
 // LogLevel represents the log level for the system.
@@ -128,10 +132,12 @@ func (c SystemConfig) String() string {
 	return fmt.Sprintf("System:\n"+
 		"\tVersion: %s\n"+
 		"\tDirectory Path: %s\n"+
-		"\tLog Level: %s\n",
+		"\tLog Level: %s\n"+
+		"\tRead Only: %t\n",
 		c.Version,
 		dir,
-		c.LogLevel)
+		c.LogLevel,
+		c.ReadOnly)
 }
 
 // LogOptions returns the [slog.HandlerOptions] for the log level of this config.

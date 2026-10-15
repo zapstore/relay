@@ -87,6 +87,9 @@ func start(cfg config.Config) (err error) {
 
 	slog.Info(fmt.Sprintf("-------------------relay startup %s-------------------", cfg.Sys.Version))
 	defer slog.Info("-------------------relay shutdown-------------------")
+	if cfg.Sys.ReadOnly {
+		slog.Info("read-only: rejecting events, uploads, and bans")
+	}
 
 	dataDir := filepath.Join(cfg.Sys.Dir, "data")
 	if err = os.MkdirAll(dataDir, 0755); err != nil {
@@ -105,15 +108,21 @@ func start(cfg config.Config) (err error) {
 	}
 	defer func() { err = errors.Join(err, blossomDB.Close()) }()
 
-	analyticsDir := filepath.Join(cfg.Sys.Dir, "analytics")
-	if err = os.MkdirAll(analyticsDir, 0755); err != nil {
-		return err
+	var analyticsDB analytics.DB
+	var stats *analytics.Engine
+	if cfg.Analytics.Enabled() {
+		analyticsDir := filepath.Join(cfg.Sys.Dir, "analytics")
+		if err = os.MkdirAll(analyticsDir, 0755); err != nil {
+			return err
+		}
+		analyticsDB, err = analytics.NewDB(filepath.Join(analyticsDir, "analytics.db"))
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, analyticsDB.Close()) }()
+	} else {
+		slog.Info("ANALYTICS_API_ADDRESS unset: analytics is off")
 	}
-	analyticsDB, err := analytics.NewDB(filepath.Join(analyticsDir, "analytics.db"))
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, analyticsDB.Close()) }()
 
 	limiter := rate.NewLimiter(cfg.Limiter)
 	pol, err := policy.Open(relayDB.DB)
@@ -123,10 +132,10 @@ func start(cfg config.Config) (err error) {
 	ban := func(ctx context.Context, pub policy.Publisher, reason string) error {
 		return relay.ApplyBan(ctx, relayDB, pol, pub, reason)
 	}
-	// The gate: the catalog key, paid access, a key that already published a
-	// kind 32267, or a pubkey above the web of trust threshold may publish.
-	// Without VERTEX_SECRET_KEY only the catalog key, paid access, and keys
-	// that already published may publish.
+	// The gate: the catalog key, a key that already published a kind 32267,
+	// or a pubkey above the web of trust threshold may publish.
+	// Without VERTEX_SECRET_KEY only the catalog key and keys that already
+	// published may publish.
 	var wot policy.WebOfTrust
 	var credits vertex.Client
 	watch := false
@@ -135,7 +144,7 @@ func start(cfg config.Config) (err error) {
 		wot = credits
 		watch = true
 	} else {
-		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key, paid access, and keys that already published may publish")
+		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key and keys that already published may publish")
 	}
 	gate := policy.NewGate(pol, cfg.Relay.Info.Pubkey, wot)
 	signer, err := catalog.OpenSigner(ctx, cfg.Catalog.SignWith)
@@ -146,11 +155,13 @@ func start(cfg config.Config) (err error) {
 		return fmt.Errorf("SIGN_WITH public key %s does not match RELAY_PUBKEY", signer.PubKey)
 	}
 
-	stats, err := analytics.NewEngine(cfg.Analytics, analyticsDB, resolver{db: relayDB})
-	if err != nil {
-		return err
+	if cfg.Analytics.Enabled() {
+		stats, err = analytics.NewEngine(cfg.Analytics, analyticsDB, resolver{db: relayDB})
+		if err != nil {
+			return err
+		}
+		defer stats.Close()
 	}
-	defer stats.Close()
 
 	if !cfg.Blossom.Bunny.Configured() {
 		slog.Info("Bunny unset: writing blobs locally", "dir", cfg.Blossom.Dir)
@@ -164,6 +175,7 @@ func start(cfg config.Config) (err error) {
 		relayDB,
 		blossom.NewBytes(cfg.Blossom, blossomDB),
 		stats,
+		cfg.Sys.ReadOnly,
 	)
 	if err != nil {
 		return err
@@ -177,11 +189,13 @@ func start(cfg config.Config) (err error) {
 		blossomDB,
 		rel,
 		stats,
+		cfg.Sys.ReadOnly,
 	)
 	if err != nil {
 		return err
 	}
 
+	cfg.Dashboard.ReadOnly = cfg.Sys.ReadOnly
 	dash, err := dashboard.New(
 		cfg.Dashboard,
 		limiter,
@@ -216,7 +230,6 @@ func start(cfg config.Config) (err error) {
 	nostrSocket := filepath.Join(dataDir, "nostr.sock")
 	mux := routes(
 		catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default(), Limit: limiter}.Shared(),
-		policy.Suggest(pol, limiter),
 		rel.Handler(),
 	)
 
@@ -233,15 +246,17 @@ func start(cfg config.Config) (err error) {
 	g.Go(func() error {
 		return blobs.StartAndServe(gctx, cfg.Blossom.Address)
 	})
-	g.Go(func() error {
-		return stats.StartAndServe(gctx, cfg.Analytics.Address)
-	})
+	if stats != nil {
+		g.Go(func() error {
+			return stats.StartAndServe(gctx, cfg.Analytics.Address)
+		})
+	}
 	g.Go(func() error {
 		return dash.StartAndServe(gctx, cfg.Dashboard.Address)
 	})
 	g.Go(func() error {
 		slog.Info("relay socket", "path", socketPath)
-		return policy.Listen(gctx, socketPath, pol, ban)
+		return policy.Listen(gctx, socketPath, pol, ban, cfg.Sys.ReadOnly)
 	})
 	g.Go(func() error {
 		slog.Info("nostr socket", "path", nostrSocket)
@@ -262,12 +277,11 @@ func start(cfg config.Config) (err error) {
 	return g.Wait()
 }
 
-// routes serves GET /bundle and POST /suggest beside the WebSocket relay.
-// The paths carry no method so a wrong method reaches its handler and gets 405.
-func routes(bundle, suggest, ws http.Handler) *http.ServeMux {
+// routes serves GET /bundle beside the WebSocket relay.
+// The path carries no method so a wrong method reaches its handler and gets 405.
+func routes(bundle, ws http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/bundle", bundle)
-	mux.Handle("/suggest", suggest)
 	mux.Handle("/", ws)
 	return mux
 }

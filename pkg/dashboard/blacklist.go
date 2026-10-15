@@ -22,6 +22,7 @@ type hashRow struct {
 
 type blacklistPageData struct {
 	IsAdmin    bool
+	ReadOnly   bool
 	Error      string
 	Publishers []blacklistRow
 	Hashes     []hashRow
@@ -42,6 +43,9 @@ func (d *T) addBan(w http.ResponseWriter, r *http.Request) {
 	}
 	if !d.auth.IsAdmin(token) {
 		http.Error(w, "forbidden: admin access required", http.StatusForbidden)
+		return
+	}
+	if d.rejectWrite(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -75,6 +79,9 @@ func (d *T) removeBan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden: admin access required", http.StatusForbidden)
 		return
 	}
+	if d.rejectWrite(w, r) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		d.renderBlacklist(w, r, true, "invalid form")
 		return
@@ -95,6 +102,9 @@ func (d *T) removeHash(w http.ResponseWriter, r *http.Request) {
 	}
 	if !d.auth.IsAdmin(token) {
 		http.Error(w, "forbidden: admin access required", http.StatusForbidden)
+		return
+	}
+	if d.rejectWrite(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -129,6 +139,7 @@ func (d *T) renderBlacklist(w http.ResponseWriter, r *http.Request, isAdmin bool
 	}
 	data := blacklistPageData{
 		IsAdmin:    isAdmin,
+		ReadOnly:   d.readOnly,
 		Error:      errMsg,
 		Publishers: make([]blacklistRow, 0, len(publishers)),
 		Hashes:     make([]hashRow, 0, len(hashes)),
@@ -148,4 +159,12 @@ func (d *T) renderBlacklist(w http.ResponseWriter, r *http.Request, isAdmin bool
 	if err := d.template.ExecuteTemplate(w, "blacklist", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (d *T) rejectWrite(w http.ResponseWriter, r *http.Request) bool {
+	if !d.readOnly {
+		return false
+	}
+	d.renderBlacklist(w, r, true, "relay is read-only")
+	return true
 }

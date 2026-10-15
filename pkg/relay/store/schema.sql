@@ -21,23 +21,8 @@ CREATE INDEX IF NOT EXISTS idx_pending_events_kind        ON pending_events(kind
 CREATE INDEX IF NOT EXISTS idx_pending_events_received_at ON pending_events(received_at);
 
 DROP TABLE IF EXISTS read_certificate;
-
--- The signing certificates read from an APK file, by its sha256: the v3
--- lineage oldest first, ending at the signer. error is set when the file is
--- not a verifiable APK.
-CREATE TABLE IF NOT EXISTS apk_signing (
-    blob  TEXT PRIMARY KEY,
-    certs TEXT NOT NULL,                -- JSON array of base64 DER certificates
-    error TEXT NOT NULL DEFAULT ''
-);
-
--- The app certificate is the indexer asset's signing certificate, or the first
--- promoted developer APK's signer when the indexer has not published that app id.
--- It is written at promotion.
-CREATE TABLE IF NOT EXISTS app_certificate (
-    app_id TEXT PRIMARY KEY,
-    hash   TEXT NOT NULL
-);
+DROP TABLE IF EXISTS apk_signing;
+DROP TABLE IF EXISTS app_certificate;
 
 -- Universal single-letter tag indexing for all event kinds.
 -- Covers tags like a, e, f, i, p, t, x, A, E, K, P, etc.

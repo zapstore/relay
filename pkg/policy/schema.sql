@@ -16,21 +16,7 @@ CREATE TABLE IF NOT EXISTS ban_notices (
     reason TEXT NOT NULL
 );
 
--- Paid publishers. Not an allow-list: it does not bypass the blacklist.
-CREATE TABLE IF NOT EXISTS paid_access (
-    kind       TEXT    NOT NULL,
-    id         TEXT    NOT NULL,
-    reason     TEXT    NOT NULL,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (kind, id)
-);
-
 DROP TABLE IF EXISTS admissions;
-
-CREATE TABLE IF NOT EXISTS suggestions (
-    id               TEXT    PRIMARY KEY,
-    repository       TEXT    NOT NULL,
-    release_source   TEXT    NOT NULL,
-    certificate_hash TEXT    NOT NULL,
-    created_at       INTEGER NOT NULL
-);
+DROP TABLE IF EXISTS allowed;
+DROP TABLE IF EXISTS paid_access;
+DROP TABLE IF EXISTS suggestions;

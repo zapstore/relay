@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -25,9 +24,13 @@ func TestNotAnchoredCatalogCoordinate(t *testing.T) {
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags:      nostr.Tags{{"d", cert}, {"expiry", "9999999999"}, {"delegation", delegate}},
 	})
-	if err := setAppCertificate(context.Background(), db, appID, cert, false); err != nil {
-		t.Fatal(err)
-	}
+	saveSlotEvent(t, db, nostr.Event{
+		ID:        strings.Repeat("a", 64),
+		PubKey:    catalog,
+		Kind:      events.KindAsset,
+		CreatedAt: 1,
+		Tags:      nostr.Tags{{"i", appID}, {"apk_certificate_hash", cert}},
+	})
 	saveSlotEvent(t, db, nostr.Event{
 		ID:     strings.Repeat("2", 64),
 		PubKey: delegate,
@@ -101,9 +104,13 @@ func TestNotAnchoredReplacedProof(t *testing.T) {
 		CreatedAt: 30,
 		Tags:      nostr.Tags{{"d", cert}, {"expiry", "9999999999"}},
 	})
-	if err := setAppCertificate(context.Background(), db, appID, cert, false); err != nil {
-		t.Fatal(err)
-	}
+	saveSlotEvent(t, db, nostr.Event{
+		ID:        strings.Repeat("a", 64),
+		PubKey:    catalog,
+		Kind:      events.KindAsset,
+		CreatedAt: 1,
+		Tags:      nostr.Tags{{"i", appID}, {"apk_certificate_hash", cert}},
+	})
 	saveSlotEvent(t, db, nostr.Event{
 		ID:     strings.Repeat("4", 64),
 		PubKey: catalog,

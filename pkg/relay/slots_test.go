@@ -28,9 +28,10 @@ func TestListingSlots(t *testing.T) {
 		t.Fatalf("an app event waits for promotion: %v", err)
 	}
 
-	if err := setAppCertificate(context.Background(), db, appID, cert, false); err != nil {
-		t.Fatal(err)
-	}
+	pinned := slotAsset(catalog, appID, cert)
+	pinned.ID = strings.Repeat("1", 64)
+	pinned.CreatedAt = 1
+	saveSlotEvent(t, db, *pinned)
 	if err := hook(nil, slotAsset(owner, appID, cert)); err != nil {
 		t.Fatal(err)
 	}
@@ -62,19 +63,22 @@ func TestDeveloperSlotReplacementAndRemoval(t *testing.T) {
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags:      nostr.Tags{{"d", cert}, {"expiry", "9999999999"}, {"delegation", delegate}},
 	})
-	if err := setAppCertificate(ctx, db, appID, cert, false); err != nil {
-		t.Fatal(err)
-	}
 	saveSlotEvent(t, db, nostr.Event{ID: strings.Repeat("2", 64), PubKey: catalog, Kind: events.KindApp, Tags: nostr.Tags{{"d", appID}}})
 	oldAsset := strings.Repeat("3", 64)
-	saveSlotEvent(t, db, nostr.Event{ID: oldAsset, PubKey: owner, Kind: events.KindAsset, Tags: nostr.Tags{{"i", appID}}})
+	saveSlotEvent(t, db, nostr.Event{
+		ID: oldAsset, PubKey: owner, Kind: events.KindAsset,
+		Tags: nostr.Tags{{"i", appID}, {"apk_certificate_hash", cert}},
+	})
 	saveSlotEvent(t, db, nostr.Event{ID: strings.Repeat("4", 64), PubKey: owner, Kind: events.KindApp, Tags: nostr.Tags{{"d", appID}}})
 	saveSlotEvent(t, db, nostr.Event{
 		ID: strings.Repeat("5", 64), PubKey: owner, Kind: events.KindRelease,
 		Tags: nostr.Tags{{"i", appID}, {"e", oldAsset}},
 	})
 	newAsset := strings.Repeat("6", 64)
-	saveSlotEvent(t, db, nostr.Event{ID: newAsset, PubKey: delegate, Kind: events.KindAsset, Tags: nostr.Tags{{"i", appID}}})
+	saveSlotEvent(t, db, nostr.Event{
+		ID: newAsset, PubKey: delegate, Kind: events.KindAsset,
+		Tags: nostr.Tags{{"i", appID}, {"apk_certificate_hash", cert}},
+	})
 	saveSlotEvent(t, db, nostr.Event{ID: strings.Repeat("7", 64), PubKey: delegate, Kind: events.KindApp, Tags: nostr.Tags{{"d", appID}}})
 	release := nostr.Event{
 		ID: strings.Repeat("8", 64), PubKey: delegate, Kind: events.KindRelease,
@@ -100,13 +104,6 @@ func TestDeveloperSlotReplacementAndRemoval(t *testing.T) {
 	}
 	if slotHas(t, db, strings.Repeat("2", 64)) || slotHas(t, db, strings.Repeat("7", 64)) {
 		t.Fatal("listings remain after developer removal")
-	}
-	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM app_certificate WHERE app_id = ?`, appID).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatal("certificate pin remains")
 	}
 	if !slotHas(t, db, kind5.ID) {
 		t.Fatal("kind 5 was not stored")

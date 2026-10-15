@@ -87,6 +87,7 @@ func Setup(
 	store *store.T,
 	relay Relay,
 	analytics *analytics.Engine,
+	readOnly bool,
 ) (*T, error) {
 
 	server, err := blossy.NewServer(
@@ -105,6 +106,9 @@ func Setup(
 		RateDownloadIP(limiter),
 	)
 
+	if readOnly {
+		server.Reject.Upload.Append(readOnlyUpload)
+	}
 	server.Reject.Upload.Append(
 		RateUploadIP(limiter),
 		MissingAuth(),
@@ -136,6 +140,10 @@ func Setup(
 	server.On.Download = blossom.download
 	server.On.Upload = blossom.upload
 	return &blossom, nil
+}
+
+func readOnlyUpload(blossy.Request, blossy.UploadHints) *blossom.Error {
+	return blossom.ErrForbidden("relay is read-only")
 }
 
 // StartAndServe starts the blossom server, listens to the provided address and handles http requests.

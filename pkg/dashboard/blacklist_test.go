@@ -31,4 +31,23 @@ func TestBlacklistTemplate(t *testing.T) {
 			t.Fatalf("missing %q\n%s", want, body)
 		}
 	}
+
+	buf.Reset()
+	err = d.template.ExecuteTemplate(&buf, "blacklist", blacklistPageData{
+		IsAdmin:  true,
+		ReadOnly: true,
+		Publishers: []blacklistRow{{
+			Kind: "forge", ID: "github.com/bad", Reason: "malware", Created: "2026-01-02",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = buf.String()
+	if !strings.Contains(body, "read-only") {
+		t.Fatalf("missing read-only notice\n%s", body)
+	}
+	if strings.Contains(body, "hx-post") {
+		t.Fatalf("blacklist form still offered\n%s", body)
+	}
 }

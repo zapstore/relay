@@ -17,8 +17,8 @@ import (
 type BanFunc func(ctx context.Context, pub Publisher, reason string) error
 
 // Listen serves one JSON command per connection on a Unix socket.
-// Commands are suggestions, remove, ban, allow, disallow, and allowed.
-func Listen(ctx context.Context, path string, store *Store, ban BanFunc) error {
+// The command is ban. readOnly rejects that command.
+func Listen(ctx context.Context, path string, store *Store, ban BanFunc, readOnly bool) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove socket %s: %w", path, err)
 	}
@@ -48,7 +48,7 @@ func Listen(ctx context.Context, path string, store *Store, ban BanFunc) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serveConn(conn, store, ban)
+			serveConn(conn, store, ban, readOnly)
 		}()
 	}
 }
@@ -61,13 +61,11 @@ type command struct {
 }
 
 type response struct {
-	OK          bool         `json:"ok"`
-	Error       string       `json:"error,omitempty"`
-	Suggestions []Suggestion `json:"suggestions,omitempty"`
-	Allowed     []AllowedRow `json:"allowed,omitempty"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }
 
-func serveConn(conn net.Conn, store *Store, ban BanFunc) {
+func serveConn(conn net.Conn, store *Store, ban BanFunc, readOnly bool) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	reader := bufio.NewReader(io.LimitReader(conn, 1<<20))
@@ -84,20 +82,11 @@ func serveConn(conn net.Conn, store *Store, ban BanFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	switch cmd.Op {
-	case "suggestions":
-		rows, err := store.Suggestions(ctx)
-		if err != nil {
-			writeResp(conn, response{Error: "list failed"})
-			return
-		}
-		writeResp(conn, response{OK: true, Suggestions: rows})
-	case "remove":
-		if err := store.RemoveSuggestion(ctx, cmd.ID); err != nil {
-			writeResp(conn, response{Error: err.Error()})
-			return
-		}
-		writeResp(conn, response{OK: true})
 	case "ban":
+		if readOnly {
+			writeResp(conn, response{Error: "relay is read-only"})
+			return
+		}
 		if ban == nil {
 			writeResp(conn, response{Error: "ban is not available"})
 			return
@@ -112,30 +101,6 @@ func serveConn(conn net.Conn, store *Store, ban BanFunc) {
 			return
 		}
 		writeResp(conn, response{OK: true})
-	case "allow":
-		pub, err := Normalize(cmd.Kind, cmd.ID)
-		if err != nil {
-			writeResp(conn, response{Error: err.Error()})
-			return
-		}
-		if err := store.Allow(ctx, pub, cmd.Reason); err != nil {
-			writeResp(conn, response{Error: err.Error()})
-			return
-		}
-		writeResp(conn, response{OK: true})
-	case "disallow":
-		if err := store.Disallow(ctx, cmd.Kind, cmd.ID); err != nil {
-			writeResp(conn, response{Error: err.Error()})
-			return
-		}
-		writeResp(conn, response{OK: true})
-	case "allowed":
-		rows, err := store.AllowedList(ctx)
-		if err != nil {
-			writeResp(conn, response{Error: "list failed"})
-			return
-		}
-		writeResp(conn, response{OK: true, Allowed: rows})
 	default:
 		writeResp(conn, response{Error: "unknown op"})
 	}
