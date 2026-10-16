@@ -47,6 +47,7 @@ type CatalogConfig struct {
 
 	// Interval is how often a new snapshot is considered. Default is 5 minutes.
 	// Zero disables the tick. `relay bundle` writes one snapshot anyway.
+	// `relay bundle <app-id>` limits that snapshot to listings whose id contains the app id.
 	Interval time.Duration `env:"BUNDLE_INTERVAL"`
 }
 
@@ -164,6 +165,11 @@ func Load() (Config, error) {
 	if err := env.Parse(&config); err != nil {
 		return Config{}, fmt.Errorf("failed to load config: %w", err)
 	}
+	pk, err := relay.PubkeyHex(config.Relay.Info.Pubkey)
+	if err != nil {
+		return Config{}, fmt.Errorf("RELAY_PUBKEY: %w", err)
+	}
+	config.Relay.Info.Pubkey = pk
 	return config, nil
 }
 

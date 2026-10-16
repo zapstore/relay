@@ -6,10 +6,12 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip11"
+	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/zapstore/relay/pkg/events"
 )
 
@@ -95,7 +97,8 @@ func NewConfig() Config {
 
 // Info stores information about the relay, used in the NIP11 relay information document.
 type Info struct {
-	Name        string `env:"RELAY_NAME"`
+	Name string `env:"RELAY_NAME"`
+	// Pubkey is the catalog key: 64-character hex or an npub. An npub is stored as hex.
 	Pubkey      string `env:"RELAY_PUBKEY"`
 	Description string `env:"RELAY_DESCRIPTION"`
 	URL         string `env:"RELAY_URL"`
@@ -103,6 +106,24 @@ type Info struct {
 	Icon        string `env:"RELAY_ICON"`
 	Banner      string `env:"RELAY_BANNER"`
 	Software    string `env:"RELAY_SOFTWARE"`
+}
+
+// PubkeyHex returns a 64-character hex public key. An npub is decoded.
+// An empty value and any other string are returned unchanged.
+func PubkeyHex(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(strings.ToLower(value), "npub1") {
+		return value, nil
+	}
+	prefix, decoded, err := nip19.Decode(value)
+	if err != nil || prefix != "npub" {
+		return "", errors.New("invalid npub")
+	}
+	hexKey, ok := decoded.(string)
+	if !ok || !nostr.IsValid32ByteHex(hexKey) {
+		return "", errors.New("invalid npub")
+	}
+	return hexKey, nil
 }
 
 func (c Config) Validate() error {
