@@ -15,10 +15,14 @@ GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 BIN := dist/$(NAME)-$(GOOS)-$(GOARCH)
 
+comma := ,
 ifeq ($(GOOS),darwin)
 CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
-export CGO_LDFLAGS
+else
+# A Darwin parent exports this flag; zig rejects it when linking Linux.
+CGO_LDFLAGS := $(filter-out -Wl$(comma)-no_warn_duplicate_libraries,$(CGO_LDFLAGS))
 endif
+export CGO_LDFLAGS
 
 .PHONY: bin darwin-arm64 linux-arm64 linux-amd64 clean
 
