@@ -25,7 +25,7 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle
 
 ### Catalog
 - `GET /bundle` is on the relay listener
-- A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits
+- A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits. `relay bundle <app-id>` keeps listings whose id contains that string, drops the other app events, and passes the same string to the enricher. The tick takes no filter
 - Signing is `SIGN_WITH`. Its public key must equal `RELAY_PUBKEY`
 - `READ_ONLY=true` rejects events, Blossom uploads, `relay.sock` bans, and dashboard blacklist changes. Bundles are still signed with `SIGN_WITH`. The bundle tick still enriches
 - `PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in the local blob directory. Zero disables it
@@ -65,6 +65,7 @@ The binary is `dist/relay-<os>-<arch>`.
 cp .env.example .env
 ./dist/relay-$(go env GOOS)-$(go env GOARCH) run
 ./dist/relay-$(go env GOOS)-$(go env GOARCH) bundle
+./dist/relay-$(go env GOOS)-$(go env GOARCH) bundle org.mozilla
 ```
 
 ### Data Directory Structure

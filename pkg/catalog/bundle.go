@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -11,17 +13,35 @@ import (
 type Enricher func(ctx context.Context, appIDs []string) error
 
 // Bundle writes the next snapshot when the live catalog changed.
-// enrich runs for the apps in the diff before the snapshot is written.
+// filter is an app-id substring. Empty keeps the whole catalog. Otherwise
+// events that do not belong to a matching listing are dropped, and enrich
+// runs for those listings before the snapshot is written. No match is an error.
+// The interval loop passes an empty filter.
 // Artifact files are included when the enricher cache matches the listing's current APK hash.
-func Bundle(ctx context.Context, data, dbPath string, signer Signer, notices map[string]string, enrich Enricher) (int64, error) {
+func Bundle(ctx context.Context, data, dbPath, filter string, signer Signer, notices map[string]string, enrich Enricher) (int64, error) {
 	raw, err := LoadEvents(ctx, dbPath, signer.PubKey, signer.PubKey)
 	if err != nil {
 		return 0, err
 	}
 	at := time.Now()
 	next := ResolveAt(raw, signer.PubKey, at)
+	filter = strings.TrimSpace(filter)
+	run := enrich
+	if filter != "" {
+		next = next.matching(filter)
+		if len(next.Listings) == 0 {
+			return 0, fmt.Errorf("no listings match %q", filter)
+		}
+		writeBlock("filter " + filter)
+		if enrich != nil {
+			if err := enrich(ctx, appIDs(next)); err != nil {
+				writeBlock("enrich " + err.Error())
+			}
+		}
+		run = nil
+	}
 	next.Notices = notices
-	return CreateBundle(ctx, data, next, signer, at.Unix(), enrich)
+	return CreateBundle(ctx, data, next, signer, at.Unix(), run)
 }
 
 // Loop bundles once, then again every interval, until ctx is cancelled.
@@ -39,7 +59,7 @@ func Loop(ctx context.Context, every time.Duration, data, dbPath string, signer 
 				return
 			}
 		}
-		n, err := Bundle(ctx, data, dbPath, signer, notes, enrich)
+		n, err := Bundle(ctx, data, dbPath, "", signer, notes, enrich)
 		if err != nil {
 			log.Error("bundle", "error", err)
 			return

@@ -8,6 +8,23 @@ import (
 	catalog "github.com/zapstore/relay/pkg/catalog"
 )
 
+func TestBundleFilter(t *testing.T) {
+	got, err := bundleFilter([]string{"relay", "bundle"})
+	if err != nil || got != "" {
+		t.Fatalf("bare bundle: %q %v", got, err)
+	}
+	got, err = bundleFilter([]string{"relay", "bundle", " org.mozilla "})
+	if err != nil || got != "org.mozilla" {
+		t.Fatalf("filter: %q %v", got, err)
+	}
+	if _, err := bundleFilter([]string{"relay", "bundle", "  "}); err == nil {
+		t.Fatal("empty filter accepted")
+	}
+	if _, err := bundleFilter([]string{"relay", "bundle", "org.mozilla", "extra"}); err == nil {
+		t.Fatal("extra arg accepted")
+	}
+}
+
 func TestWrongMethodIs405(t *testing.T) {
 	ws := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)

@@ -36,7 +36,7 @@ Usage:
 
 Commands:
   run      Start the relay
-  bundle   Write one catalog snapshot
+  bundle [app-id]  Write one catalog snapshot. With an app id, only listings whose id contains it
   version  Print the version
   config   Print the active configuration
 `, config.Version)
@@ -214,11 +214,21 @@ func start(cfg config.Config) (err error) {
 	}
 
 	if os.Args[1] == "bundle" {
+		filter, err := bundleFilter(os.Args)
+		if err != nil {
+			return err
+		}
 		notes, err := notices(ctx, pol)
 		if err != nil {
 			return err
 		}
-		n, err := catalog.Bundle(ctx, dataDir, filepath.Join(dataDir, "relay.db"), signer, notes, enrichApps)
+		runEnrich := enrichApps
+		if filter != "" {
+			runEnrich = func(ctx context.Context, _ []string) error {
+				return enrich.Filter(ctx, dataDir, filepath.Join(dataDir, "relay.db"), filter)
+			}
+		}
+		n, err := catalog.Bundle(ctx, dataDir, filepath.Join(dataDir, "relay.db"), filter, signer, notes, runEnrich)
 		if err != nil {
 			return err
 		}
@@ -284,6 +294,21 @@ func routes(bundle, ws http.Handler) *http.ServeMux {
 	mux.Handle("/bundle", bundle)
 	mux.Handle("/", ws)
 	return mux
+}
+
+// bundleFilter is the optional app-id substring after `relay bundle`.
+func bundleFilter(args []string) (string, error) {
+	if len(args) < 3 {
+		return "", nil
+	}
+	if len(args) > 3 {
+		return "", fmt.Errorf("usage: relay bundle [app-id]")
+	}
+	filter := strings.TrimSpace(args[2])
+	if filter == "" {
+		return "", fmt.Errorf("filter is empty")
+	}
+	return filter, nil
 }
 
 func notices(ctx context.Context, pol *policy.Store) (map[string]string, error) {
