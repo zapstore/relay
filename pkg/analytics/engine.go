@@ -42,8 +42,10 @@ type Engine struct {
 
 	downloads          chan store.Download
 	impressions        chan store.Impression
-	pendingImpressions map[store.Impression]int // Impression --> count
-	pendingDownloads   map[store.Download]int   // Download --> count
+	bundles            chan store.BundleRequest
+	pendingImpressions map[store.Impression]int    // Impression --> count
+	pendingDownloads   map[store.Download]int      // Download --> count
+	pendingBundles     map[store.BundleRequest]int // BundleRequest --> count
 
 	relay   relayMetrics
 	blossom blossomMetrics
@@ -94,8 +96,10 @@ func NewEngine(
 		resolver:           resolver,
 		impressions:        make(chan store.Impression, c.QueueSize),
 		downloads:          make(chan store.Download, c.QueueSize),
+		bundles:            make(chan store.BundleRequest, c.QueueSize),
 		pendingImpressions: make(map[store.Impression]int),
 		pendingDownloads:   make(map[store.Download]int),
+		pendingBundles:     make(map[store.BundleRequest]int),
 		config:             c,
 		done:               make(chan struct{}),
 	}
@@ -133,6 +137,9 @@ func (e *Engine) drain() {
 
 		case download := <-e.downloads:
 			e.pendingDownloads[download]++
+
+		case bundle := <-e.bundles:
+			e.pendingBundles[bundle]++
 
 		default:
 			return
@@ -289,6 +296,25 @@ func (e *Engine) RecordUpload(_ blossy.Request, _ blossy.UploadHints) {
 	e.blossom.uploads.Add(1)
 }
 
+// RecordBundle records one finished GET /v1/bundle response.
+// from and to are -1 when that epoch was not established.
+// No client address is stored.
+func (e *Engine) RecordBundle(from, to int64, status int, protocol, client string) {
+	req := store.BundleRequest{
+		Day:           store.Today(),
+		FromEpoch:     from,
+		ToEpoch:       to,
+		Status:        status,
+		Protocol:      protocol,
+		ClientVersion: client,
+	}
+	select {
+	case e.bundles <- req:
+	default:
+		slog.Warn("analytics: failed to record bundle", "error", "channel is full")
+	}
+}
+
 func (e *Engine) run() {
 	flushTicker := time.NewTicker(e.config.FlushInterval)
 	defer flushTicker.Stop()
@@ -352,13 +378,23 @@ func (e *Engine) run() {
 					slog.Error("analytics: failed to flush downloads", "err", err)
 				}
 			}
+
+		case bundle := <-e.bundles:
+			slog.Debug("analytics: received bundle", "status", bundle.Status, "protocol", bundle.Protocol)
+			e.pendingBundles[bundle]++
+
+			if len(e.pendingBundles) >= e.config.FlushSize {
+				if err := e.flushBundles(); err != nil {
+					slog.Error("analytics: failed to flush bundles", "err", err)
+				}
+			}
 		}
 	}
 }
 
-// pending returns the total number of pending impressions and downloads.
+// pending returns the total number of pending impressions, downloads, and bundle requests.
 func (e *Engine) pending() int {
-	return len(e.pendingImpressions) + len(e.pendingDownloads)
+	return len(e.pendingImpressions) + len(e.pendingDownloads) + len(e.pendingBundles)
 }
 
 // flushAll commits any pending data to the database.
@@ -370,6 +406,10 @@ func (e *Engine) flushAll() error {
 
 		if err := e.flushDownloads(); err != nil {
 			return fmt.Errorf("failed to flush downloads: %w", err)
+		}
+
+		if err := e.flushBundles(); err != nil {
+			return fmt.Errorf("failed to flush bundles: %w", err)
 		}
 	}
 
@@ -450,6 +490,40 @@ func (e *Engine) flushDownloads() error {
 
 	for _, f := range flushed {
 		delete(e.pendingDownloads, f.Download)
+	}
+	return nil
+}
+
+// flushBundles commits up to [Config.FlushSize] bundle requests to the database.
+// The operation is guaranteed to terminate within [Config.FlushTimeout].
+func (e *Engine) flushBundles() error {
+	if len(e.pendingBundles) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), e.config.FlushTimeout)
+	defer cancel()
+
+	flushed := make([]store.BundleCount, 0, e.config.FlushSize)
+	for req, count := range e.pendingBundles {
+		if len(flushed) >= e.config.FlushSize {
+			break
+		}
+		if count <= 0 {
+			continue
+		}
+		flushed = append(flushed, store.BundleCount{
+			BundleRequest: req,
+			Count:         count,
+		})
+	}
+
+	if err := e.store.SaveBundles(ctx, flushed); err != nil {
+		return fmt.Errorf("failed to save bundle requests: %w", err)
+	}
+
+	for _, f := range flushed {
+		delete(e.pendingBundles, f.BundleRequest)
 	}
 	return nil
 }
