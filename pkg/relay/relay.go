@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,6 +128,7 @@ func Setup(
 		rely.InvalidID,
 		rely.InvalidSignature,
 		InvalidStructure,
+		NoZapTag,
 		NotARM64,
 		TooLittleWork,
 		NotAnchored(store, config.Info.Pubkey),
@@ -633,10 +635,24 @@ func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {
 	return store.Validate(filters...)
 }
 
+// NoZapTag rejects a kind 32267 that carries a zap tag. The payee is the
+// active C1 proof pubkey, not a tag on the listing.
+func NoZapTag(_ rely.Client, e *nostr.Event) error {
+	if e.Kind != events.KindApp {
+		return nil
+	}
+	for _, tag := range e.Tags {
+		if len(tag) > 0 && tag[0] == "zap" {
+			return errors.New("kind 32267: zap tag is not allowed")
+		}
+	}
+	return nil
+}
+
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
 // Anchoring means simply that the event references an existing root event.
-// An app coordinate is accepted for the catalog key, when either listing slot
-// exists, or for the active C1 owner. The delegate is not an anchor.
+// An app coordinate is accepted only for the catalog key, when a listing for
+// that app exists. A kind 9735 p tag must be the active C1 proof pubkey.
 func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if slices.Contains(RootKinds, e.Kind) {
@@ -663,7 +679,10 @@ func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Eve
 			// A reply names a stored kind 11 or 1111 with its e tag.
 			return anchored(ctx, db, catalogKey, e, "A", true, &nostr.Filter{Kinds: []int{events.KindForumPost, events.KindComment}})
 		case events.KindZap:
-			return anchored(ctx, db, catalogKey, e, "a", true, &nostr.Filter{})
+			if err := anchored(ctx, db, catalogKey, e, "a", true, &nostr.Filter{}); err != nil {
+				return err
+			}
+			return zapPaysProof(ctx, db, catalogKey, e)
 		case events.KindReport:
 			return anchored(ctx, db, catalogKey, e, "a", false, nil)
 		}
@@ -739,36 +758,59 @@ func anchorKinds(stacks bool) string {
 
 // addressFound reports whether an address tag points at a listing this relay keeps.
 // A kind 32267 coordinate matches when a listing for that app id exists and
-// the pubkey is the catalog key or the active C1 owner. Any other coordinate,
-// including a kind 30267 stack, must name that event.
+// the pubkey is the catalog key. Any other coordinate, including a kind 30267
+// stack, must name that event.
 func addressFound(ctx context.Context, db store.T, catalogKey string, ref events.AddressableRef) (bool, error) {
 	if ref.Kind != events.KindApp {
 		return db.Has(ctx, ref.Filter())
 	}
-	listed, err := db.Has(ctx, nostr.Filter{
+	if ref.Pubkey != catalogKey {
+		return false, nil
+	}
+	return db.Has(ctx, nostr.Filter{
 		Kinds: []int{events.KindApp},
 		Tags:  nostr.TagMap{"d": []string{ref.DTag}},
 	})
-	if err != nil || !listed {
-		return false, err
+}
+
+// zapPaysProof rejects a kind 9735 on an app unless its p tag is the pubkey
+// of the active C1 proof. A stack zap has no proof payee. No current proof
+// means no recipient.
+func zapPaysProof(ctx context.Context, db store.T, catalogKey string, e *nostr.Event) error {
+	addr, ok := events.Find(e.Tags, "a")
+	if !ok {
+		return nil
 	}
-	if ref.Pubkey == catalogKey {
-		return true, nil
+	ref, err := events.ParseAddressableRef(addr)
+	if err != nil || ref.Kind != events.KindApp {
+		return nil
 	}
-	cert, ok, err := appCertificate(ctx, db, catalogKey, ref.DTag)
+	recipient, hasP := events.Find(e.Tags, "p")
+	owner, found, err := proofOwner(ctx, db, catalogKey, ref.DTag)
+	if err != nil {
+		return err
+	}
+	if !found || !hasP || !strings.EqualFold(recipient, owner) {
+		return fmt.Errorf("kind %d: 'p' tag must be the C1 proof pubkey", e.Kind)
+	}
+	return nil
+}
+
+func proofOwner(ctx context.Context, db store.T, catalogKey, appID string) (string, bool, error) {
+	cert, ok, err := appCertificate(ctx, db, catalogKey, appID)
 	if err != nil || !ok {
-		return false, err
+		return "", false, err
 	}
 	owner, _, ok, err := activeDeveloper(ctx, db, []string{cert}, nil)
 	if err != nil || !ok {
-		return false, err
+		return "", false, err
 	}
-	return ref.Pubkey == owner, nil
+	return owner, true, nil
 }
 
 // NotAdmitted runs the publisher gate for listing events. The catalog key,
-// a pubkey that already published a kind 32267, or a pubkey above the
-// web-of-trust threshold may publish.
+// a pubkey that already published a kind 32267, a whitelisted pubkey, or a
+// pubkey above the web-of-trust threshold may publish.
 // Other kinds pass. See the publisher policy.
 func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {

@@ -43,14 +43,20 @@ func TestNotAnchoredCatalogCoordinate(t *testing.T) {
 	if err := hook(nil, commentOn(catalogAddr)); err != nil {
 		t.Fatal(err)
 	}
-	if err := hook(nil, zapOn(catalogAddr)); err != nil {
+	if err := hook(nil, zapTo(catalogAddr, owner)); err != nil {
 		t.Fatal(err)
 	}
-	if err := hook(nil, commentOn("32267:"+owner+":"+appID)); err != nil {
-		t.Fatal(err)
+	if err := hook(nil, zapTo(catalogAddr, delegate)); err == nil {
+		t.Fatal("delegate accepted as zap recipient")
 	}
-	if err := hook(nil, zapOn("32267:"+owner+":"+appID)); err != nil {
-		t.Fatal(err)
+	if err := hook(nil, zapOn(catalogAddr)); err == nil {
+		t.Fatal("zap with no recipient accepted")
+	}
+	if err := hook(nil, commentOn("32267:"+owner+":"+appID)); err == nil {
+		t.Fatal("C1 coordinate accepted")
+	}
+	if err := hook(nil, zapOn("32267:"+owner+":"+appID)); err == nil {
+		t.Fatal("C1 coordinate accepted")
 	}
 	if err := hook(nil, commentOn("32267:"+delegate+":"+appID)); err == nil {
 		t.Fatal("delegate coordinate accepted")
@@ -120,10 +126,17 @@ func TestNotAnchoredReplacedProof(t *testing.T) {
 
 	hook := NotAnchored(db, catalog)
 	if err := hook(nil, commentOn("32267:"+retired+":"+appID)); err == nil {
-		t.Fatal("replaced proof accepted")
+		t.Fatal("retired coordinate accepted")
 	}
-	if err := hook(nil, commentOn("32267:"+owner+":"+appID)); err != nil {
+	if err := hook(nil, commentOn("32267:"+owner+":"+appID)); err == nil {
+		t.Fatal("C1 coordinate accepted")
+	}
+	catalogAddr := "32267:" + catalog + ":" + appID
+	if err := hook(nil, zapTo(catalogAddr, owner)); err != nil {
 		t.Fatal(err)
+	}
+	if err := hook(nil, zapTo(catalogAddr, retired)); err == nil {
+		t.Fatal("retired proof accepted as zap recipient")
 	}
 }
 
@@ -152,6 +165,38 @@ func commentOn(address string) *nostr.Event {
 
 func zapOn(address string) *nostr.Event {
 	return addressed(events.KindZap, "a", address)
+}
+
+func zapTo(address, recipient string) *nostr.Event {
+	event := zapOn(address)
+	event.Tags = append(event.Tags, nostr.Tag{"p", recipient})
+	return event
+}
+
+func TestZapNeedsACurrentProof(t *testing.T) {
+	db := newSlotDB(t)
+	catalog := testPubkey(t)
+	appID := "com.example.app"
+	saveSlotEvent(t, db, nostr.Event{ID: strings.Repeat("1", 64), PubKey: catalog, Kind: events.KindApp, Tags: nostr.Tags{{"d", appID}}})
+	hook := NotAnchored(db, catalog)
+	if err := hook(nil, zapTo("32267:"+catalog+":"+appID, testPubkey(t))); err == nil {
+		t.Fatal("zap accepted with no C1 proof")
+	}
+}
+
+func TestNoZapTag(t *testing.T) {
+	if err := NoZapTag(nil, &nostr.Event{Kind: events.KindApp, Tags: nostr.Tags{{"d", "com.example.app"}, {"zap", testPubkey(t)}}}); err == nil {
+		t.Fatal("zap tag accepted")
+	}
+	if err := NoZapTag(nil, &nostr.Event{Kind: events.KindApp, Tags: nostr.Tags{{"zap"}}}); err == nil {
+		t.Fatal("empty zap tag accepted")
+	}
+	if err := NoZapTag(nil, &nostr.Event{Kind: events.KindApp, Tags: nostr.Tags{{"d", "com.example.app"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NoZapTag(nil, &nostr.Event{Kind: events.KindRelease, Tags: nostr.Tags{{"zap", "aa"}}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func reportOn(address string) *nostr.Event {
