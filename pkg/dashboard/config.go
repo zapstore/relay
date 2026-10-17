@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -23,6 +24,10 @@ type Config struct {
 
 	// ReadOnly rejects blacklist changes. The process sets it from READ_ONLY.
 	ReadOnly bool
+
+	// BundleInterval is how often the catalog seals. The process sets it from BUNDLE_INTERVAL.
+	// Zero disables the tick.
+	BundleInterval time.Duration
 }
 
 func NewConfig() Config {

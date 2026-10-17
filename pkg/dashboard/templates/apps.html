@@ -1,160 +1,68 @@
 {{define "apps"}}
-{{template "card-styles" .}}
-<p class="section-title">Apps</p>
-<p class="section-subtitle">Stats of the last 30 days</p>
-
-<div class="cards">
-  {{range .Cards}}{{template "card" .}}{{end}}
-</div>
-
-<form hx-get="/tabs/apps/chart" hx-target="#app-chart-wrap" hx-trigger="submit" style="display:flex;align-items:center;gap:0.75rem">
-  <span style="font-size:var(--text);font-weight:600;white-space:nowrap;display:flex;align-items:center;color:var(--text-muted)">APP STATISTICS</span>
-  <input class="app-input" type="text" name="app_id" value="{{.AppID}}" placeholder="App ID" style="margin:0; font-size: var(--text-small);">
-</form>
-<div id="app-chart-wrap">
-  {{template "chart" .Chart}}
-</div>
-
-<div class="cols">
+<title>Apps · Zapstore relay</title>
+<div class="head">
   <div>
-    <div id="sources-ranking-wrap" style="margin-bottom:2rem">
-      {{template "sources-ranking" .SourceRanking}}
-    </div>
-    <div id="countries-ranking-wrap">
-      {{template "countries-ranking" .CountryRanking}}
-    </div>
-  </div>
-  <div>
-    <div id="apps-ranking-wrap">
-      {{template "apps-ranking" .AppRanking}}
-    </div>
+    <h1>Apps</h1>
+    <p>{{num .Listed}} listed{{if .HasArtifacts}}, {{num .Enriched}} enriched{{end}}.</p>
   </div>
 </div>
-<style>
-  .cols {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4rem;
-    align-items: start;
-  }
-  .cols > div {
-    min-width: 0;
-  }
-  .table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: var(--text-normal);
-  }
-  .table thead th {
-    text-align: left;
-    padding: 0.5rem 0.75rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    border-bottom: 1px solid var(--border);
-  }
-  .table thead th:not(:first-child) { text-align: right; }
-  .table tbody tr {
-    border-bottom: 1px solid var(--grid);
-    transition: background 0.1s;
-  }
-  .table tbody tr:last-child { border-bottom: none; }
-  .table tbody tr:hover { background: var(--surface); }
-  .table tbody td {
-    padding: 0.6rem 0.75rem;
-    color: var(--text);
-  }
-  .table tbody td:not(:first-child) { text-align: right; color: var(--text-muted); }
-  .cell { display: flex; align-items: center; gap: 0.6rem; }
-  .table tbody { counter-reset: rownum; }
-  .table tbody tr { counter-increment: rownum; }
-  .cell::before {
-    content: counter(rownum);
-    color: var(--text-muted);
-    font-size: var(--text-normal);
-    min-width: 1.25rem;
-  }
-  .app-input {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-muted);
-    font-family: var(--font);
-    font-size: var(--text-normal);
-    padding: 0.5rem 0.75rem;
-    width: 100%;
-    max-width: 220px;
-  }
-  .app-input:focus { outline: none; border-color: var(--accent); }
-</style>
+
+<div class="toolbar">
+  <form class="search" role="search" action="/apps"
+    hx-get="/apps" hx-trigger="input changed delay:300ms from:find input[name=q], search from:find input[name=q], submit"
+    hx-select="#apps-live" hx-target="#apps-live" hx-swap="outerHTML" hx-push-url="true">
+    {{icon "search"}}
+    <input class="field" type="search" name="q" value="{{.Query}}" placeholder="Filter by name or package id" aria-label="Filter apps" autocomplete="off" spellcheck="false">
+    {{if .Filter}}<input type="hidden" name="filter" value="{{.Filter}}">{{end}}
+  </form>
+  {{if .HasArtifacts}}
+  <nav class="chips" aria-label="Show">
+    <a class="chip" href="{{appsURL .Query ""}}"{{if eq .Filter ""}} aria-current="true"{{end}}>All <span class="n">{{num (add .Listed .Unlisted)}}</span></a>
+    <a class="chip" href="{{appsURL .Query "missing"}}"{{if eq .Filter "missing"}} aria-current="true"{{end}}>Not enriched <span class="n">{{num .Missing}}</span></a>
+    {{if .Unlisted}}<a class="chip" href="{{appsURL .Query "unlisted"}}"{{if eq .Filter "unlisted"}} aria-current="true"{{end}}>No listing <span class="n">{{num .Unlisted}}</span></a>{{end}}
+  </nav>
+  {{end}}
+</div>
+
+<section id="apps-live" data-live>
+  {{/* Child poller: a link must not inherit hx-select, or the app page swaps in empty. */}}
+  <span hidden class="live-poll" hx-get="{{appsURL .Query .Filter}}" hx-trigger="every 60s [canRefresh(this)], job-done from:body" hx-select="#apps-live" hx-target="#apps-live" hx-swap="outerHTML" hx-indicator="#apps-live"></span>
+  <div class="section-head">
+    <h2>{{if .Query}}{{num .Total}} {{if eq .Total 1}}match{{else}}matches{{end}} for “{{.Query}}”{{else if eq .Filter "missing"}}Listed, not enriched{{else if eq .Filter "unlisted"}}Artifacts without a listing{{else}}All apps{{end}}</h2>
+    {{template "updated" .Now}}
+  </div>
+  {{if .Rows}}
+  <ul class="rows">{{template "app-rows" .}}</ul>
+  {{else if .Query}}
+  <div class="empty">{{icon "search"}}<div><strong>No app matches “{{.Query}}”</strong>Search matches names and package ids, like “signal” or “org.thoughtcrime”. {{if .Filter}}<a class="link" href="{{appsURL .Query ""}}">Search all apps</a> instead.{{end}}</div></div>
+  {{else}}
+  <div class="empty">{{icon "grid"}}<div><strong>No apps here</strong>Listings appear as soon as publishers or the indexer send them to this relay.</div></div>
+  {{end}}
+</section>
 {{end}}
 
-{{define "sources-ranking"}}
-<table class="table">
-  <thead>
-    <tr>
-      <th>Source</th>
-      <th hx-get="/tabs/apps/sources?sort_by=impressions" hx-target="#sources-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "impressions"}};color:var(--text){{end}}">Impressions</th>
-      <th hx-get="/tabs/apps/sources?sort_by=downloads" hx-target="#sources-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "downloads"}};color:var(--text){{end}}">Downloads</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{range .Sources}}
-    <tr>
-      <td><div class="cell"><span>{{.Emoji}}</span><span>{{.Source}}</span></div></td>
-      <td>{{.Impressions}}</td>
-      <td>{{.Downloads}}</td>
-    </tr>
-    {{else}}
-    <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
-    {{end}}
-  </tbody>
-</table>
+{{define "app-rows"}}
+{{range .Rows}}
+<li><a class="row" href="/apps/{{.ID}}">
+  <span class="tile" aria-hidden="true">{{letter (or .Name .ID)}}<img src="/apps/{{.ID}}/icon" alt="" loading="lazy" decoding="async" onerror="this.remove()"></span>
+  <span class="row-main">
+    <span class="row-title"><span>{{or .Name .ID}}</span></span>
+    <span class="row-sub">{{if .Summary}}{{.Summary}} · {{end}}<span class="ev">{{.ID}}</span></span>
+  </span>
+  <span class="row-side">
+    {{if not .Listed}}<span class="tag">No listing</span>{{else if and $.HasArtifacts .Enriched}}<span class="tag sm">Enriched</span>{{end}}
+    {{if .C1}}<span class="badge ok" title="Active identity proof for the certificate that signs this app">C1</span>{{end}}
+    {{if $.HasDownloads}}<span class="stat" title="Downloads in the last 30 days">{{icon "download"}}{{num .Downloads}}</span>{{end}}
+    {{if .Listed}}<span class="stat" title="Listing updated {{stamp .Updated}}">{{ago .Updated}}</span>{{end}}
+  </span>
+</a></li>
 {{end}}
-
-{{define "countries-ranking"}}
-<table class="table">
-  <thead>
-    <tr>
-      <th>Country</th>
-      <th hx-get="/tabs/apps/countries?sort_by=impressions" hx-target="#countries-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "impressions"}};color:var(--text){{end}}">Impressions</th>
-      <th hx-get="/tabs/apps/countries?sort_by=downloads" hx-target="#countries-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "downloads"}};color:var(--text){{end}}">Downloads</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{range $i, $c := .Countries}}
-    <tr>
-      <td><div class="cell"><span>{{$c.Flag}}</span><span>{{$c.Name}}</span></div></td>
-      <td>{{$c.Impressions}}</td>
-      <td>{{$c.Downloads}}</td>
-    </tr>
-    {{else}}
-    <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
-    {{end}}
-  </tbody>
-</table>
+{{if .Next}}
+<li class="more">
+  <button class="btn outline sm" type="button" hx-get="{{.NextHref}}" hx-target="closest li" hx-swap="outerHTML" hx-indicator="this"
+    hx-on:click="this.closest('#apps-live').dataset.paused = '1'">
+    <span class="spinner spin"></span>Show {{num .NextCount}} more of {{num .Remaining}}
+  </button>
+</li>
 {{end}}
-
-{{define "apps-ranking"}}
-<table class="table">
-  <thead>
-    <tr>
-      <th>App</th>
-      <th hx-get="/tabs/apps/ranking?sort_by=impressions" hx-target="#apps-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "impressions"}};color:var(--text){{end}}">Impressions</th>
-      <th hx-get="/tabs/apps/ranking?sort_by=downloads" hx-target="#apps-ranking-wrap" hx-swap="innerHTML" style="cursor:pointer{{if eq .SortBy "downloads"}};color:var(--text){{end}}">Downloads</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{range $i, $a := .Apps}}
-    <tr>
-      <td><div class="cell"><span>{{$a.AppID}}</span></div></td>
-      <td>{{$a.Impressions}}</td>
-      <td>{{$a.Downloads}}</td>
-    </tr>
-    {{else}}
-    <tr><td colspan="3" style="text-align:center; padding:2rem; color:var(--text-muted);">No data</td></tr>
-    {{end}}
-  </tbody>
-</table>
 {{end}}

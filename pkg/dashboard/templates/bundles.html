@@ -1,0 +1,74 @@
+{{define "bundles"}}
+<title>Bundles · Zapstore relay</title>
+<div class="head">
+  <div>
+    <h1>Bundles</h1>
+    <p>Signed catalog diffs clients download to stay in sync. Each bundle holds the changes between two snapshots.</p>
+  </div>
+</div>
+
+<div class="split">
+  <div id="bundles-live" data-live>
+    <span hidden class="live-poll" hx-get="/bundles" hx-trigger="every 30s [canRefresh(this)], job-done from:body" hx-select="#bundles-live" hx-target="#bundles-live" hx-swap="outerHTML" hx-indicator="#bundles-live"></span>
+    <dl class="strip">
+      <div><dt>Current snapshot</dt><dd>{{if .Snapshot}}{{.Snapshot}}{{else}}<span class="faint">None</span>{{end}}</dd></div>
+      <div><dt>Bundles</dt><dd>{{len .Bundles}}</dd></div>
+      <div><dt>BUNDLE_INTERVAL</dt><dd>{{if .IntervalOff}}<span class="badge warn">Disabled</span>{{else}}{{.Interval}}{{end}}</dd></div>
+      <div><dt>Last sealed</dt><dd>{{with .Bundles}}{{with index . 0}}<span title="{{.When}} UTC">{{ago .Changed}}</span>{{end}}{{else}}<span class="faint">Never</span>{{end}}</dd></div>
+    </dl>
+
+    <section class="section">
+      <div class="section-head"><h2>History</h2>{{template "updated" .Now}}</div>
+      {{if .Bundles}}
+      <div class="scroll-x">
+        <table class="table">
+          <thead><tr><th>Snapshots</th><th class="num">Size</th><th class="num">Sealed</th>{{if .IsAdmin}}<th></th>{{end}}</tr></thead>
+          <tbody>
+            {{range .Bundles}}
+            <tr>
+              <td><span class="ev" style="color:var(--text)">{{.From}} → {{.To}}</span>{{if eq .From 0}} <span class="tag">Full</span>{{end}}</td>
+              <td class="num">{{.Size}}</td>
+              <td class="num" title="{{.When}} UTC">{{ago .Changed}}</td>
+              {{if $.IsAdmin}}
+              <td class="num">
+                <form hx-post="/bundles/{{.From}}/{{.To}}" hx-confirm="Delete bundle {{.From}}-{{.To}}? The file is removed. The next request for this range builds it again.">
+                  <button class="btn ghost sm" type="submit">Delete</button>
+                </form>
+              </td>
+              {{end}}
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="empty">{{icon "package"}}<div><strong>No bundles yet</strong>{{if .IntervalOff}}Automatic sealing is off.{{else}}The catalog seals one every {{.Interval}}.{{end}}{{if .CanSeal}} Seal the first one now.{{end}}</div></div>
+      {{end}}
+    </section>
+  </div>
+
+  <aside class="aside">
+    <section class="card">
+      <h2>{{icon "package"}}Seal a bundle</h2>
+      {{if .CanSeal}}
+      <p class="small muted" style="margin-bottom:0.875rem">Leave from empty to seal the next snapshot. That enriches apps that changed and can take several minutes. Set it to write the bundle from that snapshot to the current one. {{if .IntervalOff}}Automatic sealing is off.{{else}}The catalog also seals one every {{.Interval}}.{{end}}</p>
+      <form class="form-card" hx-post="/bundles/seal" hx-target="#seal-jobs" hx-swap="innerHTML" hx-indicator="this" hx-disabled-elt="find button"
+        hx-confirm="Seal this bundle now?" hx-on::after-request="if (event.detail.successful) this.reset()">
+        <label class="f">From
+          <input class="field" type="text" inputmode="numeric" name="from" placeholder="Empty, or a snapshot such as 0" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="f">Only apps whose id contains
+          <input class="field" type="text" name="filter" placeholder="Optional, for the next snapshot" autocomplete="off" spellcheck="false">
+        </label>
+        <button class="btn primary" type="submit"><span class="spinner spin"></span><span class="idle">{{icon "package"}}</span>Seal bundle</button>
+      </form>
+      {{else if .IsAdmin}}
+      <p class="small muted">Sealing is not available on this relay.</p>
+      {{else}}
+      <p class="small muted">Only admins can seal bundles. The catalog loop seals them on its schedule.</p>
+      {{end}}
+      <div id="seal-jobs" class="jobs">{{template "jobs" .Jobs}}</div>
+    </section>
+  </aside>
+</div>
+{{end}}

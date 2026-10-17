@@ -1,0 +1,146 @@
+{{define "publishers"}}
+<title>Publishers · Zapstore relay</title>
+<div class="head">
+  <div>
+    <h1>Publishers</h1>
+    <p>{{num .Total}} {{if eq .Total 1}}signer{{else}}signers{{end}} of a listing on this relay. Open one for their profile, identity proofs, and apps.</p>
+  </div>
+</div>
+
+<div class="toolbar">
+  <form class="search" role="search" action="/publishers"
+    hx-get="/publishers" hx-trigger="input changed delay:300ms from:find input[name=q], search from:find input[name=q], submit"
+    hx-select="#pubs-live" hx-target="#pubs-live" hx-swap="outerHTML" hx-push-url="true">
+    {{icon "search"}}
+    <input class="field" type="search" name="q" value="{{.Query}}" placeholder="Filter by name, npub, or app" aria-label="Filter publishers" autocomplete="off" spellcheck="false">
+  </form>
+</div>
+
+<section id="pubs-live" data-live>
+  <span hidden class="live-poll" hx-get="/publishers{{if .Query}}?q={{urlquery .Query}}{{end}}" hx-trigger="every 60s [canRefresh(this)]" hx-select="#pubs-live" hx-target="#pubs-live" hx-swap="outerHTML" hx-indicator="#pubs-live"></span>
+  <div class="section-head">
+    <h2>{{if .Query}}{{num (len .Rows)}} {{if eq (len .Rows) 1}}match{{else}}matches{{end}} for “{{.Query}}”{{else}}All publishers{{end}}</h2>
+    {{template "updated" .Now}}
+  </div>
+  {{if .Rows}}
+  <ul class="rows">
+    {{range .Rows}}
+    <li><a class="row" href="/publishers/{{.Pubkey}}">
+      <span class="tile" aria-hidden="true">{{letter (or .Name .Pubkey)}}</span>
+      <span class="row-main">
+        <span class="row-title"><span>{{or .Name (short (npub .Pubkey))}}</span></span>
+        <span class="row-sub">{{if .Label}}{{.Label}} · {{end}}{{.Count}} {{if eq .Count 1}}app{{else}}apps{{end}}</span>
+      </span>
+      <span class="row-side">
+        {{if .Banned}}<span class="badge bad">Banned</span>{{end}}
+        <span class="stat" title="Newest listing {{stamp .Newest}}">{{ago .Newest}}</span>
+      </span>
+    </a></li>
+    {{end}}
+  </ul>
+  {{else if .Query}}
+  <div class="empty">{{icon "search"}}<div><strong>No publisher matches “{{.Query}}”</strong>Search matches names, npubs, and the apps they list.</div></div>
+  {{else}}
+  <div class="empty">{{icon "users"}}<div><strong>No publishers yet</strong>A publisher appears here once their listing reaches this relay.</div></div>
+  {{end}}
+</section>
+{{end}}
+
+{{define "publisher"}}
+<title>{{or .Publisher.Name (short (npub .Pubkey))}} · Zapstore relay</title>
+<a class="back" href="/publishers">{{icon "arrow-left"}}Publishers</a>
+
+<div id="pub-live" data-live>
+  <span hidden class="live-poll" hx-get="/publishers/{{.Pubkey}}" hx-trigger="every 120s [canRefresh(this)]" hx-select="#pub-live" hx-target="#pub-live" hx-swap="outerHTML" hx-indicator="#pub-live"></span>
+
+  <header class="app-head">
+    <span class="tile lg" aria-hidden="true">{{letter (or .Publisher.Name .Pubkey)}}</span>
+    <div>
+      <h1>{{or .Publisher.Name (short (npub .Pubkey))}}</h1>
+      <div class="app-id"><span class="ev" title="{{npub .Pubkey}}">{{short (npub .Pubkey)}}</span>{{template "copy" (npub .Pubkey)}}<a class="copy" href="https://npub.world/{{npub .Pubkey}}" target="_blank" rel="noopener noreferrer" hx-boost="false" title="Open on npub.world" aria-label="Open on npub.world">{{icon "external"}}</a></div>
+    </div>
+    {{if and .CanBan (not .Publisher.Banned)}}
+    <div class="app-links">
+      <a class="btn danger sm" href="/moderation?kind=nostr&amp;id={{.Pubkey}}{{if .Apps}}&amp;app={{(index .Apps 0).ID}}{{end}}">{{icon "ban"}}Review ban</a>
+    </div>
+    {{end}}
+  </header>
+
+  <dl class="facts">
+    <div class="fact"><dt>Apps</dt><dd>{{len .Apps}}</dd></div>
+    {{if .Publisher.Banned}}<div class="fact"><dt>Status</dt><dd><span class="badge bad">{{icon "ban"}}Banned</span></dd></div>{{end}}
+    {{if .Publisher.NIP05}}<div class="fact"><dt>NIP-05</dt><dd>{{.Publisher.NIP05}}</dd></div>{{end}}
+    {{if .Publisher.Website}}<div class="fact"><dt>Website</dt><dd><a class="link" href="{{.Publisher.Website}}" target="_blank" rel="noopener noreferrer" hx-boost="false">{{.Publisher.Website}}</a></dd></div>{{end}}
+  </dl>
+
+  <div class="layout">
+    <div>
+      <section class="section" id="pub-apps">
+        <div class="section-head"><h2>{{icon "grid"}}Apps</h2></div>
+        {{if .Apps}}
+        <ul class="rows">
+          {{range .Apps}}
+          <li><a class="row" href="/apps/{{.ID}}">
+            <span class="tile" aria-hidden="true">{{letter .Name}}<img src="/apps/{{.ID}}/icon" alt="" loading="lazy" decoding="async" onerror="this.remove()"></span>
+            <span class="row-main">
+              <span class="row-title"><span>{{.Name}}</span></span>
+              <span class="row-sub"><span class="ev">{{.ID}}</span>{{if .Cert}} · <span class="ev" title="{{.Cert}}">{{short .Cert}}</span>{{end}}</span>
+            </span>
+            <span class="row-side">
+              {{if .Proof}}
+              <span class="badge {{if eq .Proof.Status "Active"}}ok{{else if eq .Proof.Status "Revoked"}}bad{{else}}warn{{end}}"{{if not .Proof.Expiry.IsZero}} title="{{if eq .Proof.Status "Expired"}}Expired{{else}}Until{{end}} {{date .Proof.Expiry}}"{{end}}>{{.Proof.Status}}</span>
+              <span class="tag"{{if .Proof.Other}} title="{{if eq .Proof.Role "Delegate"}}Delegated by{{else}}Delegates to{{end}} {{npub .Proof.Other}}"{{end}}>{{.Proof.Role}}</span>
+              {{else if .Cert}}<span class="tag">No proof</span>{{else}}<span class="tag">No certificate</span>{{end}}
+              <span class="stat" title="Listing updated {{stamp .Updated}}">{{ago .Updated}}</span>
+            </span>
+          </a></li>
+          {{end}}
+        </ul>
+        {{else}}
+        <div class="empty">{{icon "grid"}}<div><strong>No listings</strong>This key has not published an app listing on this relay.</div></div>
+        {{end}}
+      </section>
+
+      {{if .Extra}}
+      <section class="section" id="c1">
+        <div class="section-head">
+          <h2>{{icon "key"}}Other certificates</h2>
+          <span class="meta">Not the current signer of an app above</span>
+        </div>
+        <div class="c1s">
+          {{range .Extra}}
+          <div class="c1">
+            <div class="val">
+              <span class="badge {{if eq .Status "Active"}}ok{{else if eq .Status "Revoked"}}bad{{else}}warn{{end}}">{{.Status}}</span>
+              <span class="tag">{{.Role}}</span>
+            </div>
+            <div class="val"><span class="ev" title="{{.Cert}}">{{short .Cert}}</span>{{template "copy" .Cert}}</div>
+            {{if .Apps}}
+            <p class="small">{{range $i, $a := .Apps}}{{if $i}}, {{end}}<a class="link" href="/apps/{{$a.ID}}">{{$a.Name}}</a>{{end}}</p>
+            {{else}}
+            <p class="small faint">No app on this relay uses this certificate.</p>
+            {{end}}
+            {{if not .Expiry.IsZero}}<p class="small faint">{{if eq .Status "Expired"}}Expired{{else}}Until{{end}} {{date .Expiry}}</p>{{end}}
+            {{if .Other}}<p class="small">{{if eq .Role "Delegate"}}Delegated by{{else}}Delegates to{{end}} <a class="link" href="/publishers/{{.Other}}"><span class="ev" title="{{npub .Other}}">{{short (npub .Other)}}</span></a></p>{{end}}
+            {{if .Reason}}<p class="small">{{.Reason}}</p>{{end}}
+          </div>
+          {{end}}
+        </div>
+      </section>
+      {{end}}
+    </div>
+
+    <aside class="aside">
+      <section class="card">
+        <h2>{{icon "user"}}Key</h2>
+        <dl class="dl">
+          <dt>npub</dt>
+          <dd><div class="val"><span class="ev" title="{{npub .Pubkey}}">{{short (npub .Pubkey)}}</span>{{template "copy" (npub .Pubkey)}}</div></dd>
+          <dt>Hex</dt>
+          <dd><div class="val"><span class="ev" title="{{.Pubkey}}">{{short .Pubkey}}</span>{{template "copy" .Pubkey}}</div></dd>
+        </dl>
+      </section>
+    </aside>
+  </div>
+</div>
+{{end}}

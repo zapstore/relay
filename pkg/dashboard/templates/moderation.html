@@ -1,0 +1,120 @@
+{{define "moderation"}}
+<title>Moderation · Zapstore relay</title>
+<div class="head">
+  <div>
+    <h1>Moderation</h1>
+    <p>Banned publishers and files. A ban removes the publisher's listings and rejects what they publish next, even under a new key.</p>
+  </div>
+</div>
+
+{{if .ReadOnly}}<div class="notice warn">{{icon "lock"}}<div>This relay is read-only. Bans are listed but cannot change here.</div></div>{{end}}
+{{if .Notice}}<div class="notice ok">{{icon "check-circle"}}<div>{{.Notice}}</div></div>{{end}}
+{{if .Error}}<div class="notice bad">{{icon "alert"}}<div>{{.Error}}</div></div>{{end}}
+
+<div class="split">
+  <div id="mod-live" data-live>
+    <span hidden class="live-poll" hx-get="/moderation" hx-trigger="every 60s [canRefresh(this)]" hx-select="#mod-live" hx-target="#mod-live" hx-swap="outerHTML" hx-indicator="#mod-live"></span>
+    <section class="section">
+      <div class="section-head"><h2>Publishers · {{len .Publishers}}</h2>{{template "updated" .Now}}</div>
+      {{if .Publishers}}
+      <div class="scroll-x">
+        <table class="table">
+          <thead><tr><th>Publisher</th><th>Reason</th><th class="num">Since</th>{{if .CanBan}}<th></th>{{end}}</tr></thead>
+          <tbody>
+            {{range .Publishers}}
+            <tr>
+              <td>
+                <div class="id">
+                  <span class="tag">{{if eq .Kind "nostr"}}Key{{else if eq .Kind "forge"}}Forge{{else if eq .Kind "cert"}}Certificate{{else}}{{.Kind}}{{end}}</span>
+                  {{if eq .Kind "nostr"}}<span class="ev" title="{{npub .ID}}">{{short (npub .ID)}}</span>{{template "copy" (npub .ID)}}
+                  {{else if eq .Kind "forge"}}<span class="ev">{{.ID}}</span>{{template "copy" .ID}}
+                  {{else}}<span class="ev" title="{{.ID}}">{{short .ID}}</span>{{template "copy" .ID}}{{end}}
+                </div>
+              </td>
+              <td>{{.Reason}}</td>
+              <td class="num" title="{{if not .Created.IsZero}}{{stamp .Created}}{{end}}">{{if .Created.IsZero}}<span class="faint">Unknown</span>{{else}}{{ago .Created}}{{end}}</td>
+              {{if $.CanBan}}
+              <td class="num">
+                <form hx-post="/moderation/unban" hx-confirm="Lift this ban? Listings already deleted stay deleted; the publisher can publish again.">
+                  <input type="hidden" name="kind" value="{{.Kind}}">
+                  <input type="hidden" name="id" value="{{.ID}}">
+                  <button class="btn ghost sm" type="submit">Lift ban</button>
+                </form>
+              </td>
+              {{end}}
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="empty">{{icon "shield-check"}}<div><strong>No banned publishers</strong>Bans you add show here with their reason.</div></div>
+      {{end}}
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Files · {{len .Hashes}}</h2></div>
+      {{if .Hashes}}
+      <div class="scroll-x">
+        <table class="table">
+          <thead><tr><th>SHA-256</th><th>Reason</th>{{if .CanBan}}<th></th>{{end}}</tr></thead>
+          <tbody>
+            {{range .Hashes}}
+            <tr>
+              <td><div class="id"><span class="ev" title="{{.Hash}}">{{short .Hash}}</span>{{template "copy" .Hash}}</div></td>
+              <td>{{.Reason}}</td>
+              {{if $.CanBan}}
+              <td class="num">
+                <form hx-post="/moderation/unban-hash" hx-confirm="Allow this file again? Events naming it will be accepted.">
+                  <input type="hidden" name="hash" value="{{.Hash}}">
+                  <button class="btn ghost sm" type="submit">Allow</button>
+                </form>
+              </td>
+              {{end}}
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="empty">{{icon "file"}}<div><strong>No banned files</strong>Files are banned together with their publisher.</div></div>
+      {{end}}
+    </section>
+  </div>
+
+  <aside class="aside">
+    <section class="card">
+      <h2>{{icon "ban"}}Ban a publisher</h2>
+      {{if .CanBan}}
+      <form class="form-card" hx-post="/moderation/ban" hx-disabled-elt="find button" hx-indicator="this"
+        hx-confirm="Ban this publisher? Their listings are removed from the catalog right away.">
+        {{if .Form.App}}<p class="small muted">From <a class="link" href="/apps/{{.Form.App}}">{{.Form.App}}</a>. Check the key and add a reason.</p>{{end}}
+        <label class="f">What to ban
+          <select class="field" name="kind">
+            <option value="nostr"{{if eq .Form.Kind "nostr"}} selected{{end}}>Publisher key (npub or hex)</option>
+            <option value="forge"{{if eq .Form.Kind "forge"}} selected{{end}}>Forge account (github.com/user)</option>
+            <option value="cert"{{if eq .Form.Kind "cert"}} selected{{end}}>APK signing certificate (hex)</option>
+          </select>
+        </label>
+        <label class="f">Identifier
+          <input class="field" type="text" name="id" value="{{.Form.ID}}" placeholder="npub1…, 64 hex, or github.com/user" required autocomplete="off" spellcheck="false">
+        </label>
+        <label class="f">Reason
+          <textarea class="field" name="reason" required placeholder="Shown to operators and stored with the removed listings">{{.Form.Reason}}</textarea>
+        </label>
+        <div class="form-foot">
+          <p>Lifting a ban later does not restore deleted listings.</p>
+          <button class="btn danger" type="submit"><span class="spinner spin"></span><span class="idle">{{icon "ban"}}</span>Ban</button>
+        </div>
+      </form>
+      {{else if .ReadOnly}}
+      <p class="small muted">Read-only relays cannot change bans.</p>
+      {{else if .IsAdmin}}
+      <p class="small muted">Banning is not available on this relay.</p>
+      {{else}}
+      <p class="small muted">You have viewer access. Ask an admin to ban a publisher or file.</p>
+      {{end}}
+    </section>
+  </aside>
+</div>
+{{end}}
