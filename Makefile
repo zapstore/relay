@@ -5,6 +5,8 @@ CMD := ./cmd
 
 CGO_ENABLED ?= 1
 GOFLAGS := -trimpath
+# shortcut: synced relay.db still has apps_fts triggers. Remove with the launch checklist.
+TAGS := fts5
 LDFLAGS := -s -w
 VERSION := $(shell git describe --exact-match --tags HEAD 2>/dev/null)
 ifneq ($(VERSION),)
@@ -30,7 +32,7 @@ bin:
 	mkdir -p dist
 	rm -rf $(BIN)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) \
-		go build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
+		go build $(GOFLAGS) -tags $(TAGS) -ldflags '$(LDFLAGS)' \
 		-o $(BIN) $(CMD)
 
 darwin-arm64:
