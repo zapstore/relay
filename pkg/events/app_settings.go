@@ -14,6 +14,7 @@ var validAppSettingsIdentifiers = []string{
 	"zapstore-settings",
 	"zapstore-device-state",
 	"zapstore-device-key-backup",
+	"zapstore-update-ignore",
 }
 
 // AppSettings holds the encrypted application settings.
