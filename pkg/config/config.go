@@ -39,7 +39,7 @@ type Config struct {
 }
 
 // CatalogConfig is signing and the bundle interval.
-// GET /bundle is served on the relay listener.
+// GET /v1/bundle is served on the relay listener.
 type CatalogConfig struct {
 	// SignWith is the catalog signing key: 1, 64-char hex, nsec, or a bunker URL.
 	// Its public key must equal RELAY_PUBKEY. A bunker URL is the hotbox signer.
