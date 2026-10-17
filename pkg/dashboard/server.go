@@ -133,6 +133,8 @@ func (d *T) routes() *http.ServeMux {
 	mux.HandleFunc("POST /moderation/ban", d.rateLimit(d.admin(d.addBan)))
 	mux.HandleFunc("POST /moderation/unban", d.rateLimit(d.admin(d.removeBan)))
 	mux.HandleFunc("POST /moderation/unban-hash", d.rateLimit(d.admin(d.removeHash)))
+	mux.HandleFunc("POST /moderation/allow", d.rateLimit(d.admin(d.addAllow)))
+	mux.HandleFunc("POST /moderation/disallow", d.rateLimit(d.admin(d.removeAllow)))
 	mux.HandleFunc("GET /jobs/{id}", d.rateLimit(d.viewer(d.jobStatus)))
 	mux.HandleFunc("POST /jobs/{id}/cancel", d.rateLimit(d.admin(d.cancelJob)))
 	return mux

@@ -12,7 +12,8 @@ import (
 )
 
 // ErrNotAdmitted is returned when a publisher is not the catalog key, has not
-// published a kind 32267, and is not above the web of trust threshold.
+// published a kind 32267, is not on the whitelist, and is not above the web
+// of trust threshold.
 var ErrNotAdmitted = errors.New("publisher did not pass the gate")
 
 // WebOfTrust answers whether a pubkey is above the web of trust threshold,
@@ -23,8 +24,8 @@ type WebOfTrust interface {
 
 // Gate decides whether a publisher who is not the catalog key may publish a
 // listing or upload a file. It runs after the blacklist. A nil WebOfTrust,
-// or a web of trust check that cannot be reached, leaves only a key that
-// already published a kind 32267.
+// or a web of trust check that cannot be reached, leaves the catalog key,
+// a key that already published a kind 32267, and a whitelisted key.
 type Gate struct {
 	store      *Store
 	catalogKey string
@@ -37,8 +38,8 @@ func NewGate(store *Store, catalogKey string, wot WebOfTrust) *Gate {
 }
 
 // Admit returns nil when pubkey may publish and ErrNotAdmitted when it may
-// not. An existing kind 32267 is checked before Vertex. A web of trust
-// outage is a rejection, not a failed check.
+// not. An existing kind 32267 and the whitelist are checked before Vertex.
+// A web of trust outage is a rejection, not a failed check.
 func (g *Gate) Admit(ctx context.Context, pubkey string) error {
 	if g == nil {
 		return nil
@@ -55,6 +56,13 @@ func (g *Gate) Admit(ctx context.Context, pubkey string) error {
 		return fmt.Errorf("published app: %w", err)
 	}
 	if published {
+		return nil
+	}
+	listed, err := g.store.Allowed(ctx, pub.ID)
+	if err != nil {
+		return fmt.Errorf("whitelist: %w", err)
+	}
+	if listed {
 		return nil
 	}
 	if g.wot == nil {

@@ -75,6 +75,12 @@ func TestGateRejectsWithoutWebOfTrust(t *testing.T) {
 	if err := gate.Admit(ctx, devKey); !errors.Is(err, ErrNotAdmitted) {
 		t.Fatalf("developer: %v", err)
 	}
+	if err := store.Allow(ctx, paidKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Admit(ctx, paidKey); err != nil {
+		t.Fatalf("whitelisted: %v", err)
+	}
 	var nilGate *Gate
 	if err := nilGate.Admit(ctx, devKey); err != nil {
 		t.Fatalf("nil gate rejected: %v", err)
@@ -122,7 +128,32 @@ func TestGateSkipsVertexAfterAppPublish(t *testing.T) {
 	}
 }
 
-func TestOpenDropsPaidAndSuggestionTables(t *testing.T) {
+func TestGateWhitelistSkipsVertex(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	wot := &fakeWoT{scores: map[string]float64{paidKey: 0.1}}
+	gate := NewGate(store, catalogKey, wot)
+	if err := store.Allow(ctx, paidKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Admit(ctx, strings.ToUpper(paidKey)); err != nil {
+		t.Fatal(err)
+	}
+	if wot.calls != 0 {
+		t.Fatalf("web of trust calls = %d, want 0", wot.calls)
+	}
+	if err := store.Disallow(ctx, paidKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Admit(ctx, paidKey); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("after disallow: %v", err)
+	}
+	if wot.calls != 1 {
+		t.Fatalf("web of trust calls = %d, want 1", wot.calls)
+	}
+}
+
+func TestOpenKeepsWhitelist(t *testing.T) {
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "policy.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -146,11 +177,16 @@ func TestOpenDropsPaidAndSuggestionTables(t *testing.T) {
 	if _, err := Open(db); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"allowed", "paid_access", "suggestions"} {
+	for _, name := range []string{"allowed", "suggestions", "paid_access"} {
 		var got string
 		err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&got)
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("%s still present: %v %q", name, err, got)
 		}
+	}
+	var name string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'whitelist'`).Scan(&name)
+	if err != nil || name != "whitelist" {
+		t.Fatalf("whitelist: %v %q", err, name)
 	}
 }

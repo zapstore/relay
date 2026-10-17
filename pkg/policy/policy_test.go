@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/zapstore/relay/pkg/events"
 )
 
@@ -107,6 +108,25 @@ func TestSocketCommands(t *testing.T) {
 		t.Fatalf("unknown %+v", resp)
 	}
 
+	allow := `{"op":"allow","id":"` + key + `"}`
+	if resp := socketCall(t, path, allow); !resp.OK {
+		t.Fatalf("allow %+v", resp)
+	}
+	listed := socketCall(t, path, `{"op":"allowed"}`)
+	if !listed.OK || len(listed.Allowed) != 1 || listed.Allowed[0] != key {
+		t.Fatalf("allowed %+v", listed)
+	}
+	if resp := socketCall(t, path, `{"op":"allow","kind":"forge","id":"github.com/x"}`); resp.OK || resp.Error == "" {
+		t.Fatalf("forge allow %+v", resp)
+	}
+	if resp := socketCall(t, path, `{"op":"disallow","id":"`+key+`"}`); !resp.OK {
+		t.Fatalf("disallow %+v", resp)
+	}
+	listed = socketCall(t, path, `{"op":"allowed"}`)
+	if !listed.OK || len(listed.Allowed) != 0 {
+		t.Fatalf("allowed after disallow %+v", listed)
+	}
+
 	cancel()
 	<-errc
 }
@@ -134,6 +154,14 @@ func TestSocketReadOnly(t *testing.T) {
 	if called {
 		t.Fatal("ban ran")
 	}
+	resp = socketCall(t, path, `{"op":"allow","id":"`+key+`"}`)
+	if resp.OK || resp.Error != "relay is read-only" {
+		t.Fatalf("allow %+v", resp)
+	}
+	listed := socketCall(t, path, `{"op":"allowed"}`)
+	if !listed.OK {
+		t.Fatalf("allowed %+v", listed)
+	}
 
 	cancel()
 	<-errc
@@ -155,8 +183,9 @@ func waitSocket(t *testing.T, path string) {
 }
 
 type socketResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK      bool     `json:"ok"`
+	Error   string   `json:"error,omitempty"`
+	Allowed []string `json:"allowed"`
 }
 
 func socketCall(t *testing.T, path, line string) socketResponse {
@@ -275,5 +304,39 @@ func TestPublishersAndHashes(t *testing.T) {
 	}
 	if len(hashes) != 0 {
 		t.Fatalf("hashes after remove = %+v", hashes)
+	}
+}
+
+func TestAllowNostrKey(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	hex := strings.Repeat("ab", 32)
+	npub, err := nip19.EncodePublicKey(hex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Allow(ctx, npub); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Allow(ctx, strings.ToUpper(hex)); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := store.Allowed(ctx, hex)
+	if err != nil || !ok {
+		t.Fatalf("allowed %v %v", ok, err)
+	}
+	keys, err := store.AllowedKeys(ctx)
+	if err != nil || len(keys) != 1 || keys[0].ID != hex {
+		t.Fatalf("keys %+v %v", keys, err)
+	}
+	if err := store.Allow(ctx, "github.com/someone"); err == nil {
+		t.Fatal("forge key accepted")
+	}
+	if err := store.Disallow(ctx, npub); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = store.Allowed(ctx, hex)
+	if err != nil || ok {
+		t.Fatalf("after disallow %v %v", ok, err)
 	}
 }

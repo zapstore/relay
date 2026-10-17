@@ -134,9 +134,9 @@ func start(cfg config.Config) (err error) {
 		return relay.ApplyBan(ctx, relayDB, pol, pub, reason)
 	}
 	// The gate: the catalog key, a key that already published a kind 32267,
-	// or a pubkey above the web of trust threshold may publish.
-	// Without VERTEX_SECRET_KEY only the catalog key and keys that already
-	// published may publish.
+	// a whitelisted key, or a pubkey above the web of trust threshold may publish.
+	// Without VERTEX_SECRET_KEY only the catalog key, whitelisted keys, and
+	// keys that already published may publish.
 	var wot policy.WebOfTrust
 	var credits vertex.Client
 	watch := false
@@ -145,7 +145,7 @@ func start(cfg config.Config) (err error) {
 		wot = credits
 		watch = true
 	} else {
-		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key and keys that already published may publish")
+		slog.Info("VERTEX_SECRET_KEY unset: web of trust is off, only the catalog key, whitelisted keys, and keys that already published may publish")
 	}
 	gate := policy.NewGate(pol, cfg.Relay.Info.Pubkey, wot)
 	signer, err := catalog.OpenSigner(ctx, cfg.Catalog.SignWith)

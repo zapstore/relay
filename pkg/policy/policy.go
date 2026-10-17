@@ -1,5 +1,5 @@
-// Package policy stores the publisher blacklist, banned file hashes,
-// and ban notices in the relay database.
+// Package policy stores the publisher blacklist, the publisher whitelist,
+// banned file hashes, and ban notices in the relay database.
 package policy
 
 import (

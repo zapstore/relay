@@ -12,7 +12,7 @@ func TestModerationTemplate(t *testing.T) {
 	d := newTestDashboard(t, Config{}, relay.DB{})
 	pub := strings.Repeat("b", 64)
 	body := render(t, d, "moderation", moderationPage{
-		IsAdmin: true, CanBan: true, Notice: "Banned publisher x",
+		IsAdmin: true, CanBan: true, CanAllow: true, Notice: "Banned publisher x",
 		Form: banForm{Kind: "nostr", ID: pub, Reason: "Publisher of org.bad", App: "org.bad"},
 		Publishers: []banRow{
 			{Kind: "forge", ID: "github.com/bad", Reason: "malware", Created: time.Now()},
@@ -22,7 +22,15 @@ func TestModerationTemplate(t *testing.T) {
 		Now:    time.Now(),
 	})
 	wantAll(t, body, "github.com/bad", "malware", "npub1", "Lift ban", "Allow", "Banned publisher x",
-		`hx-post="/moderation/ban"`, `value="`+pub+`"`, "Publisher of org.bad", `href="/apps/org.bad"`, "Unknown")
+		`hx-post="/moderation/ban"`, `value="`+pub+`"`, "Publisher of org.bad", `href="/apps/org.bad"`, "Unknown",
+		"Whitelist", `hx-post="/moderation/allow"`)
+
+	body = render(t, d, "moderation", moderationPage{
+		IsAdmin: true, CanAllow: true,
+		Allowed: []allowRow{{ID: pub, Created: time.Now()}},
+		Now:     time.Now(),
+	})
+	wantAll(t, body, "npub1", "Remove", `hx-post="/moderation/disallow"`, `value="`+pub+`"`)
 
 	body = render(t, d, "moderation", moderationPage{
 		IsAdmin: true, ReadOnly: true,

@@ -3,11 +3,11 @@
 <div class="head">
   <div>
     <h1>Moderation</h1>
-    <p>Banned publishers and files. A ban removes the publisher's listings and rejects what they publish next, even under a new key.</p>
+    <p>Banned publishers and files, and keys whitelisted to publish. A ban removes the publisher's listings and rejects what they publish next, even under a new key. A whitelisted key can publish without a web of trust score. A ban still blocks it.</p>
   </div>
 </div>
 
-{{if .ReadOnly}}<div class="notice warn">{{icon "lock"}}<div>This relay is read-only. Bans are listed but cannot change here.</div></div>{{end}}
+{{if .ReadOnly}}<div class="notice warn">{{icon "lock"}}<div>This relay is read-only. Bans and the whitelist are listed but cannot change here.</div></div>{{end}}
 {{if .Notice}}<div class="notice ok">{{icon "check-circle"}}<div>{{.Notice}}</div></div>{{end}}
 {{if .Error}}<div class="notice bad">{{icon "alert"}}<div>{{.Error}}</div></div>{{end}}
 
@@ -80,6 +80,35 @@
       <div class="empty">{{icon "file"}}<div><strong>No banned files</strong>Files are banned together with their publisher.</div></div>
       {{end}}
     </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Whitelist · {{len .Allowed}}</h2></div>
+      {{if .Allowed}}
+      <div class="scroll-x">
+        <table class="table">
+          <thead><tr><th>Key</th><th class="num">Since</th>{{if .CanAllow}}<th></th>{{end}}</tr></thead>
+          <tbody>
+            {{range .Allowed}}
+            <tr>
+              <td><div class="id"><span class="ev" title="{{npub .ID}}">{{short (npub .ID)}}</span>{{template "copy" (npub .ID)}}</div></td>
+              <td class="num" title="{{if not .Created.IsZero}}{{stamp .Created}}{{end}}">{{if .Created.IsZero}}<span class="faint">Unknown</span>{{else}}{{ago .Created}}{{end}}</td>
+              {{if $.CanAllow}}
+              <td class="num">
+                <form hx-post="/moderation/disallow" hx-confirm="Remove this key from the whitelist? They need a web of trust score to publish again, unless they already have an app listed.">
+                  <input type="hidden" name="id" value="{{.ID}}">
+                  <button class="btn ghost sm" type="submit">Remove</button>
+                </form>
+              </td>
+              {{end}}
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="empty">{{icon "key"}}<div><strong>No whitelisted keys</strong>Keys you add can publish without a web of trust score.</div></div>
+      {{end}}
+    </section>
   </div>
 
   <aside class="aside">
@@ -113,6 +142,27 @@
       <p class="small muted">Banning is not available on this relay.</p>
       {{else}}
       <p class="small muted">You have viewer access. Ask an admin to ban a publisher or file.</p>
+      {{end}}
+    </section>
+
+    <section class="card">
+      <h2>{{icon "key"}}Whitelist a key</h2>
+      {{if .CanAllow}}
+      <form class="form-card" hx-post="/moderation/allow" hx-disabled-elt="find button" hx-indicator="this">
+        <label class="f">Publisher key
+          <input class="field" type="text" name="id" value="{{.AllowForm.ID}}" placeholder="npub1… or 64 hex" required autocomplete="off" spellcheck="false">
+        </label>
+        <div class="form-foot">
+          <p>Payments will add keys here later. A ban still blocks a whitelisted key.</p>
+          <button class="btn primary" type="submit"><span class="spinner spin"></span><span class="idle">{{icon "key"}}</span>Whitelist</button>
+        </div>
+      </form>
+      {{else if .ReadOnly}}
+      <p class="small muted">Read-only relays cannot change the whitelist.</p>
+      {{else if .IsAdmin}}
+      <p class="small muted">The whitelist is not available on this relay.</p>
+      {{else}}
+      <p class="small muted">You have viewer access. Ask an admin to whitelist a key.</p>
       {{end}}
     </section>
   </aside>

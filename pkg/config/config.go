@@ -81,8 +81,8 @@ type SystemConfig struct {
 	Dir      string   `env:"SYSTEM_DIRECTORY_PATH"`
 	LogLevel LogLevel `env:"SYSTEM_LOG_LEVEL"`
 
-	// ReadOnly rejects events, Blossom uploads, relay.sock bans, and
-	// dashboard blacklist changes. Bundles are still signed with SIGN_WITH.
+	// ReadOnly rejects events, Blossom uploads, relay.sock bans and whitelist
+	// changes, and dashboard blacklist and whitelist changes. Bundles are still signed with SIGN_WITH.
 	// The bundle tick still enriches.
 	ReadOnly bool `env:"READ_ONLY"`
 }

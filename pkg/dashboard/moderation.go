@@ -35,15 +35,27 @@ type banForm struct {
 	App    string
 }
 
+type allowRow struct {
+	ID      string
+	Created time.Time
+}
+
+type allowForm struct {
+	ID string
+}
+
 type moderationPage struct {
 	IsAdmin    bool
 	ReadOnly   bool
 	CanBan     bool
+	CanAllow   bool
 	Notice     string
 	Error      string
 	Form       banForm
+	AllowForm  allowForm
 	Publishers []banRow
 	Hashes     []hashRow
+	Allowed    []allowRow
 	Now        time.Time
 }
 
@@ -53,7 +65,7 @@ func (d *T) moderationPage(w http.ResponseWriter, r *http.Request, token nwt.Tok
 	if form.Reason == "" && form.App != "" {
 		form.Reason = "Publisher of " + form.App
 	}
-	d.renderModeration(w, r, d.auth.IsAdmin(token), form, "", "")
+	d.renderModeration(w, r, d.auth.IsAdmin(token), form, allowForm{}, "", "")
 }
 
 func (d *T) addBan(w http.ResponseWriter, r *http.Request, token nwt.Token) {
@@ -63,11 +75,11 @@ func (d *T) addBan(w http.ResponseWriter, r *http.Request, token nwt.Token) {
 	}
 	form := banForm{Kind: r.FormValue("kind"), ID: strings.TrimSpace(r.FormValue("id")), Reason: strings.TrimSpace(r.FormValue("reason"))}
 	if msg := d.writeBlocked(); msg != "" {
-		d.renderModeration(w, r, true, form, "", msg)
+		d.renderModeration(w, r, true, form, allowForm{}, "", msg)
 		return
 	}
 	if d.ban == nil {
-		d.renderModeration(w, r, true, form, "", "Banning is not available on this relay")
+		d.renderModeration(w, r, true, form, allowForm{}, "", "Banning is not available on this relay")
 		return
 	}
 	id := form.ID
@@ -76,18 +88,18 @@ func (d *T) addBan(w http.ResponseWriter, r *http.Request, token nwt.Token) {
 	}
 	pub, err := policy.Normalize(form.Kind, id)
 	if err != nil {
-		d.renderModeration(w, r, true, form, "", err.Error())
+		d.renderModeration(w, r, true, form, allowForm{}, "", err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := d.ban(ctx, pub, form.Reason); err != nil {
-		d.renderModeration(w, r, true, form, "", err.Error())
+		d.renderModeration(w, r, true, form, allowForm{}, "", err.Error())
 		return
 	}
 	slog.Info("dashboard: banned", "kind", pub.Kind, "id", pub.ID, "by", token.Signer)
 	w.Header().Set("HX-Push-Url", "/moderation")
-	d.renderModeration(w, r, true, banForm{}, fmt.Sprintf("Banned %s %s. Their listings are removed from the catalog.", kindLabel(pub.Kind), shortID(pub)), "")
+	d.renderModeration(w, r, true, banForm{}, allowForm{}, fmt.Sprintf("Banned %s %s. Their listings are removed from the catalog.", kindLabel(pub.Kind), shortID(pub)), "")
 }
 
 func (d *T) removeBan(w http.ResponseWriter, r *http.Request, token nwt.Token) {
@@ -96,18 +108,18 @@ func (d *T) removeBan(w http.ResponseWriter, r *http.Request, token nwt.Token) {
 		return
 	}
 	if msg := d.writeBlocked(); msg != "" {
-		d.renderModeration(w, r, true, banForm{}, "", msg)
+		d.renderModeration(w, r, true, banForm{}, allowForm{}, "", msg)
 		return
 	}
 	kind, id := r.FormValue("kind"), r.FormValue("id")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := d.pol.RemovePublisher(ctx, kind, id); err != nil {
-		d.renderModeration(w, r, true, banForm{}, "", err.Error())
+		d.renderModeration(w, r, true, banForm{}, allowForm{}, "", err.Error())
 		return
 	}
 	slog.Info("dashboard: unbanned", "kind", kind, "id", id, "by", token.Signer)
-	d.renderModeration(w, r, true, banForm{}, fmt.Sprintf("Removed %s %s from the blacklist. Listings already deleted stay deleted.", kindLabel(kind), short(id)), "")
+	d.renderModeration(w, r, true, banForm{}, allowForm{}, fmt.Sprintf("Removed %s %s from the blacklist. Listings already deleted stay deleted.", kindLabel(kind), short(id)), "")
 }
 
 func (d *T) removeHash(w http.ResponseWriter, r *http.Request, token nwt.Token) {
@@ -116,18 +128,59 @@ func (d *T) removeHash(w http.ResponseWriter, r *http.Request, token nwt.Token) 
 		return
 	}
 	if msg := d.writeBlocked(); msg != "" {
-		d.renderModeration(w, r, true, banForm{}, "", msg)
+		d.renderModeration(w, r, true, banForm{}, allowForm{}, "", msg)
 		return
 	}
 	hash := r.FormValue("hash")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := d.pol.RemoveHash(ctx, hash); err != nil {
-		d.renderModeration(w, r, true, banForm{}, "", err.Error())
+		d.renderModeration(w, r, true, banForm{}, allowForm{}, "", err.Error())
 		return
 	}
 	slog.Info("dashboard: file allowed", "hash", hash, "by", token.Signer)
-	d.renderModeration(w, r, true, banForm{}, "Allowed file "+short(hash)+" again.", "")
+	d.renderModeration(w, r, true, banForm{}, allowForm{}, "Allowed file "+short(hash)+" again.", "")
+}
+
+func (d *T) addAllow(w http.ResponseWriter, r *http.Request, token nwt.Token) {
+	if err := r.ParseForm(); err != nil {
+		fail(w, http.StatusBadRequest, errors.New("invalid form"))
+		return
+	}
+	form := allowForm{ID: strings.TrimSpace(r.FormValue("id"))}
+	if msg := d.writeBlocked(); msg != "" {
+		d.renderModeration(w, r, true, banForm{}, form, "", msg)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := d.pol.Allow(ctx, hexKey(form.ID)); err != nil {
+		d.renderModeration(w, r, true, banForm{}, form, "", err.Error())
+		return
+	}
+	slog.Info("dashboard: whitelisted", "id", form.ID, "by", token.Signer)
+	w.Header().Set("HX-Push-Url", "/moderation")
+	d.renderModeration(w, r, true, banForm{}, allowForm{}, "Whitelisted "+short(npub(hexKey(form.ID)))+". They can publish without a web of trust score.", "")
+}
+
+func (d *T) removeAllow(w http.ResponseWriter, r *http.Request, token nwt.Token) {
+	if err := r.ParseForm(); err != nil {
+		fail(w, http.StatusBadRequest, errors.New("invalid form"))
+		return
+	}
+	if msg := d.writeBlocked(); msg != "" {
+		d.renderModeration(w, r, true, banForm{}, allowForm{}, "", msg)
+		return
+	}
+	id := r.FormValue("id")
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := d.pol.Disallow(ctx, id); err != nil {
+		d.renderModeration(w, r, true, banForm{}, allowForm{}, "", err.Error())
+		return
+	}
+	slog.Info("dashboard: removed from whitelist", "id", id, "by", token.Signer)
+	d.renderModeration(w, r, true, banForm{}, allowForm{}, "Removed "+short(npub(id))+" from the whitelist.", "")
 }
 
 // writeBlocked explains why a moderation change cannot run, or is empty.
@@ -141,7 +194,7 @@ func (d *T) writeBlocked() string {
 	return ""
 }
 
-func (d *T) renderModeration(w http.ResponseWriter, r *http.Request, isAdmin bool, form banForm, notice, errMsg string) {
+func (d *T) renderModeration(w http.ResponseWriter, r *http.Request, isAdmin bool, form banForm, allow allowForm, notice, errMsg string) {
 	if d.pol == nil {
 		fail(w, http.StatusServiceUnavailable, errors.New("moderation is not available on this relay"))
 		return
@@ -158,6 +211,11 @@ func (d *T) renderModeration(w http.ResponseWriter, r *http.Request, isAdmin boo
 		fail(w, http.StatusInternalServerError, err)
 		return
 	}
+	allowed, err := d.pol.AllowedKeys(ctx)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
 	if form.Kind == "" {
 		form.Kind = policy.KindNostr
 	}
@@ -165,11 +223,14 @@ func (d *T) renderModeration(w http.ResponseWriter, r *http.Request, isAdmin boo
 		IsAdmin:    isAdmin,
 		ReadOnly:   d.readOnly,
 		CanBan:     isAdmin && !d.readOnly && d.ban != nil,
+		CanAllow:   isAdmin && !d.readOnly,
 		Notice:     notice,
 		Error:      errMsg,
 		Form:       form,
+		AllowForm:  allow,
 		Publishers: make([]banRow, 0, len(publishers)),
 		Hashes:     make([]hashRow, 0, len(hashes)),
+		Allowed:    make([]allowRow, 0, len(allowed)),
 		Now:        time.Now(),
 	}
 	for _, row := range publishers {
@@ -182,6 +243,13 @@ func (d *T) renderModeration(w http.ResponseWriter, r *http.Request, isAdmin boo
 	slices.Reverse(page.Publishers)
 	for _, row := range hashes {
 		page.Hashes = append(page.Hashes, hashRow{Hash: row.Hash, Reason: row.Reason})
+	}
+	for _, row := range allowed {
+		item := allowRow{ID: row.ID}
+		if row.CreatedAt > 0 {
+			item.Created = time.Unix(row.CreatedAt, 0)
+		}
+		page.Allowed = append(page.Allowed, item)
 	}
 	d.render(w, "moderation", page)
 }

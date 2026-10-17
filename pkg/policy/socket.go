@@ -17,7 +17,8 @@ import (
 type BanFunc func(ctx context.Context, pub Publisher, reason string) error
 
 // Listen serves one JSON command per connection on a Unix socket.
-// The command is ban. readOnly rejects that command.
+// Commands are ban, allow, disallow, and allowed.
+// readOnly rejects ban, allow, and disallow. allowed still lists the whitelist.
 func Listen(ctx context.Context, path string, store *Store, ban BanFunc, readOnly bool) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove socket %s: %w", path, err)
@@ -61,8 +62,9 @@ type command struct {
 }
 
 type response struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK      bool      `json:"ok"`
+	Error   string    `json:"error,omitempty"`
+	Allowed *[]string `json:"allowed,omitempty"`
 }
 
 func serveConn(conn net.Conn, store *Store, ban BanFunc, readOnly bool) {
@@ -101,6 +103,37 @@ func serveConn(conn net.Conn, store *Store, ban BanFunc, readOnly bool) {
 			return
 		}
 		writeResp(conn, response{OK: true})
+	case "allow", "disallow":
+		if readOnly {
+			writeResp(conn, response{Error: "relay is read-only"})
+			return
+		}
+		if cmd.Kind != "" && cmd.Kind != KindNostr {
+			writeResp(conn, response{Error: cmd.Op + " accepts only a nostr key"})
+			return
+		}
+		var err error
+		if cmd.Op == "allow" {
+			err = store.Allow(ctx, cmd.ID)
+		} else {
+			err = store.Disallow(ctx, cmd.ID)
+		}
+		if err != nil {
+			writeResp(conn, response{Error: err.Error()})
+			return
+		}
+		writeResp(conn, response{OK: true})
+	case "allowed":
+		keys, err := store.AllowedKeys(ctx)
+		if err != nil {
+			writeResp(conn, response{Error: err.Error()})
+			return
+		}
+		ids := make([]string, len(keys))
+		for i, key := range keys {
+			ids[i] = key.ID
+		}
+		writeResp(conn, response{OK: true, Allowed: &ids})
 	default:
 		writeResp(conn, response{Error: "unknown op"})
 	}
