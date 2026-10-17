@@ -25,6 +25,7 @@ import (
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/vertex"
+	"github.com/zapstore/steroid/artifacts"
 	"github.com/zapstore/steroid/enrich"
 	"golang.org/x/sync/errgroup"
 )
@@ -195,7 +196,55 @@ func start(cfg config.Config) (err error) {
 		return err
 	}
 
+	arts, err := artifacts.OpenRead(ctx, artifacts.Path(dataDir))
+	if errors.Is(err, os.ErrNotExist) {
+		arts, err = nil, nil
+	}
+	if err != nil {
+		return err
+	}
+	if arts != nil {
+		defer func() { err = errors.Join(err, arts.Close()) }()
+	}
+
+	enrichApps := func(ctx context.Context, ids []string) error {
+		return enrich.IDs(ctx, dataDir, filepath.Join(dataDir, "relay.db"), ids)
+	}
+	seal := func(ctx context.Context, req dashboard.SealRequest) (string, error) {
+		if req.HasFrom {
+			if _, err := catalog.EnsureBundle(ctx, dataDir, req.From, req.To, signer, pol.Notices); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Bundle %d-%d is ready", req.From, req.To), nil
+		}
+		notes, sealErr := notices(ctx, pol)
+		if sealErr != nil {
+			return "", sealErr
+		}
+		runEnrich := enrichApps
+		if req.Filter != "" {
+			runEnrich = func(ctx context.Context, _ []string) error {
+				return enrich.Filter(ctx, dataDir, filepath.Join(dataDir, "relay.db"), req.Filter)
+			}
+		}
+		before, err := catalog.LatestSnap(dataDir)
+		if err != nil {
+			return "", err
+		}
+		epoch, err := catalog.Bundle(ctx, dataDir, filepath.Join(dataDir, "relay.db"), req.Filter, signer, notes, runEnrich)
+		if err != nil {
+			return "", err
+		}
+		return dashboard.SealResult(before, epoch), nil
+	}
+	enrichOne := func(ctx context.Context, id string) (string, error) {
+		ctx, text := enrich.WithReport(ctx)
+		err := enrich.IDs(ctx, dataDir, filepath.Join(dataDir, "relay.db"), []string{id})
+		return text(), err
+	}
+
 	cfg.Dashboard.ReadOnly = cfg.Sys.ReadOnly
+	cfg.Dashboard.BundleInterval = cfg.Catalog.Interval
 	dash, err := dashboard.New(
 		cfg.Dashboard,
 		limiter,
@@ -204,13 +253,13 @@ func start(cfg config.Config) (err error) {
 		relayDB,
 		blossomDB,
 		analyticsDB,
+		arts,
+		dataDir,
+		seal,
+		enrichOne,
 	)
 	if err != nil {
 		return err
-	}
-
-	enrichApps := func(ctx context.Context, ids []string) error {
-		return enrich.IDs(ctx, dataDir, filepath.Join(dataDir, "relay.db"), ids)
 	}
 
 	if os.Args[1] == "bundle" {
@@ -218,30 +267,21 @@ func start(cfg config.Config) (err error) {
 		if err != nil {
 			return err
 		}
-		notes, err := notices(ctx, pol)
+		line, err := seal(ctx, dashboard.SealRequest{Filter: filter})
 		if err != nil {
 			return err
 		}
-		runEnrich := enrichApps
-		if filter != "" {
-			runEnrich = func(ctx context.Context, _ []string) error {
-				return enrich.Filter(ctx, dataDir, filepath.Join(dataDir, "relay.db"), filter)
-			}
-		}
-		n, err := catalog.Bundle(ctx, dataDir, filepath.Join(dataDir, "relay.db"), filter, signer, notes, runEnrich)
-		if err != nil {
-			return err
-		}
-		slog.Info("bundle", "epoch", n)
+		slog.Info("bundle", "result", line)
 		return nil
 	}
 
 	socketPath := filepath.Join(dataDir, "relay.sock")
 	nostrSocket := filepath.Join(dataDir, "nostr.sock")
-	mux := routes(
-		catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default(), Limit: limiter}.Shared(),
-		rel.Handler(),
-	)
+	bundle := catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default(), Limit: limiter}
+	if stats != nil {
+		bundle.Count = stats
+	}
+	mux := routes(bundle.Shared(), rel.Handler())
 
 	g, gctx := errgroup.WithContext(ctx)
 	if watch {
@@ -287,11 +327,12 @@ func start(cfg config.Config) (err error) {
 	return g.Wait()
 }
 
-// routes serves GET /bundle beside the WebSocket relay.
+// routes serves GET /v1/bundle beside the WebSocket relay.
 // The path carries no method so a wrong method reaches its handler and gets 405.
+// /v2/bundle and other /vN/bundle paths hit the same handler and get 400.
 func routes(bundle, ws http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/bundle", bundle)
+	mux.Handle("/{version}/bundle", bundle)
 	mux.Handle("/", ws)
 	return mux
 }

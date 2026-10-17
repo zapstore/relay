@@ -34,7 +34,8 @@ func TestWrongMethodIs405(t *testing.T) {
 		ws,
 	)
 	for _, tc := range []struct{ method, path string }{
-		{http.MethodPost, "/bundle"},
+		{http.MethodPost, "/v1/bundle"},
+		{http.MethodPost, "/v2/bundle"},
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
@@ -43,6 +44,16 @@ func TestWrongMethodIs405(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/bundle?from=0", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("GET /v2/bundle = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/bundle", nil))
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("GET /bundle = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusTeapot {
 		t.Errorf("GET / = %d", rec.Code)

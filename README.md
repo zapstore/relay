@@ -1,6 +1,6 @@
 # Zapstore relay
 
-The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle`.
+The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /v1/bundle`.
 
 ## Features
 
@@ -24,7 +24,7 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /bundle
 - The gate and bans are the [publisher policy](../product/specs/publisher-policy.md)
 
 ### Catalog
-- `GET /bundle` is on the relay listener
+- `GET /v1/bundle` is on the relay listener
 - A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits. `relay bundle <app-id>` keeps listings whose id contains that string, drops the other app events, and passes the same string to the enricher. The tick takes no filter
 - Signing is `SIGN_WITH`. Its public key must equal `RELAY_PUBKEY`
 - `READ_ONLY=true` rejects events, Blossom uploads, `relay.sock` bans, and dashboard blacklist changes. Bundles are still signed with `SIGN_WITH`. The bundle tick still enriches
@@ -83,13 +83,13 @@ $SYSTEM_DIRECTORY_PATH/
     ├── blossom.db    # SQLite database for blob metadata
     ├── blobs/        # Blob bytes when Bunny is unset
     ├── snapshots/    # Catalog snapshots, one per epoch
-    ├── bundles/      # Signed GET /bundle bodies
+    ├── bundles/      # Signed GET /v1/bundle bodies
     └── artifacts.db  # about, security, vector, icon, and publisher pictures
 ```
 
 ### Endpoints
 
-- **Relay** and `GET /bundle`: `http://localhost:3334` (or your configured port)
+- **Relay** and `GET /v1/bundle`: `http://localhost:3334` (or your configured port)
 - **Blossom**: `http://localhost:3335` (or your configured port)
 - **Analytics**: off unless `ANALYTICS_API_ADDRESS` is set (for example `localhost:3336`)
 
@@ -143,3 +143,18 @@ Returns daily Blossom server traffic metrics (check, download, and upload counts
 |-----------|------|-------------|
 | `from` | date | Start of date range (inclusive) |
 | `to` | date | End of date range (inclusive) |
+
+### `GET /v1/bundle/requests`
+
+Returns aggregated `GET /v1/bundle` responses. `from_epoch` and `to_epoch` are catalog epochs. `-1` means that epoch was not established. `client_version` is the Zapstore version from the `v` query.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `from` | date | Start of date range (inclusive) |
+| `to` | date | End of date range (inclusive) |
+| `from_epoch` | integer | Filter to a source epoch, including `0` and `-1` |
+| `to_epoch` | integer | Filter to a target epoch, including `0` and `-1` |
+| `status` | integer | Filter to an HTTP status |
+| `protocol` | string | Filter to a path version, such as `v1` |
+| `client_version` | string | Filter to a Zapstore version |
+| `group_by` | CSV | Grouping dimensions: `day`, `from_epoch`, `to_epoch`, `status`, `protocol`, `client_version` |
