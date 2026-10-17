@@ -98,6 +98,10 @@ func Resolve(snapshot []nostr.Event, stackPubkey string) State {
 }
 
 func ResolveAt(snapshot []nostr.Event, stackPubkey string, at time.Time) State {
+	return resolveAt(snapshot, stackPubkey, stackPubkey, at)
+}
+
+func resolveAt(snapshot []nostr.Event, stackPubkey, catalogKey string, at time.Time) State {
 	current := map[string]nostr.Event{}
 	assets := map[string]nostr.Event{}
 
@@ -177,7 +181,7 @@ func ResolveAt(snapshot []nostr.Event, stackPubkey string, at time.Time) State {
 	}
 	var listings []Listing
 	for _, group := range candidates {
-		chosen, ok := chooseListing(group, proofs, at, stackPubkey)
+		chosen, ok := chooseListing(group, proofs, at, catalogKey)
 		if !ok {
 			continue
 		}
