@@ -102,7 +102,18 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sw.WriteHeader(http.StatusNotModified)
 		return
 	}
-	_, err = os.Stat(BundlePath(h.Data, hit.from, to))
+	from := hit.from
+	if from > 0 {
+		// A from with no snapshot predates a rebuild or was pruned: send the full snapshot.
+		if _, err := os.Stat(SnapPath(h.Data, from)); os.IsNotExist(err) {
+			from = 0
+		} else if err != nil {
+			h.logErr(err)
+			http.Error(sw, "failed to read catalog epoch", http.StatusInternalServerError)
+			return
+		}
+	}
+	_, err = os.Stat(BundlePath(h.Data, from, to))
 	if err != nil && !os.IsNotExist(err) {
 		h.logErr(err)
 		http.Error(sw, "failed to read catalog update", http.StatusInternalServerError)
@@ -112,7 +123,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sw.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
-	body, err := h.bundle(r.Context(), hit.from, to)
+	body, err := h.bundle(r.Context(), from, to)
 	if err != nil {
 		h.logErr(err)
 		http.Error(sw, "failed to build catalog update", http.StatusInternalServerError)

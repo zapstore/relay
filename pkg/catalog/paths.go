@@ -69,3 +69,28 @@ func LatestSnap(data string) (int64, error) {
 	}
 	return latest, nil
 }
+
+// FloorPath holds the highest epoch this data directory has written. It sits outside
+// snapshots/ so that clearing snapshots for a rebuild keeps epochs climbing.
+func FloorPath(data string) string { return filepath.Join(data, "epoch-floor") }
+
+// ReadFloor returns the stored floor, or 0 when there is none.
+func ReadFloor(data string) (int64, error) {
+	raw, err := os.ReadFile(FloorPath(data))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	text := strings.TrimSpace(string(raw))
+	n, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("epoch floor %q", text)
+	}
+	return n, nil
+}
+
+func writeFloor(data string, n int64) error {
+	return writeAtomic(FloorPath(data), []byte(strconv.FormatInt(n, 10)+"\n"))
+}

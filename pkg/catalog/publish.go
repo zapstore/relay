@@ -48,7 +48,13 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 		writeBlock("unchanged")
 		return latest, nil
 	}
-	nextN := latest + 1
+	floor, err := ReadFloor(data)
+	if err != nil {
+		return 0, err
+	}
+	// After a rebuild the first snapshot continues above every epoch already served,
+	// so no phone ever sees an epoch number reused for a different catalog.
+	nextN := max(latest, floor) + 1
 	writeBlock(fmt.Sprintf("snapshot %d, bundle %d-%d", nextN, latest, nextN))
 	body, err := BuildBundle(ctx, data, latest, nextN, bundledAt, diff, signer)
 	if err != nil {
@@ -63,6 +69,9 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 		return 0, err
 	}
 	if err := writeAtomic(BundlePath(data, latest, nextN), body); err != nil {
+		return 0, err
+	}
+	if err := writeFloor(data, nextN); err != nil {
 		return 0, err
 	}
 	return nextN, nil
