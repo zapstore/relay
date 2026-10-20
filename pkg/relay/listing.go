@@ -108,14 +108,20 @@ func supersedePending(ctx context.Context, db store.T, event *nostr.Event) error
 	if !ok || d == "" {
 		return nil
 	}
-	pending, err := db.QueryPending(ctx, event.Kind)
+	var pending []nostr.Event
+	var err error
+	if appID, ok := listingAppID(event); ok && event.Kind != events.KindIdentityProof {
+		pending, err = db.PendingListing(ctx, appID)
+	} else {
+		pending, err = db.QueryPending(ctx, event.Kind)
+	}
 	if err != nil {
 		return err
 	}
 	var newer bool
 	var drop []string
 	for _, other := range pending {
-		if other.ID == event.ID || other.PubKey != event.PubKey {
+		if other.ID == event.ID || other.Kind != event.Kind || other.PubKey != event.PubKey {
 			continue
 		}
 		otherD, ok := events.Find(other.Tags, "d")
@@ -184,7 +190,7 @@ func (r *T) promoteListingsBy(ctx context.Context, pubkeys []string, skipBroadca
 // itself. A release that can never be promoted is dropped; refused maps its
 // event ids to the reason.
 func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast string) (refused map[string]string, err error) {
-	pending, err := r.store.ListPending(ctx, listingKinds())
+	pending, err := r.store.PendingListing(ctx, appID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,10 +200,6 @@ func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast str
 	for i := range pending {
 		ev := pending[i]
 		if ev.PubKey != pubkey {
-			continue
-		}
-		id, ok := listingAppID(&ev)
-		if !ok || id != appID {
 			continue
 		}
 		switch ev.Kind {

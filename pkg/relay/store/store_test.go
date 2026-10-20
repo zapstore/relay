@@ -3,6 +3,7 @@ package store
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -802,4 +803,54 @@ func equalTags(a, b nostr.Tags) bool {
 		}
 	}
 	return true
+}
+
+func TestPendingListing(t *testing.T) {
+	path := t.TempDir() + "/relay.db"
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &nostr.Event{ID: "app", Kind: events.KindApp, Tags: nostr.Tags{{"d", "com.example"}}}
+	release := &nostr.Event{ID: "release", Kind: events.KindRelease, Tags: nostr.Tags{{"d", "com.example@1"}, {"i", "com.example"}}}
+	asset := &nostr.Event{ID: "asset", Kind: events.KindAsset, Tags: nostr.Tags{{"i", "com.example"}}}
+	other := &nostr.Event{ID: "other", Kind: events.KindApp, Tags: nostr.Tags{{"d", "org.other"}}}
+	proof := &nostr.Event{ID: "proof", Kind: events.KindIdentityProof, Tags: nostr.Tags{{"d", "com.example"}}}
+
+	// An older table has no app_id: drop it, save raw rows, and reopen.
+	for _, q := range []string{
+		`DROP INDEX idx_pending_events_app_id`,
+		`ALTER TABLE pending_events DROP COLUMN app_id`,
+	} {
+		if _, err := s.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range []*nostr.Event{app, release, other, proof} {
+		raw, _ := json.Marshal(e)
+		if _, err := s.DB.Exec(`INSERT INTO pending_events (id, kind, raw, received_at) VALUES (?, ?, ?, 0)`, e.ID, e.Kind, string(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	if s, err = New(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.SavePending(ctx, asset); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.PendingListing(ctx, "com.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, e := range got {
+		ids = append(ids, e.ID)
+	}
+	slices.Sort(ids)
+	if want := []string{"app", "asset", "release"}; !slices.Equal(ids, want) {
+		t.Errorf("pending listing = %v, want %v", ids, want)
+	}
 }

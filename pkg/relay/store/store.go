@@ -41,7 +41,56 @@ func New(path string) (T, error) {
 	if err != nil {
 		return T{}, err
 	}
-	return T{Store: store}, nil
+	s := T{Store: store}
+	if err := s.migratePendingAppID(); err != nil {
+		store.Close()
+		return T{}, err
+	}
+	return s, nil
+}
+
+// migratePendingAppID adds pending_events.app_id, fills it from raw, and indexes it.
+func (s T) migratePendingAppID() error {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('pending_events') WHERE name = 'app_id'`).Scan(&n)
+	if err != nil {
+		return fmt.Errorf("failed to check pending_events: %w", err)
+	}
+	if n == 0 {
+		if _, err := s.DB.Exec(`ALTER TABLE pending_events ADD COLUMN app_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("failed to add pending_events.app_id: %w", err)
+		}
+		// The first d on an app, the first i on a release or asset, as pendingAppID.
+		if _, err := s.DB.Exec(`
+			UPDATE pending_events SET app_id = coalesce((
+				SELECT json_extract(value, '$[1]') FROM json_each(json_extract(raw, '$.tags'))
+				WHERE json_extract(value, '$[0]') = CASE kind WHEN ? THEN 'd' ELSE 'i' END
+				LIMIT 1
+			), '')
+			WHERE kind IN (?, ?, ?)`,
+			events.KindApp, events.KindApp, events.KindRelease, events.KindAsset,
+		); err != nil {
+			return fmt.Errorf("failed to fill pending_events.app_id: %w", err)
+		}
+	}
+	if _, err := s.DB.Exec(`CREATE INDEX IF NOT EXISTS idx_pending_events_app_id ON pending_events(app_id)`); err != nil {
+		return fmt.Errorf("failed to index pending_events.app_id: %w", err)
+	}
+	return nil
+}
+
+// pendingAppID is the app id of a listing event: d on an app, i on a release
+// or asset. Other kinds have none.
+func pendingAppID(event *nostr.Event) string {
+	switch event.Kind {
+	case events.KindApp:
+		id, _ := events.Find(event.Tags, "d")
+		return id
+	case events.KindRelease, events.KindAsset:
+		id, _ := events.Find(event.Tags, "i")
+		return id
+	}
+	return ""
 }
 
 // SavePending stores an event in the pending_events table in an idempotent way.
@@ -52,8 +101,8 @@ func (s T) SavePending(ctx context.Context, event *nostr.Event) (bool, error) {
 		return false, fmt.Errorf("failed to marshal event: %w", err)
 	}
 	res, err := s.DB.ExecContext(ctx,
-		`INSERT OR IGNORE INTO pending_events (id, kind, raw, received_at) VALUES (?, ?, ?, ?)`,
-		event.ID, event.Kind, string(raw), time.Now().UTC().Unix(),
+		`INSERT OR IGNORE INTO pending_events (id, kind, raw, received_at, app_id) VALUES (?, ?, ?, ?, ?)`,
+		event.ID, event.Kind, string(raw), time.Now().UTC().Unix(), pendingAppID(event),
 	)
 	if err != nil {
 		return false, fmt.Errorf("failed to save pending event: %w", err)
@@ -80,7 +129,20 @@ func (s T) ListPending(ctx context.Context, kinds []int) ([]nostr.Event, error) 
 
 // QueryPending returns all pending events of the given kind.
 func (s T) QueryPending(ctx context.Context, kind int) ([]nostr.Event, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT raw FROM pending_events WHERE kind = ?`, kind)
+	return s.queryPending(ctx, `SELECT raw FROM pending_events WHERE kind = ?`, kind)
+}
+
+// PendingListing returns the pending apps, releases, and assets for appID, from any pubkey.
+func (s T) PendingListing(ctx context.Context, appID string) ([]nostr.Event, error) {
+	if appID == "" {
+		return nil, nil
+	}
+	return s.queryPending(ctx, `SELECT raw FROM pending_events WHERE app_id = ? AND kind IN (?, ?, ?)`,
+		appID, events.KindApp, events.KindRelease, events.KindAsset)
+}
+
+func (s T) queryPending(ctx context.Context, query string, args ...any) ([]nostr.Event, error) {
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending events: %w", err)
 	}

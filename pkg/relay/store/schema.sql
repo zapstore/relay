@@ -10,6 +10,7 @@ DROP TRIGGER IF EXISTS app_fts_ad;
 -- Pending events are the buffer zone: received but not yet promoted to the
 -- main event table. A listing (kind 32267, 30063, and 3063) and a new active
 -- kind 30509 stay here until promotion. Pending events are not served.
+-- The app_id column and its index are added in Go: an older table lacks app_id.
 CREATE TABLE IF NOT EXISTS pending_events (
     id          TEXT    PRIMARY KEY,    -- event id (sha256)
     kind        INTEGER NOT NULL,       -- event kind, for efficient filtering during promotion
