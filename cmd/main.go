@@ -19,6 +19,7 @@ import (
 	"github.com/zapstore/relay/pkg/blossom"
 	catalog "github.com/zapstore/relay/pkg/catalog"
 	"github.com/zapstore/relay/pkg/config"
+	"github.com/zapstore/relay/pkg/control"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/policy"
@@ -275,7 +276,29 @@ func start(cfg config.Config) (err error) {
 		return nil
 	}
 
-	socketPath := filepath.Join(dataDir, "relay.sock")
+	socketPath := cfg.Control.Socket
+	if socketPath == "" {
+		socketPath = filepath.Join(dataDir, "relay.sock")
+	}
+	admins := cfg.Control.AdminPubkeys
+	if len(admins) == 0 {
+		for _, pk := range cfg.Dashboard.AdminPubkeys {
+			admins = append(admins, strings.ToLower(pk))
+		}
+	}
+	sock := &control.Server{
+		Store: pol,
+		DB:    relayDB.DB,
+		Ban:   ban,
+		Seal: func(ctx context.Context, req control.SealRequest) (string, error) {
+			return seal(ctx, dashboard.SealRequest(req))
+		},
+		Enrich:   control.EnrichFunc(enrichOne),
+		Data:     dataDir,
+		Relay:    cfg.Relay.Info.Pubkey,
+		Admins:   admins,
+		ReadOnly: cfg.Sys.ReadOnly,
+	}
 	nostrSocket := filepath.Join(dataDir, "nostr.sock")
 	bundle := catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default(), Limit: limiter}
 	if stats != nil {
@@ -305,8 +328,8 @@ func start(cfg config.Config) (err error) {
 		return dash.StartAndServe(gctx, cfg.Dashboard.Address)
 	})
 	g.Go(func() error {
-		slog.Info("relay socket", "path", socketPath)
-		return policy.Listen(gctx, socketPath, pol, ban, cfg.Sys.ReadOnly)
+		slog.Info("relay socket", "path", socketPath, "admins", len(admins))
+		return sock.Listen(gctx, socketPath)
 	})
 	g.Go(func() error {
 		slog.Info("nostr socket", "path", nostrSocket)

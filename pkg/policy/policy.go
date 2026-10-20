@@ -37,6 +37,9 @@ type Publisher struct {
 	ID   string
 }
 
+// BanFunc records a ban and removes that publisher's listings.
+type BanFunc func(ctx context.Context, pub Publisher, reason string) error
+
 // Notice is the operator text for one removed app. The snapshot copies it.
 type Notice struct {
 	AppID  string

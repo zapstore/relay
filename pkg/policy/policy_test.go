@@ -3,12 +3,9 @@ package policy
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"net"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nbd-wtf/go-nostr"
@@ -79,130 +76,6 @@ func TestAffectedReleaseUsesAppID(t *testing.T) {
 	if len(apps) != 1 || apps[0] != "com.example.spy" {
 		t.Fatalf("apps %v", apps)
 	}
-}
-
-func TestSocketCommands(t *testing.T) {
-	store := testStore(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	path := filepath.Join(t.TempDir(), "relay.sock")
-	var gotKind, gotID, gotReason string
-	errc := make(chan error, 1)
-	go func() {
-		errc <- Listen(ctx, path, store, func(_ context.Context, pub Publisher, reason string) error {
-			gotKind, gotID, gotReason = pub.Kind, pub.ID, reason
-			return nil
-		}, false)
-	}()
-	waitSocket(t, path)
-
-	key := strings.Repeat("ab", 32)
-	ban := `{"op":"ban","kind":"nostr","id":"` + key + `","reason":"spam"}`
-	if resp := socketCall(t, path, ban); !resp.OK {
-		t.Fatalf("ban %+v", resp)
-	}
-	if gotKind != KindNostr || gotID != key || gotReason != "spam" {
-		t.Fatalf("ban recorded %s %s %s", gotKind, gotID, gotReason)
-	}
-	if resp := socketCall(t, path, `{"op":"nope"}`); resp.OK || resp.Error == "" {
-		t.Fatalf("unknown %+v", resp)
-	}
-
-	allow := `{"op":"allow","id":"` + key + `"}`
-	if resp := socketCall(t, path, allow); !resp.OK {
-		t.Fatalf("allow %+v", resp)
-	}
-	listed := socketCall(t, path, `{"op":"allowed"}`)
-	if !listed.OK || len(listed.Allowed) != 1 || listed.Allowed[0] != key {
-		t.Fatalf("allowed %+v", listed)
-	}
-	if resp := socketCall(t, path, `{"op":"allow","kind":"forge","id":"github.com/x"}`); resp.OK || resp.Error == "" {
-		t.Fatalf("forge allow %+v", resp)
-	}
-	if resp := socketCall(t, path, `{"op":"disallow","id":"`+key+`"}`); !resp.OK {
-		t.Fatalf("disallow %+v", resp)
-	}
-	listed = socketCall(t, path, `{"op":"allowed"}`)
-	if !listed.OK || len(listed.Allowed) != 0 {
-		t.Fatalf("allowed after disallow %+v", listed)
-	}
-
-	cancel()
-	<-errc
-}
-
-func TestSocketReadOnly(t *testing.T) {
-	store := testStore(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	path := filepath.Join(t.TempDir(), "relay.sock")
-	called := false
-	errc := make(chan error, 1)
-	go func() {
-		errc <- Listen(ctx, path, store, func(context.Context, Publisher, string) error {
-			called = true
-			return nil
-		}, true)
-	}()
-	waitSocket(t, path)
-
-	key := strings.Repeat("ab", 32)
-	resp := socketCall(t, path, `{"op":"ban","kind":"nostr","id":"`+key+`","reason":"spam"}`)
-	if resp.OK || resp.Error != "relay is read-only" {
-		t.Fatalf("ban %+v", resp)
-	}
-	if called {
-		t.Fatal("ban ran")
-	}
-	resp = socketCall(t, path, `{"op":"allow","id":"`+key+`"}`)
-	if resp.OK || resp.Error != "relay is read-only" {
-		t.Fatalf("allow %+v", resp)
-	}
-	listed := socketCall(t, path, `{"op":"allowed"}`)
-	if !listed.OK {
-		t.Fatalf("allowed %+v", listed)
-	}
-
-	cancel()
-	<-errc
-}
-
-func waitSocket(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		conn, err := net.Dial("unix", path)
-		if err == nil {
-			conn.Close()
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal(err)
-		}
-	}
-}
-
-type socketResponse struct {
-	OK      bool     `json:"ok"`
-	Error   string   `json:"error,omitempty"`
-	Allowed []string `json:"allowed"`
-}
-
-func socketCall(t *testing.T, path, line string) socketResponse {
-	t.Helper()
-	conn, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.Write([]byte(line + "\n")); err != nil {
-		t.Fatal(err)
-	}
-	var resp socketResponse
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		t.Fatal(err)
-	}
-	return resp
 }
 
 func TestEventVerdictBannedHashRejectsWithoutBanning(t *testing.T) {

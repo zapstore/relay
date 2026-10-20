@@ -18,6 +18,7 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/control"
 	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
@@ -34,6 +35,7 @@ type Config struct {
 	Relay     relay.Config
 	Blossom   blossom.Config
 	Dashboard dashboard.Config
+	Control   control.Config
 	Catalog   CatalogConfig
 	Vertex    vertex.Config
 }
@@ -81,7 +83,7 @@ type SystemConfig struct {
 	Dir      string   `env:"SYSTEM_DIRECTORY_PATH"`
 	LogLevel LogLevel `env:"SYSTEM_LOG_LEVEL"`
 
-	// ReadOnly rejects events, Blossom uploads, relay.sock bans and whitelist
+	// ReadOnly rejects events, Blossom uploads, relay.sock blacklist and whitelist
 	// changes, and dashboard blacklist and whitelist changes. Bundles are still signed with SIGN_WITH.
 	// The bundle tick still enriches.
 	ReadOnly bool `env:"READ_ONLY"`
@@ -181,6 +183,7 @@ func New() Config {
 		Relay:     relay.NewConfig(),
 		Blossom:   blossom.NewConfig(),
 		Dashboard: dashboard.NewConfig(),
+		Control:   control.NewConfig(),
 		Catalog:   NewCatalogConfig(),
 		Vertex:    vertex.NewConfig(),
 	}
@@ -205,6 +208,9 @@ func (c Config) Validate() error {
 	if err := c.Dashboard.Validate(); err != nil {
 		return fmt.Errorf("dashboard: %w", err)
 	}
+	if err := c.Control.Validate(); err != nil {
+		return fmt.Errorf("control: %w", err)
+	}
 	if err := c.Catalog.Validate(); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
@@ -227,6 +233,8 @@ func (c Config) String() string {
 	b.WriteString(c.Blossom.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Dashboard.String())
+	b.WriteByte('\n')
+	b.WriteString(c.Control.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Catalog.String())
 	b.WriteByte('\n')
