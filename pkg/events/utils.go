@@ -15,6 +15,7 @@ const (
 	KindProfile   = 0
 	KindDeletion  = 5
 	KindForumPost = 11
+	KindGiftWrap  = 1059
 	KindComment   = 1111
 	KindReport    = 1984
 	KindZap       = 9735

@@ -85,6 +85,7 @@ func NewConfig() Config {
 			events.KindReport,
 			events.KindZap,
 			events.KindCommunityCreation,
+			events.KindGiftWrap,
 
 			// NIP-C1 identity proof kind
 			events.KindIdentityProof,

@@ -131,6 +131,7 @@ func Setup(
 		NoZapTag,
 		NotARM64,
 		TooLittleWork,
+		NotABugReport(config.Info.Pubkey),
 		NotAnchored(store, config.Info.Pubkey),
 		NotAllowed(pol),
 		NotAdmitted(gate),
@@ -629,6 +630,38 @@ func TooLittleWork(_ rely.Client, e *nostr.Event) error {
 		return fmt.Errorf("pow: difficulty %d is required", devicePoW)
 	}
 	return nil
+}
+
+const (
+	reportPoW      = 16
+	maxReportBytes = 64 << 10
+)
+
+// NotABugReport accepts a kind 1059 only as an anonymous bug report: one p
+// tag naming the catalog key, reportPoW leading zero bits on the id, and at
+// most maxReportBytes of content. Other kinds pass.
+func NotABugReport(catalogKey string) func(rely.Client, *nostr.Event) error {
+	return func(_ rely.Client, e *nostr.Event) error {
+		if e.Kind != events.KindGiftWrap {
+			return nil
+		}
+		var recipients []string
+		for _, tag := range e.Tags {
+			if len(tag) >= 2 && tag[0] == "p" {
+				recipients = append(recipients, tag[1])
+			}
+		}
+		if len(recipients) != 1 || recipients[0] != catalogKey {
+			return errors.New("kind 1059: must be addressed to the catalog key only")
+		}
+		if len(e.Content) > maxReportBytes {
+			return fmt.Errorf("kind 1059: content is over %d bytes", maxReportBytes)
+		}
+		if nip13.Difficulty(e.ID) < reportPoW {
+			return fmt.Errorf("pow: difficulty %d is required", reportPoW)
+		}
+		return nil
+	}
 }
 
 func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {
