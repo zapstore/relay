@@ -1,12 +1,13 @@
 # dist/<name>-<os>-<arch>
+# The launch program, which drops the v1 apps_fts index:
+#   make linux-amd64 NAME=launch CMD=./cmd/launch TAGS=fts5
 
 NAME := relay
 CMD := ./cmd
 
 CGO_ENABLED ?= 1
 GOFLAGS := -trimpath
-# shortcut: synced relay.db still has apps_fts triggers. Remove with the launch checklist.
-TAGS := fts5
+TAGS ?=
 LDFLAGS := -s -w
 VERSION := $(shell git describe --exact-match --tags HEAD 2>/dev/null)
 ifneq ($(VERSION),)
@@ -32,7 +33,7 @@ bin:
 	mkdir -p dist
 	rm -rf $(BIN)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) \
-		go build $(GOFLAGS) -tags $(TAGS) -ldflags '$(LDFLAGS)' \
+		go build $(GOFLAGS) $(if $(TAGS),-tags $(TAGS)) -ldflags '$(LDFLAGS)' \
 		-o $(BIN) $(CMD)
 
 darwin-arm64:

@@ -1,0 +1,356 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/zapstore/relay/pkg/catalog"
+)
+
+// rotate is window 2: the new catalog key.
+func rotate(ctx context.Context, t term) error {
+	s, err := loadSite(ctx, t)
+	if err != nil {
+		return err
+	}
+	t.say("\nWindow 2: the new catalog key.")
+	if err := t.confirm("Is relay v2 live on 78ce… (launch deploy-v2 done)?"); err != nil {
+		return err
+	}
+	if err := t.confirm("Is the new key in hotbox, and does the released 1.1.3 trust it?"); err != nil {
+		return err
+	}
+	if err := t.confirm("Did launch rotate --dry-run pass on a recent backup?"); err != nil {
+		return err
+	}
+	p, err := s.paths()
+	if err != nil {
+		return err
+	}
+	if err := t.confirm(fmt.Sprintf("Stop %s, %s, and %s now?", s.ProxyUnit, s.IndexerUnit, s.RelayUnit)); err != nil {
+		return err
+	}
+	if err := stopAll(ctx, t, s); err != nil {
+		return err
+	}
+	backup, err := takeBackup(t, s, p, "rotate")
+	if err != nil {
+		return err
+	}
+	pl, err := prepare(ctx, t, p.RelayData, p.indexerDB(), backup)
+	if err != nil {
+		return err
+	}
+	if err := t.confirm(fmt.Sprintf("Delete those %d events and the snapshots and bundles?", len(pl.Delete))); err != nil {
+		return err
+	}
+	if err := clearOld(ctx, t, p.RelayData, pl); err != nil {
+		return err
+	}
+
+	newKey, signer, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{},
+		"RELAY_PUBKEY=<the new key>",
+		"SIGN_WITH=<the new key's bunker URL>",
+		"BUNDLE_INTERVAL=0",
+		"PRUNE_INTERVAL=0",
+	)
+	if err != nil {
+		return err
+	}
+	if err := editIndexerEnv(ctx, t, s.IndexerEnv, newKey); err != nil {
+		return err
+	}
+	if err := systemctl(ctx, t, "start", s.RelayUnit); err != nil {
+		return err
+	}
+	if err := waitRelay(ctx, t, p.RelayAddr, newKey); err != nil {
+		return err
+	}
+	lud16, err := t.ask("lud16 for the new key's kind 0", lud16Of(pl.Profile))
+	if err != nil {
+		return err
+	}
+	evs, err := resign(ctx, pl, signer.Sign, newKey, lud16, time.Now())
+	if err != nil {
+		return err
+	}
+	sock := &nostrSocket{path: p.socket()}
+	defer sock.Close()
+	rep, err := publishAll(ctx, t, sock, evs, false)
+	rep.print(t)
+	if err != nil {
+		return err
+	}
+	if err := checkRotation(ctx, t, sock, newKey, pl, rep); err != nil {
+		return err
+	}
+
+	if _, _, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{key: newKey, intervals: true},
+		"BUNDLE_INTERVAL back on (for example 5m), or remove the line",
+		"PRUNE_INTERVAL back on (for example 24h), or remove the line",
+	); err != nil {
+		return err
+	}
+	if err := systemctl(ctx, t, "restart", s.RelayUnit); err != nil {
+		return err
+	}
+	if err := waitRelay(ctx, t, p.RelayAddr, newKey); err != nil {
+		return err
+	}
+	for _, unit := range []string{s.IndexerUnit, s.ProxyUnit} {
+		if err := systemctl(ctx, t, "start", unit); err != nil {
+			return err
+		}
+	}
+	t.say("\nWindow 2 is done. The catalog key is %s.", newKey)
+	t.say("Undo with: launch restore %s", backup)
+	t.say("Once prune has run, the APKs of the deleted listings are gone from Bunny,")
+	t.say("and a restore brings back their events without their files.")
+	t.say("\nThe indexer:")
+	t.say("  - publishes under the new key only when a source changes; its zsp HTTP")
+	t.say("    cache still says unchanged for the re-signed apps, so nothing is republished.")
+	t.say("  - does not ask the relay what is published. The relay's version guard,")
+	t.say("    on the version codes the re-sign kept, is what blocks a downgrade.")
+	if len(pl.Dropped) > 0 {
+		t.say("  - will not bring back the %d dropped apps (in %s) until their source", len(pl.Dropped), filepath.Join(backup, planFile))
+		t.say("    changes or a fetch fails. Recheck the ones you want sooner.")
+	}
+	return nil
+}
+
+// prepare reads 78ce…'s events from a stopped relay and writes the plan into dir.
+func prepare(ctx context.Context, t term, relayData, indexerDB, dir string) (plan, error) {
+	relayDB, err := openDB(ctx, filepath.Join(relayData, "relay.db"), false)
+	if err != nil {
+		return plan{}, err
+	}
+	defer relayDB.Close()
+	old, err := eventsBy(ctx, relayDB, oldKey)
+	if err != nil {
+		return plan{}, err
+	}
+	pending, err := pendingBy(ctx, relayDB, oldKey)
+	if err != nil {
+		return plan{}, err
+	}
+	idx, err := openDB(ctx, indexerDB, false)
+	if err != nil {
+		return plan{}, err
+	}
+	defer idx.Close()
+	lineage := func(appID, cert string) ([]string, error) { return lineageOf(ctx, idx, appID, cert) }
+	pl, err := buildPlan(old, lineage, time.Now())
+	if err != nil {
+		return plan{}, err
+	}
+	for _, e := range pending {
+		if !strings.HasPrefix(eventAppID(e), devPrefix) {
+			pl.Delete = append(pl.Delete, e.ID)
+		}
+	}
+	if err := writeJSON(filepath.Join(dir, planFile), pl); err != nil {
+		return plan{}, err
+	}
+	assets := 0
+	for _, l := range pl.Listings {
+		assets += len(l.Assets)
+	}
+	t.say("78ce… signed %d events. Plan written to %s:", len(old), filepath.Join(dir, planFile))
+	t.say("  re-sign %d apps (%d assets), %d public stacks, a kind 0, and a kind 10067", len(pl.Listings), assets, len(pl.Stacks))
+	t.say("  keep %d apps under 78ce…: %v", len(pl.Kept), pl.Kept)
+	t.say("  drop %d apps with no complete listing or a 78ce… kind 5: %v", len(pl.Dropped), pl.Dropped[:min(len(pl.Dropped), 30)])
+	t.say("  delete %d events (older releases and assets are in the backup only)", len(pl.Delete))
+	return pl, nil
+}
+
+// clearOld deletes the plan's events and every snapshot and bundle. epoch-floor stays.
+func clearOld(ctx context.Context, t term, relayData string, pl plan) error {
+	db, err := openDB(ctx, filepath.Join(relayData, "relay.db"), true)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := dropFTS(ctx, db); err != nil {
+		return err
+	}
+	if err := deleteEvents(ctx, db, pl.Delete); err != nil {
+		return err
+	}
+	for _, name := range []string{catalog.SnapDir(relayData), catalog.BundleDir(relayData)} {
+		if err := os.RemoveAll(name); err != nil {
+			return err
+		}
+	}
+	t.say("Deleted %d events, snapshots/, and bundles/.", len(pl.Delete))
+	return nil
+}
+
+const planFile = "plan.json"
+
+// editIndexerEnv waits until the indexer's SIGN_WITH signs as newKey.
+func editIndexerEnv(ctx context.Context, t term, envFile, newKey string) error {
+	for {
+		if err := t.wait("Edit "+envFile+":", "SIGN_WITH=<the new key's bunker URL>"); err != nil {
+			return err
+		}
+		signer, err := signerFor(ctx, envFile)
+		if err == nil && signer.PubKey == newKey {
+			return nil
+		}
+		if err == nil {
+			err = fmt.Errorf("SIGN_WITH signs as %s, want %s", signer.PubKey, newKey)
+		}
+		t.say("  ! %v", err)
+	}
+}
+
+// dryRun rotates a copy of a backup on a throwaway relay with a throwaway key.
+func dryRun(ctx context.Context, t term, backup, relayBin string) error {
+	if _, err := readBackup(backup); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "launch-dry-run-")
+	if err != nil {
+		return err
+	}
+	t.say("Dry run in %s", tmp)
+	data := filepath.Join(tmp, "data")
+	if err := copyTree(filepath.Join(backup, backupRelayData), data); err != nil {
+		return err
+	}
+	pl, err := prepare(ctx, t, data, filepath.Join(backup, backupIndexerData, "indexer.db"), tmp)
+	if err != nil {
+		return err
+	}
+	if err := clearOld(ctx, t, data, pl); err != nil {
+		return err
+	}
+	sk := nostr.GeneratePrivateKey()
+	signer, err := catalog.ParseSigner(sk)
+	if err != nil {
+		return err
+	}
+	env, addr, err := dryRunEnv(filepath.Join(backup, backupRelayEnv), tmp, signer.PubKey, sk)
+	if err != nil {
+		return err
+	}
+	ctx, stop, err := startRelay(ctx, relayBin, tmp, env)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	if err := waitRelay(ctx, t, addr, signer.PubKey); err != nil {
+		return fmt.Errorf("%w (log: %s)", err, filepath.Join(tmp, "relay.log"))
+	}
+	lud16 := lud16Of(pl.Profile)
+	if lud16 == "" {
+		lud16 = "dry-run@example.invalid"
+	}
+	evs, err := resign(ctx, pl, signer.Sign, signer.PubKey, lud16, time.Now())
+	if err != nil {
+		return err
+	}
+	sock := &nostrSocket{path: filepath.Join(data, "nostr.sock")}
+	defer sock.Close()
+	rep, err := publishAll(ctx, t, sock, evs, true)
+	rep.print(t)
+	if err != nil {
+		return err
+	}
+	checkErr := checkRotation(ctx, t, sock, signer.PubKey, pl, rep)
+	t.say("Relay log: %s", filepath.Join(tmp, "relay.log"))
+	if rep.failures() > 0 {
+		return errors.Join(fmt.Errorf("%d events rejected", rep.failures()), checkErr)
+	}
+	if checkErr != nil {
+		return checkErr
+	}
+	t.say("Dry run passed.")
+	return nil
+}
+
+// dryRunEnv is the backup's relay env with the throwaway key, local ports, and no Bunny or Vertex.
+func dryRunEnv(envFile, dir, pubkey, sk string) ([]string, string, error) {
+	env, err := readEnv(envFile)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, name := range []string{
+		"BUNNY_CDN_HOSTNAME", "BUNNY_STORAGE_ZONE_NAME", "BUNNY_STORAGE_ZONE_HOSTNAME", "BUNNY_STORAGE_ZONE_PASSWORD",
+		"VERTEX_SECRET_KEY", "ANALYTICS_API_ADDRESS", "READ_ONLY",
+	} {
+		delete(env, name)
+	}
+	ports := make([]string, 3)
+	for i := range ports {
+		addr, err := freeAddr()
+		if err != nil {
+			return nil, "", err
+		}
+		ports[i] = addr
+	}
+	maps.Copy(env, map[string]string{
+		"SYSTEM_DIRECTORY_PATH": dir,
+		"RELAY_PUBKEY":          pubkey,
+		"SIGN_WITH":             sk,
+		"BUNDLE_INTERVAL":       "0",
+		"PRUNE_INTERVAL":        "0",
+		"RELAY_ADDRESS":         ports[0],
+		"BLOSSOM_ADDRESS":       ports[1],
+		"DASHBOARD_ADDRESS":     ports[2],
+		"RELAY_SOCKET":          filepath.Join(dir, "data", "relay.sock"),
+	})
+	out := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir}
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		out = append(out, k+"="+env[k])
+	}
+	return out, ports[0], nil
+}
+
+func freeAddr() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	defer ln.Close()
+	return ln.Addr().String(), nil
+}
+
+// startRelay runs `relay run` in dir. The returned context ends when the relay exits.
+// stop ends the relay and waits for it.
+func startRelay(ctx context.Context, bin, dir string, env []string) (context.Context, func(), error) {
+	log, err := os.Create(filepath.Join(dir, "relay.log"))
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd := exec.CommandContext(ctx, bin, "run")
+	cmd.Dir = dir
+	cmd.Env = env
+	cmd.Stdout, cmd.Stderr = log, log
+	if err := cmd.Start(); err != nil {
+		log.Close()
+		return nil, nil, fmt.Errorf("start %s: %w", bin, err)
+	}
+	running, cancel := context.WithCancelCause(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cancel(fmt.Errorf("relay exited (%v)", cmd.Wait()))
+	}()
+	return running, func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM) // already exited is fine
+		<-done
+		log.Close()
+	}, nil
+}
