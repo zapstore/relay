@@ -9,7 +9,7 @@ import (
 	"github.com/zapstore/relay/pkg/events"
 )
 
-func TestNotAnchoredCatalogCoordinate(t *testing.T) {
+func TestNotAnchoredAppCoordinate(t *testing.T) {
 	db := newSlotDB(t)
 	catalog := testPubkey(t)
 	owner := testPubkey(t)
@@ -46,23 +46,33 @@ func TestNotAnchoredCatalogCoordinate(t *testing.T) {
 	if err := hook(nil, zapTo(catalogAddr, owner)); err != nil {
 		t.Fatal(err)
 	}
-	if err := hook(nil, zapTo(catalogAddr, delegate)); err == nil {
-		t.Fatal("delegate accepted as zap recipient")
+	// The delegate signed the listing; older clients pay the listing signer.
+	if err := hook(nil, zapTo(catalogAddr, delegate)); err != nil {
+		t.Fatal(err)
+	}
+	if err := hook(nil, zapTo(catalogAddr, catalog)); err != nil {
+		t.Fatal(err)
+	}
+	if err := hook(nil, zapTo(catalogAddr, events.EarlierCatalogKey)); err != nil {
+		t.Fatal(err)
+	}
+	if err := hook(nil, zapTo(catalogAddr, stranger)); err == nil {
+		t.Fatal("stranger accepted as zap recipient")
 	}
 	if err := hook(nil, zapOn(catalogAddr)); err == nil {
 		t.Fatal("zap with no recipient accepted")
 	}
-	if err := hook(nil, commentOn("32267:"+owner+":"+appID)); err == nil {
-		t.Fatal("C1 coordinate accepted")
-	}
-	if err := hook(nil, zapOn("32267:"+owner+":"+appID)); err == nil {
-		t.Fatal("C1 coordinate accepted")
-	}
-	if err := hook(nil, commentOn("32267:"+delegate+":"+appID)); err == nil {
-		t.Fatal("delegate coordinate accepted")
-	}
-	if err := hook(nil, commentOn("32267:"+stranger+":"+appID)); err == nil {
-		t.Fatal("stranger coordinate accepted")
+	for _, signer := range []string{owner, delegate, stranger, events.EarlierCatalogKey} {
+		addr := "32267:" + signer + ":" + appID
+		if err := hook(nil, commentOn(addr)); err != nil {
+			t.Errorf("comment on %s: %v", addr, err)
+		}
+		if err := hook(nil, zapTo(addr, owner)); err != nil {
+			t.Errorf("zap on %s: %v", addr, err)
+		}
+		if err := hook(nil, reportOn(addr)); err != nil {
+			t.Errorf("report on %s: %v", addr, err)
+		}
 	}
 	if err := hook(nil, commentOn("32267:"+catalog+":com.other.app")); err == nil {
 		t.Fatal("missing app accepted")
@@ -125,12 +135,6 @@ func TestNotAnchoredReplacedProof(t *testing.T) {
 	})
 
 	hook := NotAnchored(db, catalog)
-	if err := hook(nil, commentOn("32267:"+retired+":"+appID)); err == nil {
-		t.Fatal("retired coordinate accepted")
-	}
-	if err := hook(nil, commentOn("32267:"+owner+":"+appID)); err == nil {
-		t.Fatal("C1 coordinate accepted")
-	}
 	catalogAddr := "32267:" + catalog + ":" + appID
 	if err := hook(nil, zapTo(catalogAddr, owner)); err != nil {
 		t.Fatal(err)
@@ -173,14 +177,18 @@ func zapTo(address, recipient string) *nostr.Event {
 	return event
 }
 
-func TestZapNeedsACurrentProof(t *testing.T) {
+func TestZapWithoutProofPaysTheCatalog(t *testing.T) {
 	db := newSlotDB(t)
 	catalog := testPubkey(t)
 	appID := "com.example.app"
 	saveSlotEvent(t, db, nostr.Event{ID: strings.Repeat("1", 64), PubKey: catalog, Kind: events.KindApp, Tags: nostr.Tags{{"d", appID}}})
 	hook := NotAnchored(db, catalog)
-	if err := hook(nil, zapTo("32267:"+catalog+":"+appID, testPubkey(t))); err == nil {
-		t.Fatal("zap accepted with no C1 proof")
+	addr := "32267:" + catalog + ":" + appID
+	if err := hook(nil, zapTo(addr, catalog)); err != nil {
+		t.Fatal(err)
+	}
+	if err := hook(nil, zapTo(addr, testPubkey(t))); err == nil {
+		t.Fatal("zap accepted for an unknown pubkey")
 	}
 }
 
@@ -223,12 +231,14 @@ func TestReportNeedsAnAcceptedAppCoordinate(t *testing.T) {
 	if err := hook(nil, reportOn("32267:"+catalog+":"+appID)); err != nil {
 		t.Fatal(err)
 	}
+	if err := hook(nil, reportOn("32267:"+testPubkey(t)+":"+appID)); err != nil {
+		t.Fatal(err)
+	}
 	for name, event := range map[string]*nostr.Event{
-		"no address":   {Kind: events.KindReport, Tags: nostr.Tags{{"p", catalog}}},
-		"event only":   {Kind: events.KindReport, Tags: nostr.Tags{{"e", strings.Repeat("1", 64)}}},
-		"stack":        reportOn("30267:" + catalog + ":editors"),
-		"missing app":  reportOn("32267:" + catalog + ":com.other.app"),
-		"stranger key": reportOn("32267:" + testPubkey(t) + ":" + appID),
+		"no address":  {Kind: events.KindReport, Tags: nostr.Tags{{"p", catalog}}},
+		"event only":  {Kind: events.KindReport, Tags: nostr.Tags{{"e", strings.Repeat("1", 64)}}},
+		"stack":       reportOn("30267:" + catalog + ":editors"),
+		"missing app": reportOn("32267:" + catalog + ":com.other.app"),
 	} {
 		if err := hook(nil, event); err == nil {
 			t.Errorf("%s: report accepted", name)
@@ -243,7 +253,7 @@ func TestAppCoordinateNeedsTheAppIDTag(t *testing.T) {
 	saveSlotEvent(t, db, nostr.Event{ID: strings.Repeat("1", 64), PubKey: catalog, Kind: events.KindApp, Tags: nostr.Tags{{"d", appID}}})
 	hook := NotAnchored(db, catalog)
 	addr := "32267:" + catalog + ":" + appID
-	for _, kind := range []int{events.KindComment, events.KindZap, events.KindReport} {
+	for _, kind := range []int{events.KindComment, events.KindReport} {
 		tag := "a"
 		if kind == events.KindComment {
 			tag = "A"
@@ -255,6 +265,14 @@ func TestAppCoordinateNeedsTheAppIDTag(t *testing.T) {
 			if err := hook(nil, &nostr.Event{Kind: kind, Tags: tags}); err == nil {
 				t.Errorf("kind %d with tags %v accepted", kind, tags)
 			}
+		}
+	}
+	for _, tags := range []nostr.Tags{
+		{{"a", addr}, {"p", catalog}},
+		{{"a", addr}, {"p", catalog}, {"i", "com.other.app"}},
+	} {
+		if err := hook(nil, &nostr.Event{Kind: events.KindZap, Tags: tags}); err != nil {
+			t.Errorf("zap with tags %v: %v", tags, err)
 		}
 	}
 }

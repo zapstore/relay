@@ -147,19 +147,21 @@ func TestRequestBuiltBundleCarriesBanLines(t *testing.T) {
 	spy := resolvedListing(t, "com.example.spy")
 	maps := resolvedListing(t, "com.example.maps")
 	other := resolvedListing(t, "com.example.other")
+	banned := map[string]string{"com.example.spy": "Records the microphone."}
 	for i, st := range []State{
 		{Listings: []Listing{spy, maps, other}},
 		{Listings: []Listing{spy, maps}},
-		{Listings: []Listing{maps}},
+		{Listings: []Listing{maps}, Notices: banned},
 	} {
 		if _, err := CreateBundle(t.Context(), data, st, signer, int64(10+i), nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	notices := func(context.Context) (map[string]string, error) {
-		return map[string]string{"com.example.spy": "Records the microphone."}, nil
+	// The live table changed after snapshot 3. The snapshot's notices win.
+	lifted := func(context.Context) (map[string]string, error) {
+		return map[string]string{}, nil
 	}
-	body, err := EnsureBundle(t.Context(), data, 1, 3, signer, notices)
+	body, err := EnsureBundle(t.Context(), data, 1, 3, signer, lifted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +174,39 @@ func TestRequestBuiltBundleCarriesBanLines(t *testing.T) {
 	}
 	if strings.Contains(diff, `"app_id":"com.example.other"`) {
 		t.Fatalf("ban line for a normal removal: %s", diff)
+	}
+}
+
+func TestOlderSnapshotReadsLiveNotices(t *testing.T) {
+	data := t.TempDir()
+	signer, err := ParseSigner("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spy := resolvedListing(t, "com.example.spy")
+	if _, err := CreateBundle(t.Context(), data, State{Listings: []Listing{spy}}, signer, 10, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := marshalEvents(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := packUnsigned([]member{{Name: "events.jsonl", Data: raw}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(SnapPath(data, 2), body); err != nil {
+		t.Fatal(err)
+	}
+	live := func(context.Context) (map[string]string, error) {
+		return map[string]string{"com.example.spy": "Records the microphone."}, nil
+	}
+	bundle, err := EnsureBundle(t.Context(), data, 1, 2, signer, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := string(tarFiles(t, bundle)["diff.jsonl"]); !strings.Contains(diff, `"banned":true`) {
+		t.Fatalf("missing ban line: %s", diff)
 	}
 }
 
@@ -289,7 +324,7 @@ func TestPreviousStackSignedByAnotherKeyIsDeleted(t *testing.T) {
 	if err := os.MkdirAll(SnapDir(data), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSnap(SnapPath(data, 1), []nostr.Event{stack}); err != nil {
+	if err := WriteSnap(SnapPath(data, 1), []nostr.Event{stack}, nil); err != nil {
 		t.Fatal(err)
 	}
 	n, err := CreateBundle(t.Context(), data, State{}, signer, 20, nil)

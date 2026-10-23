@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +34,6 @@ var (
 	errNoAPK     = errors.New("the apk is neither in blossom nor at a url")
 	errAPKHash   = errors.New("the downloaded apk does not match its hash")
 	errAPKTooBig = errors.New("apk exceeds the size limit")
-	fetchClient  = &http.Client{Timeout: readTimeout}
 )
 
 // apkJob asks for the certificates of the APK with sha256 blob. url is where
@@ -180,7 +181,7 @@ func (r *T) openAPK(ctx context.Context, job apkJob) (io.ReadSeeker, func(), err
 	if err != nil {
 		return nil, nil, err
 	}
-	res, err := fetchClient.Do(req)
+	res, err := r.fetch.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -234,16 +235,19 @@ func (r *T) apkSigning(blob, url string) (chain signing, readErr string, ok bool
 	return chain, readErr, true
 }
 
-// assetURL is a download URL named by an asset, for an APK that Blossom does
-// not have. A URL on this relay's CDN is skipped: that file would be in Blossom.
-func assetURL(tags nostr.Tags) string {
+// assetURL is an https download URL named by an asset, for an APK that
+// Blossom does not have. A URL on this relay's CDN is skipped: that file would
+// be in Blossom.
+func (r *T) assetURL(tags nostr.Tags) string {
 	for _, raw := range events.FindAll(tags, "url") {
-		if strings.HasPrefix(raw, "https://cdn.zapstore.dev") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
 			continue
 		}
-		if strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://") {
-			return raw
+		if slices.ContainsFunc(r.config.BlobHosts, func(h string) bool { return h != "" && strings.EqualFold(u.Hostname(), h) }) {
+			continue
 		}
+		return raw
 	}
 	return ""
 }

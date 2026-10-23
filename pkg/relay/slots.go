@@ -158,27 +158,29 @@ func newerProof(next, current nostr.Event) bool {
 	return next.ID < current.ID
 }
 
-func (r *T) replaceOtherDeveloper(ctx context.Context, event *nostr.Event) {
+// replaceOtherDeveloper deletes the listings of every other developer pubkey
+// for the app once event's signer has a complete listing. It is idempotent.
+func (r *T) replaceOtherDeveloper(ctx context.Context, event *nostr.Event) error {
 	if event.PubKey == r.config.Info.Pubkey {
-		return
+		return nil
 	}
 	appID, ok := listingAppID(event)
 	if !ok {
-		return
+		return nil
 	}
 	complete, err := developerListingComplete(ctx, r.store, event.PubKey, appID)
 	if err != nil || !complete {
-		return
+		return err
 	}
 	ids, err := otherDeveloperEvents(ctx, r.store, r.config.Info.Pubkey, event.PubKey, appID)
 	if err != nil || len(ids) == 0 {
-		return
+		return err
 	}
 	if _, err := r.store.Delete(ctx, nostr.Filter{IDs: ids}); err != nil {
-		slog.Error("listing slot: replace developer", "err", err, "app_id", appID)
-		return
+		return fmt.Errorf("replace developer listing for %s: %w", appID, err)
 	}
 	slog.Info("listing slot: replaced developer listing", "app_id", appID, "pubkey", event.PubKey)
+	return nil
 }
 
 func listingAppID(event *nostr.Event) (string, bool) {

@@ -314,8 +314,7 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		return releaseCheck{}, nil
 	}
 	want := strconv.Itoa(events.KindApp) + ":" + pubkey + ":" + appID
-	got, ok := events.Find(release.Tags, "a")
-	if !ok || got != want {
+	if got, ok := events.Find(release.Tags, "a"); ok && got != want {
 		return releaseCheck{}, nil
 	}
 	parsed, err := events.ParseRelease(&release)
@@ -334,18 +333,19 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		if appIDTag, ok := events.Find(asset.Tags, "i"); !ok || appIDTag != appID {
 			return releaseCheck{}, nil
 		}
-		banned, err := r.bannedHash(ctx, &asset)
+		assets = append(assets, asset)
+	}
+	if reason, err := r.bannedListing(ctx, slices.Concat([]nostr.Event{*app, release}, assets)); err != nil || reason != "" {
 		if err != nil {
 			return releaseCheck{}, err
 		}
-		if banned {
-			return refuse("%s", ErrFileNotAllowed.Error()), nil
-		}
-		ready, err := r.assetInBlossom(ctx, &asset)
+		return refuse("%s", reason), nil
+	}
+	for i := range assets {
+		ready, err := r.assetInBlossom(ctx, &assets[i])
 		if err != nil || !ready {
 			return releaseCheck{}, err
 		}
-		assets = append(assets, asset)
 	}
 
 	check := releaseCheck{assets: assets}
@@ -514,18 +514,27 @@ func (r *T) lookupAsset(ctx context.Context, id string, pending map[string]nostr
 	`, id)
 }
 
-// bannedHash reports whether the asset names a file hash the operator banned.
-// A nil policy store has no banned hashes. The signer is not blacklisted.
-func (r *T) bannedHash(ctx context.Context, asset *nostr.Event) (bool, error) {
+// bannedListing runs the blacklist again at promotion, since a ban can land
+// while a listing waits in the buffer zone. It returns the refusal for the
+// first member that a banned publisher or file hash rejects, or "".
+// A nil policy store bans nothing.
+func (r *T) bannedListing(ctx context.Context, members []nostr.Event) (string, error) {
 	if r.pol == nil {
-		return false, nil
+		return "", nil
 	}
-	x, ok := events.Find(asset.Tags, "x")
-	if !ok {
-		return false, nil
+	for i := range members {
+		verdict, err := r.pol.EventVerdict(ctx, &members[i])
+		if err != nil {
+			return "", err
+		}
+		if verdict.Reason != "" {
+			return ErrFileNotAllowed.Error(), nil
+		}
+		if verdict.Reject {
+			return ErrPublisherNotAllowed.Error(), nil
+		}
 	}
-	_, banned, err := r.pol.HashReason(ctx, x)
-	return banned, err
+	return "", nil
 }
 
 func (r *T) assetInBlossom(ctx context.Context, asset *nostr.Event) (bool, error) {
@@ -578,10 +587,12 @@ func (r *T) commitListing(ctx context.Context, app *nostr.Event, release *nostr.
 	}
 
 	var saved []nostr.Event
+	var anyPending bool
 	for _, member := range members {
 		if !member.pending {
 			continue
 		}
+		anyPending = true
 		event := member.event
 		var stored bool
 		var err error
@@ -605,6 +616,20 @@ func (r *T) commitListing(ctx context.Context, app *nostr.Event, release *nostr.
 		}
 		saved = append(saved, event)
 	}
+	if !anyPending {
+		return nil
+	}
+	for _, proof := range check.proofs {
+		if err := r.commitProof(ctx, proof, skipBroadcast); err != nil {
+			return err
+		}
+	}
+	// The pending rows stay until the other developer listing is gone, so a
+	// failure here is retried by the next reconcile instead of leaving two
+	// developer listings for the app.
+	if err := r.replaceOtherDeveloper(ctx, release); err != nil {
+		return err
+	}
 	for _, event := range saved {
 		if err := r.store.DeletePending(ctx, event.ID); err != nil {
 			return err
@@ -623,12 +648,6 @@ func (r *T) commitListing(ctx context.Context, app *nostr.Event, release *nostr.
 	}
 
 	appID := listingAppIDOrEmpty(release)
-	for _, proof := range check.proofs {
-		if err := r.commitProof(ctx, proof, skipBroadcast); err != nil {
-			return err
-		}
-	}
-	r.replaceOtherDeveloper(ctx, release)
 	slog.Info("listing promoted", "pubkey", release.PubKey, "app_id", appID)
 	for _, event := range saved {
 		if event.Kind == events.KindApp && r.profileJobs != nil {

@@ -25,10 +25,10 @@ type Config struct {
 
 	// PruneInterval is how often unreferenced blobs are removed from Bunny and the local blob directory.
 	// Zero disables the job. Default is 24 hours.
-	PruneInterval time.Duration `env:"PRUNE_INTERVAL"`
+	PruneInterval time.Duration `env:"BLOSSOM_PRUNE_INTERVAL"`
 
-	// Dir holds blob bytes when Bunny is unset.
-	// It is always SYSTEM_DIRECTORY_PATH/data/blobs and is set by main.
+	// Dir holds blob bytes in the Bunny key layout (blobs/, p/): the buffer zone,
+	// and every blob when Bunny is unset. It is always DATA_DIR/blossom and is set by main.
 	Dir string
 
 	Bunny bunny.Config

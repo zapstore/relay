@@ -101,6 +101,73 @@ func dropRelayFTS(ctx context.Context, relayData string) error {
 	return dropFTS(ctx, db)
 }
 
+// dropForumPosts deletes kind 11 and the kind 1111 replies that name those
+// posts. A comment with an app or stack address stays. Returns how many
+// posts and replies were deleted. The launch backup is taken before this.
+func dropForumPosts(ctx context.Context, relayData string) (posts, replies int, err error) {
+	db, err := openDB(ctx, filepath.Join(relayData, "relay.db"), true)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer db.Close()
+	replies, err = deleteWhere(ctx, db, `
+		c.kind = 1111
+		AND EXISTS (
+			SELECT 1 FROM tags t
+			JOIN events p ON p.id = t.value AND p.kind = 11
+			WHERE t.event_id = c.id AND t.key IN ('e', 'E')
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM tags a
+			WHERE a.event_id = c.id AND a.key IN ('A', 'a')
+			AND (a.value LIKE '32267:%' OR a.value LIKE '30267:%')
+		)`)
+	if err != nil {
+		return 0, 0, err
+	}
+	posts, err = deleteWhere(ctx, db, `c.kind = 11`)
+	return posts, replies, err
+}
+
+// deleteWhere deletes events matching where, which must use the alias c, and
+// their tag rows. It returns how many events were deleted.
+func deleteWhere(ctx context.Context, db *sql.DB, where string) (int, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	// Snapshot the ids first. The reply predicate joins tags, so deleting
+	// those rows before the events would make the same predicate match nothing.
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS doomed`); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE doomed (id TEXT PRIMARY KEY)`); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO doomed SELECT c.id FROM events c WHERE `+where)
+	if err != nil {
+		return 0, fmt.Errorf("select forum events: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tags WHERE event_id IN (SELECT id FROM doomed)`); err != nil {
+		return 0, fmt.Errorf("delete forum tags: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE id IN (SELECT id FROM doomed)`); err != nil {
+		return 0, fmt.Errorf("delete forum events: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE doomed`); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 // deleteEvents deletes stored and pending events by id, with their tag rows.
 // SQLite does not enforce the tags foreign key unless the pragma is on.
 func deleteEvents(ctx context.Context, db *sql.DB, ids []string) error {

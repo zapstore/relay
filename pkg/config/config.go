@@ -16,10 +16,10 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom"
 	"github.com/zapstore/relay/pkg/control"
-	"github.com/zapstore/relay/pkg/dashboard"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/vertex"
@@ -34,7 +34,6 @@ type Config struct {
 	Analytics analytics.Config
 	Relay     relay.Config
 	Blossom   blossom.Config
-	Dashboard dashboard.Config
 	Control   control.Config
 	Catalog   CatalogConfig
 	Vertex    vertex.Config
@@ -44,13 +43,14 @@ type Config struct {
 // GET /v1/bundle is served on the relay listener.
 type CatalogConfig struct {
 	// SignWith is the catalog signing key: 1, 64-char hex, nsec, or a bunker URL.
-	// Its public key must equal RELAY_PUBKEY. A bunker URL is the hotbox signer.
+	// Its public key is RELAY_PUBKEY: an unset RELAY_PUBKEY takes it, a set one must
+	// equal it. A bunker URL is the hotbox signer.
 	SignWith string `env:"SIGN_WITH"`
 
 	// Interval is how often a new snapshot is considered. Default is 5 minutes.
 	// Zero disables the tick. `relay bundle` writes one snapshot anyway.
-	// `relay bundle <app-id>` limits that snapshot to listings whose id contains the app id.
-	Interval time.Duration `env:"BUNDLE_INTERVAL"`
+	// `relay bundle <app-id>` limits enrichment to listings whose id contains the app id.
+	Interval time.Duration `env:"CATALOG_BUNDLE_INTERVAL"`
 }
 
 func NewCatalogConfig() CatalogConfig {
@@ -79,14 +79,20 @@ func (c CatalogConfig) String() string {
 }
 
 type SystemConfig struct {
-	Version  string   // no env variable, it's set at build time
-	Dir      string   `env:"SYSTEM_DIRECTORY_PATH"`
-	LogLevel LogLevel `env:"SYSTEM_LOG_LEVEL"`
+	Version string // no env variable, it's set at build time
 
-	// ReadOnly rejects events, Blossom uploads, relay.sock blacklist and whitelist
-	// changes, and dashboard blacklist and whitelist changes. Bundles are still signed with SIGN_WITH.
+	// Dir is the data directory. It holds every database, blob, bundle, and socket.
+	Dir      string   `env:"DATA_DIR"`
+	LogLevel LogLevel `env:"LOG_LEVEL"`
+
+	// ReadOnly rejects events, Blossom uploads, and relay.sock blacklist and whitelist
+	// changes. Bundles are still signed with SIGN_WITH.
 	// The bundle tick still enriches.
 	ReadOnly bool `env:"READ_ONLY"`
+
+	// AdminPubkeys may sign relay.sock commands.
+	// Lowercase hex after Load.
+	AdminPubkeys []string `env:"ADMIN_PUBKEYS"`
 }
 
 // LogLevel represents the log level for the system.
@@ -112,7 +118,6 @@ func (l LogLevel) IsValid() bool {
 func NewSystemConfig() SystemConfig {
 	return SystemConfig{
 		Version:  Version,
-		Dir:      "", // empty string for the current directory
 		LogLevel: LogInfo,
 	}
 }
@@ -121,27 +126,35 @@ func (c SystemConfig) Validate() error {
 	if c.Version == "" {
 		return fmt.Errorf("version is not set")
 	}
+	if strings.TrimSpace(c.Dir) == "" {
+		return fmt.Errorf("DATA_DIR is not set")
+	}
 	if !c.LogLevel.IsValid() {
 		return fmt.Errorf("invalid log level: %s", c.LogLevel)
+	}
+	if len(c.AdminPubkeys) == 0 {
+		return fmt.Errorf("ADMIN_PUBKEYS is empty")
+	}
+	for _, pk := range c.AdminPubkeys {
+		if !nostr.IsValidPublicKey(pk) {
+			return fmt.Errorf("admin pubkey is invalid: %q", pk)
+		}
 	}
 	return nil
 }
 
 func (c SystemConfig) String() string {
-	dir := c.Dir
-	if dir == "" {
-		dir = "[current directory]"
-	}
-
 	return fmt.Sprintf("System:\n"+
 		"\tVersion: %s\n"+
-		"\tDirectory Path: %s\n"+
+		"\tData Directory: %s\n"+
 		"\tLog Level: %s\n"+
-		"\tRead Only: %t\n",
+		"\tRead Only: %t\n"+
+		"\tAdmin Pubkeys: %v\n",
 		c.Version,
-		dir,
+		c.Dir,
 		c.LogLevel,
-		c.ReadOnly)
+		c.ReadOnly,
+		c.AdminPubkeys)
 }
 
 // LogOptions returns the [slog.HandlerOptions] for the log level of this config.
@@ -172,6 +185,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("RELAY_PUBKEY: %w", err)
 	}
 	config.Relay.Info.Pubkey = pk
+	config.Relay.BlobHosts = []string{config.Blossom.Hostname, config.Blossom.Bunny.CDN}
+	for i, admin := range config.Sys.AdminPubkeys {
+		config.Sys.AdminPubkeys[i] = strings.ToLower(strings.TrimSpace(admin))
+	}
+	config.Control.AdminPubkeys = config.Sys.AdminPubkeys
 	return config, nil
 }
 
@@ -182,7 +200,6 @@ func New() Config {
 		Analytics: analytics.NewConfig(),
 		Relay:     relay.NewConfig(),
 		Blossom:   blossom.NewConfig(),
-		Dashboard: dashboard.NewConfig(),
 		Control:   control.NewConfig(),
 		Catalog:   NewCatalogConfig(),
 		Vertex:    vertex.NewConfig(),
@@ -204,9 +221,6 @@ func (c Config) Validate() error {
 	}
 	if err := c.Blossom.Validate(); err != nil {
 		return fmt.Errorf("blossom: %w", err)
-	}
-	if err := c.Dashboard.Validate(); err != nil {
-		return fmt.Errorf("dashboard: %w", err)
 	}
 	if err := c.Control.Validate(); err != nil {
 		return fmt.Errorf("control: %w", err)
@@ -231,8 +245,6 @@ func (c Config) String() string {
 	b.WriteString(c.Relay.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Blossom.String())
-	b.WriteByte('\n')
-	b.WriteString(c.Dashboard.String())
 	b.WriteByte('\n')
 	b.WriteString(c.Control.String())
 	b.WriteByte('\n')

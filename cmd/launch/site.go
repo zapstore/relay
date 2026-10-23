@@ -30,19 +30,21 @@ type site struct {
 	RelayEnv    string `json:"relay_env"`
 	IndexerEnv  string `json:"indexer_env"`
 	RelayBinary string `json:"relay_binary"`
+	// RelaySocket is relay.sock. The relay unit sets its path, not the env file.
+	RelaySocket string `json:"relay_socket"`
 	BackupRoot  string `json:"backup_root"`
 }
 
 // paths are read from the env files.
 type paths struct {
-	RelayData   string // SYSTEM_DIRECTORY_PATH/data
+	RelayData   string // DATA_DIR
 	IndexerData string // STORE_DIR
 	RelayAddr   string // RELAY_ADDRESS
+	RelaySocket string
 }
 
 func (p paths) relayDB() string   { return filepath.Join(p.RelayData, "relay.db") }
 func (p paths) indexerDB() string { return filepath.Join(p.IndexerData, "indexer.db") }
-func (p paths) socket() string    { return filepath.Join(p.RelayData, "nostr.sock") }
 
 var siteDefaults = site{
 	RelayUnit:   "relay",
@@ -51,6 +53,7 @@ var siteDefaults = site{
 	RelayEnv:    "/opt/zapstore/env/relay.env",
 	IndexerEnv:  "/opt/zapstore/env/indexer.env",
 	RelayBinary: "/usr/local/bin/relay",
+	RelaySocket: "/run/zapstore-relay/relay.sock",
 	BackupRoot:  "/var/backups/zapstore-launch",
 }
 
@@ -77,6 +80,7 @@ func loadSite(ctx context.Context, t term) (site, error) {
 			{"Relay env file", &s.RelayEnv},
 			{"Indexer env file", &s.IndexerEnv},
 			{"Installed relay binary", &s.RelayBinary},
+			{"Relay socket", &s.RelaySocket},
 			{"Backup directory", &s.BackupRoot},
 		}
 		for _, f := range fields {
@@ -145,9 +149,9 @@ func (s site) paths() (paths, error) {
 	if err != nil {
 		return paths{}, err
 	}
-	sys := relayEnv["SYSTEM_DIRECTORY_PATH"]
-	if sys == "" {
-		return paths{}, fmt.Errorf("%s: SYSTEM_DIRECTORY_PATH is not set", s.RelayEnv)
+	data := relayEnv["DATA_DIR"]
+	if data == "" {
+		return paths{}, fmt.Errorf("%s: DATA_DIR is not set", s.RelayEnv)
 	}
 	store := indexerEnv["STORE_DIR"]
 	if store == "" {
@@ -157,7 +161,7 @@ func (s site) paths() (paths, error) {
 	if addr == "" {
 		addr = "localhost:3334"
 	}
-	return paths{RelayData: filepath.Join(sys, "data"), IndexerData: store, RelayAddr: addr}, nil
+	return paths{RelayData: data, IndexerData: store, RelayAddr: addr, RelaySocket: s.RelaySocket}, nil
 }
 
 func readEnv(path string) (map[string]string, error) {
@@ -184,8 +188,10 @@ func signerFor(ctx context.Context, envFile string) (catalog.Signer, error) {
 // relayEnvWant is what the relay env file must say.
 type relayEnvWant struct {
 	key       string // RELAY_PUBKEY; empty means any key but oldKey
-	intervals bool   // BUNDLE_INTERVAL and PRUNE_INTERVAL on, else both 0
+	intervals bool   // CATALOG_BUNDLE_INTERVAL and BLOSSOM_PRUNE_INTERVAL on, else both 0
 }
+
+var intervalNames = []string{"CATALOG_BUNDLE_INTERVAL", "BLOSSOM_PRUNE_INTERVAL"}
 
 // checkRelayEnv returns the relay's key and its signer, or what is wrong.
 func checkRelayEnv(ctx context.Context, envFile string, want relayEnvWant) (string, catalog.Signer, error) {
@@ -203,7 +209,7 @@ func checkRelayEnv(ctx context.Context, envFile string, want relayEnvWant) (stri
 	case want.key == "" && key == oldKey:
 		return "", catalog.Signer{}, fmt.Errorf("RELAY_PUBKEY is still 78ce…")
 	}
-	for _, name := range []string{"BUNDLE_INTERVAL", "PRUNE_INTERVAL"} {
+	for _, name := range intervalNames {
 		on, err := intervalOn(env[name])
 		if err != nil {
 			return "", catalog.Signer{}, fmt.Errorf("%s: %w", name, err)

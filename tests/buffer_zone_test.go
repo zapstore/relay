@@ -18,6 +18,7 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/blossom"
+	"github.com/zapstore/relay/pkg/control"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay"
 )
@@ -45,7 +46,7 @@ func TestBufferZone(t *testing.T) {
 	bcfg := blossom.NewConfig()
 	bcfg.Hostname = "localhost"
 	bcfg.Address = freeAddr(t)
-	bcfg.Dir = filepath.Join(dir, "blobs")
+	bcfg.Dir = filepath.Join(dir, "blossom")
 	rcfg := relay.NewConfig()
 	rcfg.Info.Pubkey = pk
 	rcfg.Address = freeAddr(t)
@@ -56,16 +57,17 @@ func TestBufferZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := blossom.Setup(bcfg, limiter, nil, nil, blossomDB, r, nil, false)
+	b, err := blossom.Setup(bcfg, limiter, nil, nil, blossomDB, r, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	socket := filepath.Join(dir, "nostr.sock")
+	socket := filepath.Join(dir, "relay.sock")
 	go r.StartAndServe(ctx, rcfg.Address, nil)
 	go b.StartAndServe(ctx, bcfg.Address)
-	go r.ListenNostr(ctx, socket)
+	sock := &control.Server{Relay: pk, Nostr: r.ServeNostr}
+	go sock.Listen(ctx, socket)
 
 	apk, err := os.ReadFile(filepath.Join("..", "pkg", "relay", "testdata", "test-release.apk"))
 	if err != nil {

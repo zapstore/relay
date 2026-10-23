@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -18,110 +19,39 @@ import (
 
 var ctx = context.Background()
 
-func TestSearchQuery(t *testing.T) {
-	got, err := searchQuery(nostr.Filter{
-		Kinds:  []int{events.KindApp},
-		Search: "https://github.com/example/app.git",
-		Limit:  10,
-	})
-	if err != nil {
-		t.Fatalf("searchQuery() error = %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("searchQuery() returned %d queries, want 1", len(got))
-	}
-	want := sqlite.Query{
-		SQL: `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM events e
-		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = 32267
-		  AND t.key = 'repository'
-		  AND (t.value = ? OR t.value = ?)
-		LIMIT ?`,
-		Args: []any{"https://github.com/example/app", "https://github.com/example/app.git", 10},
-	}
-	if got[0].SQL != want.SQL {
-		t.Errorf("SQL mismatch\ngot:  %q\nwant: %q", got[0].SQL, want.SQL)
-	}
-	if !reflect.DeepEqual(got[0].Args, want.Args) {
-		t.Errorf("Args mismatch\ngot:  %v\nwant: %v", got[0].Args, want.Args)
-	}
-
-	if _, err := searchQuery(nostr.Filter{Kinds: []int{events.KindApp}, Search: "signal"}); !errors.Is(err, ErrUnsupportedREQ) {
-		t.Fatalf("text search error = %v, want ErrUnsupportedREQ", err)
-	}
-}
-
 func TestValidateSearch(t *testing.T) {
-	repo := nostr.Filter{Kinds: []int{events.KindApp}, Search: "github.com/example/app"}
+	repo := nostr.Filter{Kinds: []int{events.KindApp}, Search: "signal"}
 	if err := Validate(repo); err != nil {
-		t.Fatalf("repository URL: %v", err)
+		t.Fatalf("text search: %v", err)
 	}
-	if err := Validate(nostr.Filter{Kinds: []int{events.KindApp}, Search: "signal"}); !errors.Is(err, ErrUnsupportedREQ) {
-		t.Fatalf("text search error = %v, want ErrUnsupportedREQ", err)
+	if err := Validate(nostr.Filter{Kinds: []int{events.KindRelease}, Search: "signal"}); !errors.Is(err, ErrUnsupportedREQ) {
+		t.Fatalf("text search on kind 30063 error = %v, want ErrUnsupportedREQ", err)
+	}
+	hash := strings.Repeat("ab", 32)
+	if err := Validate(nostr.Filter{Kinds: []int{events.KindAsset}, Search: hash}); err != nil {
+		t.Fatalf("file hash on kind 3063: %v", err)
+	}
+	if err := Validate(nostr.Filter{Kinds: []int{1063}, Search: strings.ToUpper(hash)}); err != nil {
+		t.Fatalf("file hash on kind 1063: %v", err)
+	}
+	if err := Validate(nostr.Filter{Kinds: []int{events.KindAsset}, Search: "signal"}); !errors.Is(err, ErrUnsupportedREQ) {
+		t.Fatalf("text search on kind 3063 error = %v, want ErrUnsupportedREQ", err)
 	}
 	if err := Validate(repo, repo); !errors.Is(err, ErrUnsupportedREQ) {
 		t.Fatalf("two search filters error = %v, want ErrUnsupportedREQ", err)
 	}
 }
 
-func TestStoreQueryRepository(t *testing.T) {
+func TestStoreRefusesTextSearch(t *testing.T) {
 	store, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 	defer store.Close()
-
-	app := &nostr.Event{
-		ID:        "app1",
-		PubKey:    "pubkey1",
-		CreatedAt: nostr.Timestamp(1700000001),
-		Kind:      events.KindApp,
-		Tags: nostr.Tags{
-			{"d", "org.signal.app"},
-			{"name", "Signal"},
-			{"repository", "https://github.com/signalapp/Signal-Android.git"},
-		},
-		Content: "Signal is a privacy-focused messaging app.",
-		Sig:     "sig1",
-	}
-	other := &nostr.Event{
-		ID:        "app2",
-		PubKey:    "pubkey2",
-		CreatedAt: nostr.Timestamp(1700000002),
-		Kind:      events.KindApp,
-		Tags: nostr.Tags{
-			{"d", "org.telegram.messenger"},
-			{"name", "Telegram"},
-			{"repository", "https://github.com/telegramdesktop/tdesktop"},
-		},
-		Content: "Telegram.",
-		Sig:     "sig2",
-	}
-	for _, event := range []*nostr.Event{app, other} {
-		if _, err := store.Save(ctx, event); err != nil {
-			t.Fatalf("failed to save app %s: %v", event.ID, err)
+	for _, search := range []string{"signal", "github.com/signalapp/Signal-Android"} {
+		if _, err := store.Query(ctx, nostr.Filter{Kinds: []int{events.KindApp}, Search: search, Limit: 10}); !errors.Is(err, ErrUnsupportedREQ) {
+			t.Fatalf("search %q error = %v, want ErrUnsupportedREQ", search, err)
 		}
-	}
-
-	results, err := store.Query(ctx, nostr.Filter{
-		Kinds:  []int{events.KindApp},
-		Search: "github.com/signalapp/Signal-Android",
-		Limit:  10,
-	})
-	if err != nil {
-		t.Fatalf("store.Query() error = %v", err)
-	}
-	if !reflect.DeepEqual(results, []nostr.Event{*app}) {
-		t.Errorf("results mismatch\ngot:  %v\nwant: %v", results, []nostr.Event{*app})
-	}
-
-	if _, err := store.Query(ctx, nostr.Filter{
-		Kinds:  []int{events.KindApp},
-		Search: "signal",
-		Limit:  10,
-	}); !errors.Is(err, ErrUnsupportedREQ) {
-		t.Fatalf("text search error = %v, want ErrUnsupportedREQ", err)
 	}
 }
 

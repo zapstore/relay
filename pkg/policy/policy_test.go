@@ -168,6 +168,13 @@ func TestPublishersAndHashes(t *testing.T) {
 	if len(hashes) != 1 {
 		t.Fatalf("hash should remain, got %+v", hashes)
 	}
+	notices, err := store.Notices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("lifting the ban must drop its ban lines, got %+v", notices)
+	}
 	if err := store.RemoveHash(ctx, "ABC"); err != nil {
 		t.Fatal(err)
 	}

@@ -3,7 +3,9 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
@@ -11,27 +13,68 @@ import (
 	"github.com/zapstore/relay/pkg/relay/store"
 )
 
-// ApplyBan stores the publisher and removes that publisher's listings.
-func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, pub policy.Publisher, reason string) error {
+var errBanCatalogKey = errors.New("the catalog key is never banned")
+
+// ApplyBan stores the publisher, removes that publisher's listings, stored
+// and in the buffer zone, and reselects the apps they were in. A banned
+// Nostr key also loses every other event waiting in the buffer zone.
+func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey string, pub policy.Publisher, reason string) error {
+	pub, err := policy.Normalize(pub.Kind, pub.ID)
+	if err != nil {
+		return err
+	}
+	if pub.Kind == policy.KindNostr && pub.ID == catalogKey {
+		return errBanCatalogKey
+	}
 	rows, err := loadListings(ctx, db)
 	if err != nil {
 		return err
+	}
+	pending, err := db.ListPending(ctx, bufferedKinds())
+	if err != nil {
+		return err
+	}
+	isPending := map[string]struct{}{}
+	for _, event := range pending {
+		isPending[event.ID] = struct{}{}
+		if listingKind(event.Kind) {
+			rows = append(rows, policy.Listing{ID: event.ID, Pubkey: event.PubKey, Kind: event.Kind, Tags: event.Tags})
+		}
 	}
 	ids, hashes, apps := policy.Affected(pub, rows)
 	if err := pol.RecordBan(ctx, pub, reason, hashes, apps); err != nil {
 		return err
 	}
+	var stored []string
 	for _, id := range ids {
-		if _, err := db.Delete(ctx, nostr.Filter{IDs: []string{id}}); err != nil {
-			return fmt.Errorf("delete event %s: %w", id, err)
+		if _, ok := isPending[id]; ok {
+			if err := db.DeletePending(ctx, id); err != nil {
+				return fmt.Errorf("drop pending event %s: %w", id, err)
+			}
+			continue
+		}
+		stored = append(stored, id)
+	}
+	if pub.Kind == policy.KindNostr {
+		for _, event := range pending {
+			if event.PubKey != pub.ID {
+				continue
+			}
+			if err := db.DeletePending(ctx, event.ID); err != nil {
+				return fmt.Errorf("drop pending event %s: %w", event.ID, err)
+			}
 		}
 	}
-	return nil
+	for batch := range slices.Chunk(stored, reselectBatch) {
+		if _, err := db.Delete(ctx, nostr.Filter{IDs: batch}); err != nil {
+			return fmt.Errorf("delete banned listings: %w", err)
+		}
+	}
+	return reselect(ctx, db, catalogKey)
 }
 
-// loadListings reads every app, release, and asset so a forge or certificate
-// ban can find the rows it affects. This is the whole table and it runs inside
-// the event-hook timeout. Worth indexing later.
+// loadListings reads every stored app, release, and asset so a forge or
+// certificate ban can find the rows it affects. Worth indexing later.
 func loadListings(ctx context.Context, db store.T) ([]policy.Listing, error) {
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT id, pubkey, kind, tags FROM events

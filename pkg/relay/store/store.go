@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
 	"github.com/zapstore/relay/pkg/events"
-	"github.com/zapstore/relay/pkg/repourl"
 )
 
 var ErrUnsupportedREQ = errors.New("unsupported REQ")
@@ -270,15 +270,39 @@ func findAll(tags nostr.Tags, key string) []string {
 	return values
 }
 
-// Validate returns an error if the given filters are not supported.
-// Text search is not supported. A repository URL in the search field is an
-// exact match on the repository tag.
+// kindFileMetadata is NIP-94. Flutter 1.1.2 looks a downloaded file up by
+// putting its sha256 in search on this kind, and on kind 3063.
+const kindFileMetadata = 1063
+
+var sha256Search = regexp.MustCompile(`(?i)^[0-9a-f]{64}$`)
+
+// FileHashSearch reports whether f is a file lookup: search is a sha256 and
+// the only kind is 3063 or 1063. The hash is lowercase. The relay answers it
+// as #x. Any other search is text search, and only kind 32267 is allowed.
+func FileHashSearch(f nostr.Filter) (string, bool) {
+	if !sha256Search.MatchString(f.Search) {
+		return "", false
+	}
+	if slices.Equal(f.Kinds, []int{events.KindAsset}) || slices.Equal(f.Kinds, []int{kindFileMetadata}) {
+		return strings.ToLower(f.Search), true
+	}
+	return "", false
+}
+
+// Validate returns an error if the given filters are not supported. A text
+// search is one filter on kind 32267. A sha256 search on kind 3063 or 1063
+// is a file lookup. The store's query builder refuses a search field.
 func Validate(filters ...nostr.Filter) error {
 	if len(filters) == 0 {
 		return errors.New("no filter provided")
 	}
 	if searchesIn(filters) == 0 {
 		return nil
+	}
+	if len(filters) == 1 {
+		if _, ok := FileHashSearch(filters[0]); ok {
+			return nil
+		}
 	}
 	if len(filters) > 1 {
 		// One search filter per REQ. Several would make the result order ambiguous.
@@ -287,21 +311,17 @@ func Validate(filters ...nostr.Filter) error {
 	if !slices.Equal(filters[0].Kinds, []int{events.KindApp}) {
 		return fmt.Errorf("%w: search is only allowed for kind %d", ErrUnsupportedREQ, events.KindApp)
 	}
-	if _, ok := repourl.Parse(filters[0].Search); !ok {
-		return fmt.Errorf("%w: text search is not supported", ErrUnsupportedREQ)
-	}
 	return nil
 }
 
-// queryBuilder matches a repository URL in the search field against the
-// repository tag. Any other search is rejected. Filters without a search
-// field use the default query builder.
+// queryBuilder rejects a search. Filters without a search field use the
+// default query builder.
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
 	if err := Validate(filters...); err != nil {
 		return nil, err
 	}
 	if searchesIn(filters) > 0 {
-		return searchQuery(filters[0])
+		return nil, fmt.Errorf("%w: text search is not supported", ErrUnsupportedREQ)
 	}
 	return sqlite.DefaultQueryBuilder(filters...)
 }
@@ -315,39 +335,6 @@ func searchesIn(filters nostr.Filters) int {
 		}
 	}
 	return count
-}
-
-// repositoryURLQuery performs an exact match on the `repository` tag.
-// It tries both the canonical URL and with ".git" appended to handle both storage forms.
-func repositoryURLQuery(filter nostr.Filter) ([]sqlite.Query, error) {
-	// filter.Search is already canonical (no .git). Match both forms stored in the DB.
-	canonical := filter.Search
-	withGit := canonical + ".git"
-
-	query := `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM events e
-		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = 32267
-		  AND t.key = 'repository'
-		  AND (t.value = ? OR t.value = ?)
-		LIMIT ?`
-
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-
-	return []sqlite.Query{{SQL: query, Args: []any{canonical, withGit, limit}}}, nil
-}
-
-// searchQuery matches a repository URL against the repository tag.
-func searchQuery(f nostr.Filter) ([]sqlite.Query, error) {
-	r, ok := repourl.Parse(f.Search)
-	if !ok {
-		return nil, fmt.Errorf("%w: text search is not supported", ErrUnsupportedREQ)
-	}
-	f.Search = r.Canonical
-	return repositoryURLQuery(f)
 }
 
 // inClause returns " = ?" for a single value or " IN (?, ?, ...)" for multiple values.

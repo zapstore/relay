@@ -19,7 +19,6 @@ import (
 
 	"github.com/pippellia-btc/blossom"
 	"github.com/pippellia-btc/blossy"
-	"github.com/zapstore/relay/pkg/analytics"
 	"github.com/zapstore/relay/pkg/blossom/bunny"
 	"github.com/zapstore/relay/pkg/blossom/store"
 	"github.com/zapstore/relay/pkg/policy"
@@ -59,12 +58,11 @@ type T struct {
 	server *blossy.Server
 	config Config
 
-	limiter   rate.Limiter
-	pol       *policy.Store
-	blobs     Bytes
-	store     *store.T
-	relay     Relay
-	analytics *analytics.Engine
+	limiter rate.Limiter
+	pol     *policy.Store
+	blobs   Bytes
+	store   *store.T
+	relay   Relay
 }
 
 // moveEvery is how often promoted blobs are moved from disk to Bunny.
@@ -73,6 +71,7 @@ const moveEvery = 10 * time.Second
 // Relay is an interface that represents the subset of the relay functionalities needed by the blossoms server.
 type Relay interface {
 	// ResolveAssetURL looks up a download URL for a kind 3063 asset by its SHA-256 hash.
+	// Flutter 1.1.3 asks for it with ?redirect when the APK is not on this relay.
 	ResolveAssetURL(ctx context.Context, hash blossom.Hash) (url string, err error)
 
 	// NotifyUpload notifies the relay that an upload has been completed.
@@ -86,7 +85,6 @@ func Setup(
 	gate *policy.Gate,
 	store *store.T,
 	relay Relay,
-	analytics *analytics.Engine,
 	readOnly bool,
 ) (*T, error) {
 
@@ -126,14 +124,13 @@ func Setup(
 	}
 
 	blossom := T{
-		server:    server,
-		config:    config,
-		limiter:   limiter,
-		pol:       pol,
-		blobs:     NewBytes(config, store),
-		store:     store,
-		relay:     relay,
-		analytics: analytics,
+		server:  server,
+		config:  config,
+		limiter: limiter,
+		pol:     pol,
+		blobs:   NewBytes(config, store),
+		store:   store,
+		relay:   relay,
 	}
 
 	server.On.Check = blossom.check
@@ -200,10 +197,6 @@ func (b *T) check(r blossy.Request, hash blossom.Hash, ext string) (blossy.MetaD
 		slog.Error("blossom: failed to query blob metadata", "error", err, "hash", hash)
 		return nil, ErrInternal
 	}
-
-	if b.analytics != nil {
-		b.analytics.RecordCheck(r, hash)
-	}
 	return blossy.Found(meta.Type, meta.Size), nil
 }
 
@@ -244,15 +237,12 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 	}
 
 	if errors.Is(err, store.ErrBlobNotFound) || meta.State == store.Pending {
-		// blob not served here; if the client opted in, try the relay asset resolution.
-		redirect := r.Raw().URL.Query().Has("redirect")
-		if !redirect {
+		// Flutter 1.1.3 fetches a forge-hosted APK as /<hash>?redirect.
+		if !r.Raw().URL.Query().Has("redirect") {
 			return nil, ErrNotFound
 		}
-
 		ctx, cancel = context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-
 		assetURL, err := b.relay.ResolveAssetURL(ctx, hash)
 		if err != nil {
 			slog.Error("blossom: failed to resolve asset URL", "hash", hash, "error", err)
@@ -261,16 +251,9 @@ func (b *T) download(r blossy.Request, hash blossom.Hash, ext string) (blossy.Bl
 		if assetURL == "" {
 			return nil, ErrNotFound
 		}
-
-		if b.analytics != nil {
-			b.analytics.RecordDownload(r, hash)
-		}
 		return blossy.Redirect(assetURL, http.StatusTemporaryRedirect), nil
 	}
 
-	if b.analytics != nil {
-		b.analytics.RecordDownload(r, hash)
-	}
 	if b.blobs.onDisk(meta) {
 		f, err := b.blobs.Files.open(BlobPath(hash, meta.Type))
 		switch {
@@ -385,10 +368,6 @@ func (b *T) upload(r blossy.Request, hints blossy.UploadHints, data io.Reader) (
 
 	if err := b.relay.NotifyUpload(meta.Hash, meta.Type); err != nil {
 		slog.Error("blossom: failed to notify relay of upload", "error", err, "hash", meta.Hash)
-	}
-
-	if b.analytics != nil {
-		b.analytics.RecordUpload(r, hints)
 	}
 	return b.localDescriptor(blossom.BlobDescriptor{
 		Hash:     *hints.Hash,

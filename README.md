@@ -25,21 +25,21 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /v1/bun
 
 ### Catalog
 - `GET /v1/bundle` is on the relay listener
-- A snapshot is written on `BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits. `relay bundle <app-id>` keeps listings whose id contains that string, drops the other app events, and passes the same string to the enricher. The tick takes no filter
-- Signing is `SIGN_WITH`. Its public key must equal `RELAY_PUBKEY`
-- `READ_ONLY=true` rejects events, Blossom uploads, `relay.sock` blacklist and whitelist changes, and dashboard blacklist and whitelist changes. Bundles are still signed with `SIGN_WITH`. The bundle tick still enriches
-- `PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in the local blob directory. Zero disables it
+- A snapshot is written on `CATALOG_BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `CATALOG_BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits. `relay bundle <app-id>` enriches only listings whose id contains that string; the snapshot is still the whole catalog. The tick takes no filter
+- Signing is `SIGN_WITH`. Its public key is `RELAY_PUBKEY`: unset, `RELAY_PUBKEY` takes it; set, it must equal it
+- `READ_ONLY=true` rejects events, Blossom uploads, and `relay.sock` blacklist and whitelist changes. Bundles are still signed with `SIGN_WITH`. The bundle tick still enriches
+- `BLOSSOM_PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in `DATA_DIR/blossom`. Zero disables it
 
 ### relay.sock
-- The [IPC](../product/specs/ipc.md) socket. `RELAY_SOCKET` sets its path; the default is `relay.sock` in the data directory. Mode 0660
-- Reads (`allowed`, `jobs`) need only access to the socket file. A write needs the relay's own Unix user, checked with the peer credentials, or a command event signed by a key in `ADMIN_PUBKEYS` (falls back to `DASHBOARD_ADMIN_PUBKEYS`)
-- Every write is recorded in the `admin_log` table of `relay.db`
+- The [IPC](../product/specs/ipc.md) socket. `RELAY_SOCKET_PATH` sets its path; the default is `relay.sock` in the data directory. Mode 0660
+- A connection that opens with `[` speaks NIP-01: one JSON array per line, closed after 30 seconds. It is the only place the catalog key's events are accepted, and it skips IP rate limits
+- Any other connection is one JSON command. Reads (`allowed`, `jobs`) need only access to the socket file. A write needs the relay's own Unix user, checked with the peer credentials, or a command event signed by a key in `ADMIN_PUBKEYS`
+- Every write is logged to the relay log
 
 ### Analytics
-- Off unless `ANALYTICS_API_ADDRESS` is set. Unset means no database, no collection, and no API
-- Privacy-preserving usage statistics for app impressions and blob downloads
-- Counts impressions derived from Nostr REQs
-- Counts downloads from blossom downloads
+- Off unless `ANALYTICS_ADDRESS` is set. Unset means no database, no collection, and no API
+- Daily counts of bundle requests and relay REQs and events. No IP, country, or client header is written
+- APK downloads are not counted; the Bunny dashboard covers what the CDN serves
 - Batched, non-blocking writes: events are queued in memory and flushed to SQLite periodically or when the batch size threshold is reached
 
 ### Rate Limiting
@@ -73,76 +73,41 @@ cp .env.example .env
 ./dist/relay-$(go env GOOS)-$(go env GOARCH) bundle org.mozilla
 ```
 
+### Configuration
+
+Every variable, its default, and its unit are in [`.env.example`](.env.example). `DATA_DIR`, `SIGN_WITH`, `ADMIN_PUBKEYS`, and the three hostnames are required. Old names are not read.
+
 ### Data Directory Structure
 
 On first run, the relay creates the following structure:
 
 ```
-$SYSTEM_DIRECTORY_PATH/
-├── analytics/        # only when ANALYTICS_API_ADDRESS is set
-│   ├── analytics.db  # SQLite database for analytics
-│   └── geo.mmdb      # MaxMind database for ip geolocation
-│ 
-└── data/
-    ├── relay.db      # SQLite database for relay events, the blacklist, and admin_log
-    ├── blossom.db    # SQLite database for blob metadata
-    ├── blobs/        # Blob bytes when Bunny is unset
-    ├── snapshots/    # Catalog snapshots, one per epoch
-    ├── bundles/      # Signed GET /v1/bundle bodies
-    └── artifacts.db  # about, security, vector, icon, and publisher pictures
+$DATA_DIR/
+├── relay.db      # SQLite database for relay events, the blacklist, and the whitelist
+├── blossom.db    # SQLite database for blob metadata
+├── artifacts.db  # about, security, vector, icon, and publisher pictures
+├── analytics.db  # only when ANALYTICS_ADDRESS is set
+├── blossom/      # Blob bytes in the Bunny layout: the buffer zone, or every blob when Bunny is unset
+├── snapshots/    # Catalog snapshots, one per epoch
+├── bundles/      # Signed GET /v1/bundle bodies
+├── cache/        # The enricher's source trees
+├── models/       # The search and enrichment model, downloaded on first use
+└── relay.sock    # unless RELAY_SOCKET_PATH is set
 ```
 
 ### Endpoints
 
 - **Relay** and `GET /v1/bundle`: `http://localhost:3334` (or your configured port)
 - **Blossom**: `http://localhost:3335` (or your configured port)
-- **Analytics**: off unless `ANALYTICS_API_ADDRESS` is set (for example `localhost:3336`)
+- **Analytics**: off unless `ANALYTICS_ADDRESS` is set (for example `localhost:3336`)
 
 ## Analytics API
 
 All endpoints return a JSON array. Date parameters use the `YYYY-MM-DD` format and are inclusive.
 
-### `GET /v1/app/impressions`
-
-Returns aggregated app impression counts recorded from Nostr REQs for kind `32267` app page views.
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `app_id` | string | Filter to a specific app identifier |
-| `app_pubkey` | string | Filter to a specific publisher pubkey |
-| `from` | date | Start of date range (inclusive) |
-| `to` | date | End of date range (inclusive) |
-| `source` | string | Filter by client source: `app`, `web`, or `unknown` |
-| `type` | string | Filter by impression type: `detail` |
-| `group_by` | CSV | Grouping dimensions: `app_id`, `app_pubkey`, `app_version`, `day`, `source`, `type`, `country_code` |
-
-### `GET /v1/app/downloads`
-
-Returns aggregated app download counts recorded from Blossom requests for kind `3063` asset blobs.
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `hash` | string | Filter to a specific blob hash |
-| `app_id` | string | Filter to a specific app identifier |
-| `app_pubkey` | string | Filter to a specific publisher pubkey |
-| `from` | date | Start of date range (inclusive) |
-| `to` | date | End of date range (inclusive) |
-| `source` | string | Filter by client source: `app`, `web`, or `unknown` |
-| `type` | string | Filter by download type: `install` or `update` |
-| `group_by` | CSV | Grouping dimensions: `hash`, `app_id`, `app_version`, `app_pubkey`, `day`, `source`, `type`, `country_code` |
-
 ### `GET /v1/metrics/relay`
 
 Returns daily relay traffic metrics (REQ count, filter count, event count).
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `from` | date | Start of date range (inclusive) |
-| `to` | date | End of date range (inclusive) |
-
-### `GET /v1/metrics/blossom`
-
-Returns daily Blossom server traffic metrics (check, download, and upload counts).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

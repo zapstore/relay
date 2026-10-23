@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"net"
 	"time"
-
-	"github.com/zapstore/relay/pkg/analytics/geo"
 )
 
 type Config struct {
 	// Address is the address the analytics API server listens on.
 	// Empty disables analytics: no database, no collection, and no API.
-	Address string `env:"ANALYTICS_API_ADDRESS"`
+	Address string `env:"ANALYTICS_ADDRESS"`
 
 	// FlushInterval is the interval at which the analytics engine flushes data to the database. Default is 5 minutes.
 	FlushInterval time.Duration `env:"ANALYTICS_FLUSH_INTERVAL"`
@@ -26,29 +24,18 @@ type Config struct {
 	// QueueSize is the maximum number of events that can be queued in memory.
 	// If more events are queued, they will be dropped. Default is 100_000.
 	QueueSize int `env:"ANALYTICS_QUEUE_SIZE"`
-
-	// GeoEnabled is a flag indicating whether geo-location (country code) should be collected and stored. Default is true.
-	GeoEnabled bool `env:"ANALYTICS_GEO_ENABLED"`
-
-	// GeoRefreshInterval is the interval at which the geo-location database is refreshed. Default is 24 hours.
-	GeoRefreshInterval time.Duration `env:"ANALYTICS_GEO_REFRESH_INTERVAL"`
-
-	Geo geo.Config
 }
 
 func NewConfig() Config {
 	return Config{
-		FlushInterval:      5 * time.Minute,
-		FlushTimeout:       10 * time.Second,
-		FlushSize:          1000,
-		QueueSize:          100_000,
-		GeoEnabled:         true,
-		GeoRefreshInterval: 24 * time.Hour,
-		Geo:                geo.NewConfig(),
+		FlushInterval: 5 * time.Minute,
+		FlushTimeout:  10 * time.Second,
+		FlushSize:     1000,
+		QueueSize:     100_000,
 	}
 }
 
-// Enabled reports whether ANALYTICS_API_ADDRESS is set.
+// Enabled reports whether ANALYTICS_ADDRESS is set.
 func (c Config) Enabled() bool {
 	return c.Address != ""
 }
@@ -78,14 +65,6 @@ func (c Config) Validate() error {
 	if c.QueueSize <= 0 {
 		return errors.New("queue size must be greater than 0")
 	}
-	if c.GeoEnabled {
-		if c.GeoRefreshInterval < time.Hour {
-			return errors.New("geo refresh interval must be at least 1 hour to avoid rate-limits")
-		}
-		if err := c.Geo.Validate(); err != nil {
-			return fmt.Errorf("geo config: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -94,20 +73,14 @@ func (c Config) String() string {
 		return "Analytics:\n\t(unset)\n"
 	}
 	return fmt.Sprintf("Analytics:\n"+
-		"\tAPI Address: %s\n"+
+		"\tAddress: %s\n"+
 		"\tFlush Interval: %s\n"+
 		"\tFlush Timeout: %s\n"+
 		"\tFlush Size: %d\n"+
-		"\tQueue Size: %d\n"+
-		"\tGeo Enabled: %t\n"+
-		"\tGeo Refresh Interval: %s\n"+
-		"%s",
+		"\tQueue Size: %d\n",
 		c.Address,
 		c.FlushInterval,
 		c.FlushTimeout,
 		c.FlushSize,
-		c.QueueSize,
-		c.GeoEnabled,
-		c.GeoRefreshInterval,
-		c.Geo.String())
+		c.QueueSize)
 }

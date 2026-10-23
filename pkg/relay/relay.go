@@ -24,6 +24,7 @@ import (
 	"github.com/zapstore/relay/pkg/policy"
 	"github.com/zapstore/relay/pkg/rate"
 	"github.com/zapstore/relay/pkg/relay/store"
+	"github.com/zapstore/relay/pkg/search"
 )
 
 var (
@@ -73,6 +74,9 @@ type T struct {
 	profileJobs chan string
 	apks        *apkReader
 	readAPK     func(io.ReadSeeker) (signing, error)
+	fetch       *http.Client
+
+	search *search.Engine
 }
 
 type upload struct {
@@ -161,6 +165,7 @@ func Setup(
 		profileJobs: make(chan string, 100),
 		apks:        newAPKReader(),
 		readAPK:     readSigning,
+		fetch:       publicFetch,
 	}
 
 	server.On.Event = relay.save
@@ -187,6 +192,7 @@ func (r *T) Handler() http.Handler { return r.server }
 func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	r.reselect(ctx)
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
@@ -233,17 +239,6 @@ func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler
 	return err
 }
 
-// NotifyUpload notifies the relay that the upload of the blob with the given hash and mime type is complete.
-// The signal is used to trigger the reconciliation of pending events.
-func (r *T) NotifyUpload(hash blossom.Hash, mime string) error {
-	select {
-	case r.uploads <- upload{hash: hash, mime: mime}:
-		return nil
-	default:
-		return errors.New("channel is full")
-	}
-}
-
 // ResolveAssetURL looks up a download URL for a kind 3063 asset by the SHA-256 hash in its "x" tag.
 func (r *T) ResolveAssetURL(ctx context.Context, hash blossom.Hash) (string, error) {
 	filter := nostr.Filter{
@@ -257,6 +252,17 @@ func (r *T) ResolveAssetURL(ctx context.Context, hash blossom.Hash) (string, err
 	}
 	url, _ := events.Find(found[0].Tags, "url")
 	return url, nil
+}
+
+// NotifyUpload notifies the relay that the upload of the blob with the given hash and mime type is complete.
+// The signal is used to trigger the reconciliation of pending events.
+func (r *T) NotifyUpload(hash blossom.Hash, mime string) error {
+	select {
+	case r.uploads <- upload{hash: hash, mime: mime}:
+		return nil
+	default:
+		return errors.New("channel is full")
+	}
 }
 
 func (r *T) runReconcile(ctx context.Context) {
@@ -329,6 +335,10 @@ func (r *T) reconcile(ctx context.Context) error {
 		}
 	}
 
+	if err := reselect(ctx, r.store, r.config.Info.Pubkey); err != nil {
+		errs = append(errs, err)
+	}
+
 	cutoff := time.Now().UTC().Add(-r.config.RemovePendingAfter)
 	if err := r.store.DeleteExpiredPending(ctx, cutoff); err != nil {
 		errs = append(errs, fmt.Errorf("failed to delete expired pending events: %w", err))
@@ -339,6 +349,14 @@ func (r *T) reconcile(ctx context.Context) error {
 		slog.Info("buffer zone: expired files", "count", n)
 	}
 	return errors.Join(errs...)
+}
+
+// reselect fills the selection of apps whose listings changed. On failure
+// the rows stay empty, and the next event or reconcile fills them.
+func (r *T) reselect(ctx context.Context) {
+	if err := reselect(ctx, r.store, r.config.Info.Pubkey); err != nil {
+		slog.Error("relay: failed to reselect listings", "error", err)
+	}
 }
 
 func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
@@ -365,12 +383,22 @@ func (p persistResult) result() rely.EventResult {
 	return res
 }
 
+// changesListings reports whether persisting an event of this kind can store
+// or delete a listing event: a deletion, a listing event, or a proof that
+// promotes or replaces a developer slot. Only those make reselect do work.
+func changesListings(kind int) bool {
+	return kind == nostr.KindDeletion || listingKind(kind) || kind == events.KindIdentityProof
+}
+
 func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if changesListings(event.Kind) {
+		defer r.reselect(ctx)
+	}
 
 	if r.analytics != nil {
-		r.analytics.RecordEvent(c, event)
+		r.analytics.RecordEvent()
 	}
 
 	switch {
@@ -458,21 +486,79 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 	return nil
 }
 
+func cloneTags(tags nostr.TagMap) nostr.TagMap {
+	out := make(nostr.TagMap, len(tags)+1)
+	for key, values := range tags {
+		out[key] = values
+	}
+	return out
+}
+
 func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	result, err := r.store.Query(ctx, filters...)
-	if errors.Is(err, store.ErrUnsupportedREQ) {
-		return nil, err
+	var result []nostr.Event
+	var err error
+	if len(filters) == 1 {
+		if hash, ok := store.FileHashSearch(filters[0]); ok {
+			// The phone already has the file. Return the event that names its
+			// hash, including one from a slot that is not selected.
+			f := filters[0]
+			f.Search = ""
+			f.Tags = cloneTags(f.Tags)
+			f.Tags["x"] = []string{hash}
+			result, err = r.store.Query(ctx, f)
+			if errors.Is(err, store.ErrUnsupportedREQ) {
+				return nil, err
+			}
+			if err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("relay: failed to query events", "error", err, "filters", filters)
+				return nil, err
+			}
+			if r.analytics != nil {
+				r.analytics.RecordReq(filters)
+			}
+			return result, nil
+		}
 	}
-	if err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("relay: failed to query events", "error", err, "filters", filters)
-		return nil, err
+	if assetOnly, live := liveRead(filters); live {
+		budget := 0
+		if c != nil && c.UID() != SocketUID {
+			budget = c.RemainingCapacity()
+		}
+		result, err = r.liveREQ(ctx, filters[0], assetOnly, budget)
+		if err != nil {
+			slog.Error("relay: failed live read", "error", err)
+			return nil, ErrInternal
+		}
+	} else if textSearch(filters) {
+		result, err = r.searchREQ(ctx, filters[0])
+		if errors.Is(err, store.ErrUnsupportedREQ) {
+			return nil, err
+		}
+		if err != nil {
+			slog.Error("relay: failed to search", "error", err)
+			return nil, ErrInternal
+		}
+	} else {
+		result, err = r.store.Query(ctx, filters...)
+		if errors.Is(err, store.ErrUnsupportedREQ) {
+			return nil, err
+		}
+		if err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("relay: failed to query events", "error", err, "filters", filters)
+			return nil, err
+		}
+		result, err = selectSlots(ctx, r.store, filters, result)
+		if err != nil {
+			slog.Error("relay: failed to select listing slots", "error", err, "filters", filters)
+			return nil, ErrInternal
+		}
 	}
 
 	if r.analytics != nil {
-		r.analytics.RecordReq(c, id, filters, result)
+		r.analytics.RecordReq(filters)
 	}
 	return result, nil
 }
@@ -491,7 +577,7 @@ func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Req
 
 func RateEventIP(limiter rate.Limiter) func(client rely.Client, _ *nostr.Event) error {
 	return func(client rely.Client, _ *nostr.Event) error {
-		if client.UID() == "nostr.sock" {
+		if client.UID() == SocketUID {
 			return nil
 		}
 		cost := 5.0
@@ -507,7 +593,7 @@ func RateEventIP(limiter rate.Limiter) func(client rely.Client, _ *nostr.Event) 
 
 func RateReqIP(limiter rate.Limiter) func(client rely.Client, id string, filters nostr.Filters) error {
 	return func(client rely.Client, id string, filters nostr.Filters) error {
-		if client.UID() == "nostr.sock" {
+		if client.UID() == SocketUID {
 			return nil
 		}
 		ip := client.IP().Group()
@@ -684,8 +770,8 @@ func NoZapTag(_ rely.Client, e *nostr.Event) error {
 
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
 // Anchoring means simply that the event references an existing root event.
-// An app coordinate is accepted only for the catalog key, when a listing for
-// that app exists. A kind 9735 p tag must be the active C1 proof pubkey.
+// An app coordinate is accepted for any pubkey when a listing for that app
+// exists. A kind 9735 p tag must be a known pubkey for the app.
 func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if slices.Contains(RootKinds, e.Kind) {
@@ -710,24 +796,26 @@ func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Eve
 
 		case events.KindComment:
 			// A reply names a stored kind 11 or 1111 with its e tag.
-			return anchored(ctx, db, catalogKey, e, "A", true, &nostr.Filter{Kinds: []int{events.KindForumPost, events.KindComment}})
+			return anchored(ctx, db, e, "A", true, &nostr.Filter{Kinds: []int{events.KindForumPost, events.KindComment}})
 		case events.KindZap:
-			if err := anchored(ctx, db, catalogKey, e, "a", true, &nostr.Filter{}); err != nil {
+			if err := anchored(ctx, db, e, "a", true, &nostr.Filter{}); err != nil {
 				return err
 			}
-			return zapPaysProof(ctx, db, catalogKey, e)
+			return zapPaysKnownPubkey(ctx, db, catalogKey, e)
 		case events.KindReport:
-			return anchored(ctx, db, catalogKey, e, "a", false, nil)
+			return anchored(ctx, db, e, "a", false, nil)
 		}
 		return nil
 	}
 }
 
 // anchored checks a comment, zap, or report. The address in addrTag must be an
-// app coordinate this relay accepts, or a stored stack when stacks is set. An
-// app coordinate needs an i tag with that app id. When reply is set, an e tag
-// naming a stored event matching reply may stand in for the address.
-func anchored(ctx context.Context, db store.T, catalogKey string, e *nostr.Event, addrTag string, stacks bool, reply *nostr.Filter) error {
+// app coordinate this relay accepts, or a stored stack when stacks is set. On
+// kinds 1111 and 1984 an app coordinate needs an i tag with that app id; a
+// zap receipt is written by a Lightning server and its i is ignored. When
+// reply is set, an e tag naming a stored event matching reply may stand in
+// for the address.
+func anchored(ctx context.Context, db store.T, e *nostr.Event, addrTag string, stacks bool, reply *nostr.Filter) error {
 	addr, hasAddr := events.Find(e.Tags, addrTag)
 	var eTag string
 	var hasE bool
@@ -752,12 +840,12 @@ func anchored(ctx context.Context, db store.T, catalogKey string, e *nostr.Event
 		if err != nil {
 			return fmt.Errorf("kind %d: '%s' tag must reference %s: %w", e.Kind, addrTag, anchorKinds(stacks), err)
 		}
-		if ref.Kind == events.KindApp {
+		if ref.Kind == events.KindApp && e.Kind != events.KindZap {
 			if appID, _ := events.Find(e.Tags, "i"); appID != ref.DTag {
 				return fmt.Errorf("kind %d: 'i' tag must be the app id %s", e.Kind, ref.DTag)
 			}
 		}
-		found, err := addressFound(ctx, db, catalogKey, ref)
+		found, err := addressFound(ctx, db, ref)
 		if err != nil {
 			slog.Error("NotAnchored: failed to check address", "error", err, "event", e.ID, "tag", addr)
 			return ErrInternal
@@ -790,15 +878,13 @@ func anchorKinds(stacks bool) string {
 }
 
 // addressFound reports whether an address tag points at a listing this relay keeps.
-// A kind 32267 coordinate matches when a listing for that app id exists and
-// the pubkey is the catalog key. Any other coordinate, including a kind 30267
-// stack, must name that event.
-func addressFound(ctx context.Context, db store.T, catalogKey string, ref events.AddressableRef) (bool, error) {
+// A kind 32267 coordinate matches when a listing for that app id exists,
+// whatever its pubkey: the catalog key, the earlier catalog key, a developer,
+// or another catalog. Any other coordinate, including a kind 30267 stack,
+// must name that event.
+func addressFound(ctx context.Context, db store.T, ref events.AddressableRef) (bool, error) {
 	if ref.Kind != events.KindApp {
 		return db.Has(ctx, ref.Filter())
-	}
-	if ref.Pubkey != catalogKey {
-		return false, nil
 	}
 	return db.Has(ctx, nostr.Filter{
 		Kinds: []int{events.KindApp},
@@ -806,10 +892,10 @@ func addressFound(ctx context.Context, db store.T, catalogKey string, ref events
 	})
 }
 
-// zapPaysProof rejects a kind 9735 on an app unless its p tag is the pubkey
-// of the active C1 proof. A stack zap has no proof payee. No current proof
-// means no recipient.
-func zapPaysProof(ctx context.Context, db store.T, catalogKey string, e *nostr.Event) error {
+// zapPaysKnownPubkey rejects a kind 9735 on an app unless its p tag is a
+// known pubkey for the app: the catalog key, the earlier catalog key, a
+// listing signer, or the active C1 owner. A stack zap is not checked.
+func zapPaysKnownPubkey(ctx context.Context, db store.T, catalogKey string, e *nostr.Event) error {
 	addr, ok := events.Find(e.Tags, "a")
 	if !ok {
 		return nil
@@ -819,14 +905,40 @@ func zapPaysProof(ctx context.Context, db store.T, catalogKey string, e *nostr.E
 		return nil
 	}
 	recipient, hasP := events.Find(e.Tags, "p")
-	owner, found, err := proofOwner(ctx, db, catalogKey, ref.DTag)
+	if !hasP {
+		return fmt.Errorf("kind %d: must have a 'p' tag", e.Kind)
+	}
+	known, err := knownPubkey(ctx, db, catalogKey, ref.DTag, strings.ToLower(recipient))
 	if err != nil {
 		return err
 	}
-	if !found || !hasP || !strings.EqualFold(recipient, owner) {
-		return fmt.Errorf("kind %d: 'p' tag must be the C1 proof pubkey", e.Kind)
+	if !known {
+		return fmt.Errorf("kind %d: 'p' tag must be a known pubkey for %s", e.Kind, ref.DTag)
 	}
 	return nil
+}
+
+func knownPubkey(ctx context.Context, db store.T, catalogKey, appID, pubkey string) (bool, error) {
+	if pubkey == catalogKey || pubkey == events.EarlierCatalogKey {
+		return true, nil
+	}
+	signed, err := db.Has(ctx, nostr.Filter{
+		Kinds:   []int{events.KindApp},
+		Authors: []string{pubkey},
+		Tags:    nostr.TagMap{"d": []string{appID}},
+	})
+	if err != nil {
+		slog.Error("NotAnchored: failed to check listing signer", "error", err, "app", appID)
+		return false, ErrInternal
+	}
+	if signed {
+		return true, nil
+	}
+	owner, found, err := proofOwner(ctx, db, catalogKey, appID)
+	if err != nil {
+		return false, err
+	}
+	return found && strings.EqualFold(pubkey, owner), nil
 }
 
 func proofOwner(ctx context.Context, db store.T, catalogKey, appID string) (string, bool, error) {

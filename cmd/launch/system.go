@@ -69,7 +69,7 @@ func takeBackup(t term, s site, p paths, window string) (string, error) {
 		return "", err
 	}
 	t.say("Backup done. Undo this window with: launch restore %s", dir)
-	t.say("Not in the backup: APKs on Bunny (safe while PRUNE_INTERVAL=0) and the")
+	t.say("Not in the backup: APKs on Bunny (safe while BLOSSOM_PRUNE_INTERVAL=0) and the")
 	t.say("indexer's zsp HTTP cache (<indexer user's cache dir>/zsp).")
 	return dir, nil
 }

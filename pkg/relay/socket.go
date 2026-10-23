@@ -5,11 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
-	"os"
-	"sync"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -27,47 +24,13 @@ func catalogKeyOnSocket(catalogKey string) func(rely.Client, *nostr.Event) error
 	}
 }
 
-// ListenNostr serves NIP-01 on a Unix socket. One JSON array per line.
+// ServeNostr serves NIP-01 on one relay.sock connection. One JSON array per line.
+// in reads the connection, including any bytes already buffered from it.
 // A write is stored only when the event pubkey is the relay's own.
-func (r *T) ListenNostr(ctx context.Context, path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove socket %s: %w", path, err)
-	}
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		return fmt.Errorf("listen %s: %w", path, err)
-	}
-	if err := os.Chmod(path, 0o660); err != nil {
-		ln.Close()
-		return err
-	}
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	go func() {
-		<-ctx.Done()
-		ln.Close()
-	}()
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				os.Remove(path)
-				return nil
-			}
-			return err
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.serveNostr(conn)
-		}()
-	}
-}
-
-func (r *T) serveNostr(conn net.Conn) {
+func (r *T) ServeNostr(conn net.Conn, in io.Reader) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
-	dec := json.NewDecoder(io.LimitReader(conn, r.config.MaxMessageBytes))
+	dec := json.NewDecoder(io.LimitReader(in, r.config.MaxMessageBytes))
 	w := bufio.NewWriter(conn)
 	for {
 		var msg []json.RawMessage
@@ -187,9 +150,12 @@ func writeNostr(w *bufio.Writer, args ...any) {
 	_ = w.Flush()
 }
 
+// SocketUID is the client id of a relay.sock connection. It skips IP rate limits.
+const SocketUID = "relay.sock"
+
 type socketClient struct{}
 
-func (socketClient) UID() string                        { return "nostr.sock" }
+func (socketClient) UID() string                        { return SocketUID }
 func (socketClient) IP() rely.IP                        { return rely.IP{} }
 func (socketClient) Pubkeys() []string                  { return nil }
 func (socketClient) IsAuthed() bool                     { return false }

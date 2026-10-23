@@ -21,6 +21,10 @@ const (
 	KindZap       = 9735
 )
 
+// EarlierCatalogKey signed the catalog before the rotation. Comments, zaps,
+// and stacks written then still name it.
+const EarlierCatalogKey = "78ce6faa72264387284e647ba6938995735ec8c7d5c5a65737e55130f026307d"
+
 // WithValidation is a list of event kinds that have validation functions.
 var WithValidation = []int{
 	KindApp,

@@ -1,13 +1,13 @@
 // Package control serves relay.sock, the only write path into the relay
 // from another process. A read needs only access to the socket file. A write
 // needs the relay's own Unix user, or an admin's signed command event.
+// A connection that opens with '[' speaks NIP-01 instead of a command.
 package control
 
 import (
 	"bufio"
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +57,6 @@ type EnrichFunc func(ctx context.Context, appID string) (string, error)
 // Server answers relay.sock. Set the fields, then call Listen.
 type Server struct {
 	Store  *policy.Store
-	DB     *sql.DB // relay.db; holds admin_log
 	Ban    policy.BanFunc
 	Seal   SealFunc
 	Enrich EnrichFunc
@@ -69,15 +68,22 @@ type Server struct {
 	Admins []string
 	// ReadOnly refuses changes to the blacklist and the whitelist.
 	ReadOnly bool
+	// Nostr serves a connection that opens with '[': NIP-01, not a command.
+	// in holds the bytes already read. Nil refuses such connections.
+	Nostr func(conn net.Conn, in io.Reader)
 
 	jobs runner
 }
 
+// entry is one authorized write. pubkey is empty for the relay's own user.
+type entry struct {
+	pubkey string
+	op     string
+	args   args
+}
+
 // Listen serves one JSON command per connection until ctx ends.
 func (s *Server) Listen(ctx context.Context, path string) error {
-	if err := openLog(s.DB); err != nil {
-		return fmt.Errorf("admin_log schema: %w", err)
-	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove socket %s: %w", path, err)
 	}
@@ -107,8 +113,20 @@ func (s *Server) Listen(ctx context.Context, path string) error {
 			}
 			return err
 		}
-		wg.Go(func() { s.serveConn(conn) })
+		wg.Go(func() { s.route(conn) })
 	}
+}
+
+// route sends a connection that opens with '[' to Nostr, and any other to serveConn.
+func (s *Server) route(conn net.Conn) {
+	_ = conn.SetDeadline(time.Now().Add(connTimeout))
+	in := bufio.NewReader(conn)
+	first, err := in.Peek(1)
+	if err == nil && first[0] == '[' && s.Nostr != nil {
+		s.Nostr(conn, in)
+		return
+	}
+	s.serveConn(conn, in)
 }
 
 type request struct {
@@ -154,10 +172,9 @@ func refused(err error) response {
 	return response{Error: err.Error()}
 }
 
-func (s *Server) serveConn(conn net.Conn) {
+func (s *Server) serveConn(conn net.Conn, in io.Reader) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(connTimeout))
-	reader := bufio.NewReader(io.LimitReader(conn, 1<<20))
+	reader := bufio.NewReader(io.LimitReader(in, 1<<20))
 	line, err := reader.ReadBytes('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		writeResp(conn, response{Error: "read failed"})
@@ -208,7 +225,7 @@ func (s *Server) handle(conn net.Conn, req request) response {
 		if given := req.args(); (req.Op != "" && req.Op != op) || (len(given) > 0 && !sameArgs(given, a)) {
 			return response{Error: "the command does not match the signed event"}
 		}
-		e = entry{pubkey: req.Event.PubKey, op: op, args: a, eventID: req.Event.ID}
+		e = entry{pubkey: req.Event.PubKey, op: op, args: a}
 	} else {
 		if _, ok := writeOps[req.Op]; !ok {
 			return response{Error: "unknown op"}
@@ -231,16 +248,7 @@ func (s *Server) handle(conn net.Conn, req request) response {
 		return response{Error: "relay is read-only"}
 	}
 
-	e.at = time.Now().Unix()
-	row, err := reserve(ctx, s.DB, e)
-	if err != nil {
-		slog.Warn("control: write refused", "op", e.op, "pubkey", e.pubkey, "error", err)
-		return refused(err)
-	}
 	resp, cmdErr := s.run(ctx, e)
-	if err := settle(s.DB, row, cmdErr); err != nil {
-		slog.Error("control: admin_log", "error", err)
-	}
 	slog.Info("control: write", "op", e.op, "args", e.args, "pubkey", e.pubkey, "error", cmdErr)
 	if cmdErr != nil {
 		return refused(cmdErr)

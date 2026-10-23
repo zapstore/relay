@@ -13,8 +13,8 @@ import (
 )
 
 // Live tests (Test*Live) need Bunny credentials in the environment:
-// BUNNY_STORAGE_ZONE_NAME, BUNNY_STORAGE_ZONE_HOSTNAME,
-// BUNNY_STORAGE_ZONE_PASSWORD, BUNNY_CDN_HOSTNAME.
+// BLOSSOM_BUNNY_ZONE, BLOSSOM_BUNNY_ZONE_HOSTNAME,
+// BLOSSOM_BUNNY_PASSWORD, BLOSSOM_BUNNY_CDN_HOSTNAME.
 // They skip when those are unset. Validation tests run without Bunny.
 
 var (

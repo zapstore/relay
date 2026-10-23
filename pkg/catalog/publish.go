@@ -22,6 +22,11 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 	if err := os.MkdirAll(BundleDir(data), 0o755); err != nil {
 		return 0, err
 	}
+	unlock, err := lockSeal(data)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	latest, err := LatestSnap(data)
 	if err != nil {
 		return 0, err
@@ -61,7 +66,7 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 		return 0, err
 	}
 	snap := SnapPath(data, nextN)
-	if err := WriteSnap(snap, next.Events()); err != nil {
+	if err := WriteSnap(snap, next.Events(), next.Notices); err != nil {
 		return 0, err
 	}
 	at := time.Unix(bundledAt, 0)
@@ -78,7 +83,8 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 }
 
 // EnsureBundle returns the cached from→to bundle, building it from the two snapshots when absent.
-// notices returns the operator text for removed apps and is read only for a build. Nil means none.
+// The ban lines are the notices snapshot to was written with. notices is read only for
+// a snapshot written before snapshots carried them. Nil means none.
 func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signer, notices func(context.Context) (map[string]string, error)) ([]byte, error) {
 	path := BundlePath(data, from, to)
 	if raw, err := os.ReadFile(path); err == nil {
@@ -102,7 +108,7 @@ func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signe
 	if err != nil {
 		return nil, err
 	}
-	if notices != nil {
+	if next.Notices == nil && notices != nil {
 		if next.Notices, err = notices(ctx); err != nil {
 			return nil, fmt.Errorf("ban notices: %w", err)
 		}

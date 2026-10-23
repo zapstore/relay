@@ -83,6 +83,28 @@ func TestBuildPlanMissingAsset(t *testing.T) {
 	}
 }
 
+func TestDropUnserved(t *testing.T) {
+	served := oldListing("com.example.served", 0)
+	missing := oldListing("com.example.missing", 1)
+	missing[2].Tags[1] = nostr.Tag{"x", strings.Repeat("cd", 32)}
+	p, err := buildPlan(append(served, missing...), noLineage, time.Unix(1000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.dropUnserved(func(hash string) (bool, error) { return hash == strings.Repeat("ab", 32), nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.appIDs(); !slices.Equal(got, []string{"com.example.served"}) {
+		t.Errorf("re-signed apps = %v, want [com.example.served]", got)
+	}
+	if !slices.Equal(p.Dropped, []string{"com.example.missing"}) {
+		t.Errorf("dropped = %v", p.Dropped)
+	}
+	if !slices.Contains(p.Delete, missing[2].ID) {
+		t.Error("plan keeps the unserved asset")
+	}
+}
+
 func TestResign(t *testing.T) {
 	p, err := buildPlan(oldListing("com.example.app", 0), func(string, string) ([]string, error) {
 		return []string{"old1", "old2"}, nil

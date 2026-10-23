@@ -14,11 +14,7 @@ func TestRecordBundleFlushesOnClose(t *testing.T) {
 		t.Fatalf("NewDB: %v", err)
 	}
 	cfg := NewConfig()
-	cfg.GeoEnabled = false
-	engine, err := NewEngine(cfg, db, nil)
-	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
-	}
+	engine := NewEngine(cfg, db)
 	engine.RecordBundle(2, 5, 200, "v1", "2.0.1")
 	engine.RecordBundle(2, 5, 200, "v1", "2.0.1")
 	engine.Close()

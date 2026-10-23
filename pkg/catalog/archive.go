@@ -29,21 +29,42 @@ type member struct {
 	Data []byte
 }
 
-func WriteSnap(path string, events []nostr.Event) error {
+// WriteSnap writes the event set and the ban notices in force at this epoch,
+// so a bundle built from it later carries the same ban lines.
+func WriteSnap(path string, events []nostr.Event, notices map[string]string) error {
 	raw, err := marshalEvents(events)
 	if err != nil {
 		return err
 	}
-	body, err := packUnsigned([]member{{Name: "events.jsonl", Data: raw}})
+	if notices == nil {
+		notices = map[string]string{}
+	}
+	notes, err := json.Marshal(notices)
+	if err != nil {
+		return err
+	}
+	body, err := packUnsigned([]member{
+		{Name: "events.jsonl", Data: raw},
+		{Name: "notices.json", Data: notes},
+	})
 	if err != nil {
 		return err
 	}
 	return writeAtomic(path, body)
 }
 
-// ReadSnap resolves a snapshot at the time it was written.
+// ReadSnap resolves a snapshot at the time it was written. Notices is nil
+// for a snapshot written before snapshots carried them.
 func ReadSnap(path string) (State, error) {
-	events, err := ReadSnapEvents(path)
+	members, err := unpack(path)
+	if err != nil {
+		return State{}, err
+	}
+	raw, ok := members["events.jsonl"]
+	if !ok {
+		return State{}, fmt.Errorf("%s: missing events.jsonl", path)
+	}
+	events, err := unmarshalEvents(raw)
 	if err != nil {
 		return State{}, err
 	}
@@ -51,7 +72,14 @@ func ReadSnap(path string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	return ResolveAt(events, "", at), nil
+	st := ResolveAt(events, "", at)
+	if notes, ok := members["notices.json"]; ok {
+		st.Notices = map[string]string{}
+		if err := json.Unmarshal(notes, &st.Notices); err != nil {
+			return State{}, fmt.Errorf("%s: notices.json: %w", path, err)
+		}
+	}
+	return st, nil
 }
 
 // snapTime is when the snapshot was written. CreateBundle sets it to the epoch time.

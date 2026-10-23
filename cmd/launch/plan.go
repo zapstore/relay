@@ -136,6 +136,34 @@ func buildPlan(old []nostr.Event, lineage lineageFunc, at time.Time) (plan, erro
 	return p, nil
 }
 
+// dropUnserved drops the listings with an asset whose file is not in Blossom.
+// The relay would hold such a listing pending, not store it.
+func (p *plan) dropUnserved(has func(hash string) (bool, error)) error {
+	kept := p.Listings[:0]
+	for _, l := range p.Listings {
+		served := true
+		for _, a := range l.Assets {
+			x, _ := events.Find(a.Tags, "x")
+			ok, err := has(x)
+			if err != nil {
+				return fmt.Errorf("%s: asset %s: %w", l.AppID, a.ID, err)
+			}
+			if !ok {
+				served = false
+				break
+			}
+		}
+		if served {
+			kept = append(kept, l)
+		} else {
+			p.Dropped = append(p.Dropped, l.AppID)
+		}
+	}
+	p.Listings = kept
+	slices.Sort(p.Dropped)
+	return nil
+}
+
 // eventAppID is the app id of a listing event: d on an app, else i, else the release d before @.
 func eventAppID(e nostr.Event) string {
 	if e.Kind == events.KindApp {

@@ -62,8 +62,8 @@ func rotate(ctx context.Context, t term) error {
 	newKey, signer, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{},
 		"RELAY_PUBKEY=<the new key>",
 		"SIGN_WITH=<the new key's bunker URL>",
-		"BUNDLE_INTERVAL=0",
-		"PRUNE_INTERVAL=0",
+		"CATALOG_BUNDLE_INTERVAL=0",
+		"BLOSSOM_PRUNE_INTERVAL=0",
 	)
 	if err != nil {
 		return err
@@ -85,7 +85,7 @@ func rotate(ctx context.Context, t term) error {
 	if err != nil {
 		return err
 	}
-	sock := &nostrSocket{path: p.socket()}
+	sock := &nostrSocket{path: p.RelaySocket}
 	defer sock.Close()
 	rep, err := publishAll(ctx, t, sock, evs, false)
 	rep.print(t)
@@ -97,8 +97,8 @@ func rotate(ctx context.Context, t term) error {
 	}
 
 	if _, _, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{key: newKey, intervals: true},
-		"BUNDLE_INTERVAL back on (for example 5m), or remove the line",
-		"PRUNE_INTERVAL back on (for example 24h), or remove the line",
+		"CATALOG_BUNDLE_INTERVAL back on (for example 5m), or remove the line",
+		"BLOSSOM_PRUNE_INTERVAL back on (for example 24h), or remove the line",
 	); err != nil {
 		return err
 	}
@@ -123,8 +123,8 @@ func rotate(ctx context.Context, t term) error {
 	t.say("  - does not ask the relay what is published. The relay's version guard,")
 	t.say("    on the version codes the re-sign kept, is what blocks a downgrade.")
 	if len(pl.Dropped) > 0 {
-		t.say("  - will not bring back the %d dropped apps (in %s) until their source", len(pl.Dropped), filepath.Join(backup, planFile))
-		t.say("    changes or a fetch fails. Recheck the ones you want sooner.")
+		t.say("  - will not bring back the %d dropped apps until their source changes", len(pl.Dropped))
+		t.say("    or a fetch fails. Run the indexer on the ids in %s.", filepath.Join(backup, droppedFile))
 	}
 	return nil
 }
@@ -159,7 +159,25 @@ func prepare(ctx context.Context, t term, relayData, indexerDB, dir string) (pla
 			pl.Delete = append(pl.Delete, e.ID)
 		}
 	}
+	blobs, err := openDB(ctx, filepath.Join(relayData, "blossom.db"), false)
+	if err != nil {
+		return plan{}, err
+	}
+	defer blobs.Close()
+	before := len(pl.Dropped)
+	err = pl.dropUnserved(func(hash string) (bool, error) {
+		var ok bool
+		err := blobs.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?)`, hash).Scan(&ok)
+		return ok, err
+	})
+	if err != nil {
+		return plan{}, err
+	}
+	unserved := len(pl.Dropped) - before
 	if err := writeJSON(filepath.Join(dir, planFile), pl); err != nil {
+		return plan{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, droppedFile), []byte(strings.Join(pl.Dropped, "\n")+"\n"), 0o644); err != nil {
 		return plan{}, err
 	}
 	assets := 0
@@ -169,7 +187,7 @@ func prepare(ctx context.Context, t term, relayData, indexerDB, dir string) (pla
 	t.say("78ce… signed %d events. Plan written to %s:", len(old), filepath.Join(dir, planFile))
 	t.say("  re-sign %d apps (%d assets), %d public stacks, a kind 0, and a kind 10067", len(pl.Listings), assets, len(pl.Stacks))
 	t.say("  keep %d apps under 78ce…: %v", len(pl.Kept), pl.Kept)
-	t.say("  drop %d apps with no complete listing or a 78ce… kind 5: %v", len(pl.Dropped), pl.Dropped[:min(len(pl.Dropped), 30)])
+	t.say("  drop %d apps (no complete listing, a 78ce… kind 5, or for %d an asset not in Blossom), listed in %s: %v", len(pl.Dropped), unserved, filepath.Join(dir, droppedFile), pl.Dropped[:min(len(pl.Dropped), 30)])
 	t.say("  delete %d events (older releases and assets are in the backup only)", len(pl.Delete))
 	return pl, nil
 }
@@ -196,7 +214,10 @@ func clearOld(ctx context.Context, t term, relayData string, pl plan) error {
 	return nil
 }
 
-const planFile = "plan.json"
+const (
+	planFile    = "plan.json"
+	droppedFile = "dropped.txt"
+)
 
 // editIndexerEnv waits until the indexer's SIGN_WITH signs as newKey.
 func editIndexerEnv(ctx context.Context, t term, envFile, newKey string) error {
@@ -261,7 +282,7 @@ func dryRun(ctx context.Context, t term, backup, relayBin string) error {
 	if err != nil {
 		return err
 	}
-	sock := &nostrSocket{path: filepath.Join(data, "nostr.sock")}
+	sock := &nostrSocket{path: filepath.Join(data, "relay.sock")}
 	defer sock.Close()
 	rep, err := publishAll(ctx, t, sock, evs, true)
 	rep.print(t)
@@ -287,12 +308,12 @@ func dryRunEnv(envFile, dir, pubkey, sk string) ([]string, string, error) {
 		return nil, "", err
 	}
 	for _, name := range []string{
-		"BUNNY_CDN_HOSTNAME", "BUNNY_STORAGE_ZONE_NAME", "BUNNY_STORAGE_ZONE_HOSTNAME", "BUNNY_STORAGE_ZONE_PASSWORD",
-		"VERTEX_SECRET_KEY", "ANALYTICS_API_ADDRESS", "READ_ONLY",
+		"BLOSSOM_BUNNY_CDN_HOSTNAME", "BLOSSOM_BUNNY_ZONE", "BLOSSOM_BUNNY_ZONE_HOSTNAME", "BLOSSOM_BUNNY_PASSWORD",
+		"VERTEX_SECRET_KEY", "ANALYTICS_ADDRESS", "READ_ONLY",
 	} {
 		delete(env, name)
 	}
-	ports := make([]string, 3)
+	ports := make([]string, 2)
 	for i := range ports {
 		addr, err := freeAddr()
 		if err != nil {
@@ -300,16 +321,16 @@ func dryRunEnv(envFile, dir, pubkey, sk string) ([]string, string, error) {
 		}
 		ports[i] = addr
 	}
+	data := filepath.Join(dir, "data")
 	maps.Copy(env, map[string]string{
-		"SYSTEM_DIRECTORY_PATH": dir,
-		"RELAY_PUBKEY":          pubkey,
-		"SIGN_WITH":             sk,
-		"BUNDLE_INTERVAL":       "0",
-		"PRUNE_INTERVAL":        "0",
-		"RELAY_ADDRESS":         ports[0],
-		"BLOSSOM_ADDRESS":       ports[1],
-		"DASHBOARD_ADDRESS":     ports[2],
-		"RELAY_SOCKET":          filepath.Join(dir, "data", "relay.sock"),
+		"DATA_DIR":                data,
+		"RELAY_PUBKEY":            pubkey,
+		"SIGN_WITH":               sk,
+		"CATALOG_BUNDLE_INTERVAL": "0",
+		"BLOSSOM_PRUNE_INTERVAL":  "0",
+		"RELAY_ADDRESS":           ports[0],
+		"BLOSSOM_ADDRESS":         ports[1],
+		"RELAY_SOCKET_PATH":       filepath.Join(data, "relay.sock"),
 	})
 	out := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir}
 	for _, k := range slices.Sorted(maps.Keys(env)) {

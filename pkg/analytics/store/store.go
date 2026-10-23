@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -26,7 +27,7 @@ func New(path string) (*T, error) {
 		return nil, fmt.Errorf("failed to connect to sqlite3 at %s: %w", path, err)
 	}
 
-	if _, err := db.Exec(schema); err != nil {
+	if err := applySchema(db); err != nil {
 		return nil, fmt.Errorf("failed to apply base schema: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
@@ -42,6 +43,32 @@ func New(path string) (*T, error) {
 		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
 	return &T{db: db, path: path}, nil
+}
+
+// applySchema creates the tables and drops the ones an older database had:
+// impressions, blossom totals, and per-app downloads.
+func applySchema(db *sql.DB) error {
+	_, err := db.Exec(schema + `
+		DROP TABLE IF EXISTS app_impressions;
+		DROP TABLE IF EXISTS blossom_metrics;
+		DROP TABLE IF EXISTS app_downloads;
+	`)
+	return err
+}
+
+// Today returns the current day formatted as "YYYY-MM-DD".
+func Today() string {
+	return time.Now().UTC().Format("2006-01-02")
+}
+
+// normalizeDay truncates the day string to 10 characters if it exceeds that length.
+// This is done because Sqlite returns the day as a string with the time included,
+// e.g. "2023-01-01 12:00:00".
+func normalizeDay(day string) string {
+	if len(day) > 10 {
+		return day[:10]
+	}
+	return day
 }
 
 // Close closes the underlying database connection.

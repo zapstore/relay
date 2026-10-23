@@ -29,10 +29,7 @@ func TestWrongMethodIs405(t *testing.T) {
 	ws := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	})
-	mux := routes(
-		catalog.Handler{Data: t.TempDir()},
-		ws,
-	)
+	mux := routes(catalog.Handler{Data: t.TempDir()}, ws)
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/v1/bundle"},
 		{http.MethodPost, "/v2/bundle"},
@@ -47,6 +44,11 @@ func TestWrongMethodIs405(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/bundle?from=0", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("GET /v2/bundle = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/search?q=x", nil))
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("GET /v1/search = %d, want the WebSocket handler", rec.Code)
 	}
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/bundle", nil))

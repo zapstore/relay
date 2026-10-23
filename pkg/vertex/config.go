@@ -29,7 +29,7 @@ type Config struct {
 	CreditsLogThreshold int64 `env:"VERTEX_CREDITS_LOG_THRESHOLD"`
 
 	// CacheExpiration time for ranks in the cache. Default is 24 hours.
-	CacheExpiration time.Duration `env:"VERTEX_CACHE_EXPIRATION"`
+	CacheExpiration time.Duration `env:"VERTEX_CACHE_TTL"`
 
 	// CacheSize is the maximum number of entries in the cache. Default is 100_000.
 	CacheSize int `env:"VERTEX_CACHE_SIZE"`

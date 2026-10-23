@@ -12,7 +12,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-// The relay closes a nostr.sock connection after 30 seconds, and reads at most
+// The relay closes a NIP-01 relay.sock connection after 30 seconds, and reads at most
 // RELAY_MAX_MESSAGE_BYTES (default 500000) from one connection in total.
 // Reconnect well before either.
 const (
@@ -20,7 +20,7 @@ const (
 	socketBytes = 200_000
 )
 
-// nostrSocket is a NIP-01 client on the relay's nostr.sock.
+// nostrSocket is a NIP-01 client on relay.sock.
 type nostrSocket struct {
 	path   string
 	conn   net.Conn

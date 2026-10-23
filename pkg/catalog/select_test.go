@@ -42,3 +42,38 @@ func TestSelectListingKeepsVariantAsset(t *testing.T) {
 		t.Fatalf("assets %v", listing.Assets)
 	}
 }
+
+func TestDeveloperListingNeedsTheAppCertificate(t *testing.T) {
+	catalogKey := strings.Repeat("11", 32)
+	developer := strings.Repeat("22", 32)
+	oldCert := strings.Repeat("aa", 32)
+	newCert := strings.Repeat("bb", 32)
+	listing := func(pub string, code string, certTags ...nostr.Tag) Listing {
+		tags := nostr.Tags{{"version_code", code}}
+		tags = append(tags, certTags...)
+		return Listing{
+			AppID:  "com.example.app",
+			App:    nostr.Event{ID: pub, PubKey: pub},
+			Assets: []nostr.Event{{Kind: events.KindAsset, Tags: tags}},
+		}
+	}
+	indexer := listing(catalogKey, "5", nostr.Tag{"apk_certificate_hash", newCert})
+
+	stale := listing(developer, "9", nostr.Tag{"apk_certificate_hash", oldCert})
+	if got, _ := chooseListing([]Listing{indexer, stale}, catalogKey); got.App.PubKey != catalogKey {
+		t.Fatal("a developer listing on a certificate the app left was selected")
+	}
+	successor := listing(developer, "9",
+		nostr.Tag{"apk_certificate_hash", strings.Repeat("cc", 32)},
+		nostr.Tag{"apk_certificate_ancestor", newCert})
+	if got, _ := chooseListing([]Listing{indexer, successor}, catalogKey); got.App.PubKey != developer {
+		t.Fatal("a developer listing whose lineage names the app certificate was dropped")
+	}
+	same := listing(developer, "5", nostr.Tag{"apk_certificate_hash", newCert})
+	if got, _ := chooseListing([]Listing{indexer, same}, catalogKey); got.App.PubKey != developer {
+		t.Fatal("the developer slot loses a tie")
+	}
+	if got, ok := chooseListing([]Listing{stale}, catalogKey); !ok || got.App.PubKey != developer {
+		t.Fatal("a developer-only app pins its own certificate")
+	}
+}

@@ -22,6 +22,37 @@ CREATE TABLE IF NOT EXISTS pending_events (
 CREATE INDEX IF NOT EXISTS idx_pending_events_kind        ON pending_events(kind);
 CREATE INDEX IF NOT EXISTS idx_pending_events_received_at ON pending_events(received_at);
 
+-- Listing selection: for each app id with a kind 32267, the kind 30063 of the
+-- listing catalog selection picks, or NULL when none is complete. Its signer
+-- holds the slot. Only the relay writes rows, in reselect, which fills every
+-- app with no row.
+CREATE TABLE IF NOT EXISTS listings (
+    app_id     TEXT PRIMARY KEY,
+    release_id TEXT
+);
+
+-- Any write of an app's kind 32267, 30063, or 3063 clears its row, whoever
+-- the writer. The app id is the first d on kind 32267, the first i otherwise.
+CREATE TRIGGER IF NOT EXISTS listings_ai AFTER INSERT ON events
+WHEN NEW.kind IN (32267, 30063, 3063)
+BEGIN
+	DELETE FROM listings WHERE app_id = (
+		SELECT json_extract(value, '$[1]') FROM json_each(NEW.tags)
+		WHERE json_type(value) = 'array' AND json_array_length(value) > 1
+			AND json_extract(value, '$[0]') = CASE NEW.kind WHEN 32267 THEN 'd' ELSE 'i' END
+		LIMIT 1);
+END;
+
+CREATE TRIGGER IF NOT EXISTS listings_ad AFTER DELETE ON events
+WHEN OLD.kind IN (32267, 30063, 3063)
+BEGIN
+	DELETE FROM listings WHERE app_id = (
+		SELECT json_extract(value, '$[1]') FROM json_each(OLD.tags)
+		WHERE json_type(value) = 'array' AND json_array_length(value) > 1
+			AND json_extract(value, '$[0]') = CASE OLD.kind WHEN 32267 THEN 'd' ELSE 'i' END
+		LIMIT 1);
+END;
+
 DROP TABLE IF EXISTS read_certificate;
 DROP TABLE IF EXISTS apk_signing;
 DROP TABLE IF EXISTS app_certificate;

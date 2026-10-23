@@ -9,14 +9,22 @@ CGO_ENABLED ?= 1
 GOFLAGS := -trimpath
 TAGS ?=
 LDFLAGS := -s -w
-VERSION := $(shell git describe --exact-match --tags HEAD 2>/dev/null)
+
+# Stamp config.Version only when HEAD is exactly a git tag.
+VERSION := $(shell git describe --tags --exact-match HEAD 2>/dev/null)
 ifneq ($(VERSION),)
 LDFLAGS += -X github.com/zapstore/relay/pkg/config.Version=$(VERSION)
 endif
 
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
+# Zig's final link keeps the debug sections -s -w drops from the Go link.
+# Darwin's ld warns that -s is obsolete, and -s -w is enough there.
+ifneq ($(GOOS),darwin)
+LDFLAGS += -extldflags=-s
+endif
 BIN := dist/$(NAME)-$(GOOS)-$(GOARCH)
+LOCALBIN := $(HOME)/.local/bin
 
 comma := ,
 ifeq ($(GOOS),darwin)
@@ -27,13 +35,20 @@ CGO_LDFLAGS := $(filter-out -Wl$(comma)-no_warn_duplicate_libraries,$(CGO_LDFLAG
 endif
 export CGO_LDFLAGS
 
-.PHONY: bin darwin-arm64 linux-arm64 linux-amd64 clean
+.PHONY: all bin darwin-arm64 linux-arm64 linux-amd64 clean
+
+all: bin
+	ln -sfn $(BIN) $(NAME)
+	@if [ -d "$(LOCALBIN)" ]; then \
+		ln -sfn "$(CURDIR)/$(BIN)" "$(LOCALBIN)/$(NAME)" || exit 1; \
+		echo "linked $(LOCALBIN)/$(NAME)"; \
+	fi
 
 bin:
 	mkdir -p dist
 	rm -rf $(BIN)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) \
-		go build $(GOFLAGS) $(if $(TAGS),-tags $(TAGS)) -ldflags '$(LDFLAGS)' \
+		go build $(GOFLAGS)$(if $(TAGS), -tags $(TAGS)) -ldflags '$(LDFLAGS)' \
 		-o $(BIN) $(CMD)
 
 darwin-arm64:
@@ -51,3 +66,8 @@ linux-amd64:
 
 clean:
 	rm -rf dist
+	rm -f $(NAME)
+	@l="$(LOCALBIN)/$(NAME)"; \
+	if [ -L "$$l" ]; then \
+		case "$$(readlink "$$l")" in "$(CURDIR)/dist/"*) rm -f "$$l";; esac; \
+	fi

@@ -65,7 +65,7 @@ func newHarness(t *testing.T, readOnly bool) *harness {
 	}
 	adminPub, _ := nostr.GetPublicKey(h.admin)
 	s := &Server{
-		Store: store, DB: db, Data: dir, Relay: relayKey, Admins: []string{adminPub}, ReadOnly: readOnly,
+		Store: store, Data: dir, Relay: relayKey, Admins: []string{adminPub}, ReadOnly: readOnly,
 		Ban: func(_ context.Context, pub policy.Publisher, reason string) error {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -178,11 +178,6 @@ func TestOperatorCommands(t *testing.T) {
 	if resp := h.call(t, map[string]string{"op": "disallow", "id": key}); !resp.OK {
 		t.Fatalf("disallow %+v", resp)
 	}
-
-	var n int
-	if err := h.db.QueryRow(`SELECT count(*) FROM admin_log WHERE pubkey = '' AND ok = 1`).Scan(&n); err != nil || n != 3 {
-		t.Fatalf("admin_log rows %d %v", n, err)
-	}
 }
 
 func TestUnsignedWriteFromAnotherUserIsRefused(t *testing.T) {
@@ -212,9 +207,6 @@ func TestSignedCommands(t *testing.T) {
 	}
 	if ok, _ := h.store.Allowed(context.Background(), key); !ok {
 		t.Fatal("key not allowed")
-	}
-	if resp := h.call(t, cmd); resp.OK || resp.Error != errReplay.Error() {
-		t.Fatalf("replay %+v", resp)
 	}
 
 	stranger := nostr.GeneratePrivateKey()

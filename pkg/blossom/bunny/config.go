@@ -12,22 +12,22 @@ type Config struct {
 	StorageZone StorageZone
 
 	// The hostname of the CDN (e.g. "zapstore.b-cdn.net"). It must not include the scheme.
-	CDN string `env:"BUNNY_CDN_HOSTNAME"`
+	CDN string `env:"BLOSSOM_BUNNY_CDN_HOSTNAME"`
 
 	// The hard ceiling for requests to Bunny. Default is 20 minutes.
-	RequestTimeout time.Duration `env:"BUNNY_REQUEST_TIMEOUT"`
+	RequestTimeout time.Duration `env:"BLOSSOM_BUNNY_REQUEST_TIMEOUT"`
 }
 
 type StorageZone struct {
 	// The username of the storage zone (e.g. "your-username").
-	Name string `env:"BUNNY_STORAGE_ZONE_NAME"`
+	Name string `env:"BLOSSOM_BUNNY_ZONE"`
 
 	// The hostname of the primary region of the storage zone (e.g. "storage.bunnycdn.com").
 	// It must not include the scheme.
-	Hostname string `env:"BUNNY_STORAGE_ZONE_HOSTNAME"`
+	Hostname string `env:"BLOSSOM_BUNNY_ZONE_HOSTNAME"`
 
 	// The password of the storage zone (e.g. "your-password").
-	Password string `env:"BUNNY_STORAGE_ZONE_PASSWORD"`
+	Password string `env:"BLOSSOM_BUNNY_PASSWORD"`
 }
 
 func NewConfig() Config {

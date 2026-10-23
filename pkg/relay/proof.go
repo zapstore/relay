@@ -58,17 +58,76 @@ func (r *T) holdProof(ctx context.Context, event *nostr.Event) persistResult {
 }
 
 // storeRevocation stores a revocation on arrival. It needs only the Nostr
-// signature. Older pending proofs from that pubkey for that certificate are dropped.
+// signature. Older pending proofs from that pubkey for that certificate are
+// dropped. When it replaces the stored proof, the listings that proof let
+// the owner and its delegate publish for that certificate are removed:
+// selection does not read proofs, so a revoked key would otherwise keep its
+// slot.
 func (r *T) storeRevocation(ctx context.Context, event *nostr.Event) error {
+	cert, _ := events.Find(event.Tags, "d")
+	publishers := []string{event.PubKey}
+	previous, err := r.store.Query(ctx, nostr.Filter{
+		Kinds:   []int{events.KindIdentityProof},
+		Authors: []string{event.PubKey},
+		Tags:    nostr.TagMap{"d": []string{cert}},
+		Limit:   1,
+	})
+	if err != nil {
+		return err
+	}
+	if len(previous) > 0 {
+		publishers = proofPublishers(previous[0])
+	}
 	if _, err := r.store.Replace(ctx, event); err != nil {
 		return err
 	}
-	cert, _ := events.Find(event.Tags, "d")
-	_, err := r.dropPending(ctx, func(other nostr.Event) bool {
+	if _, err := r.dropPending(ctx, func(other nostr.Event) bool {
 		d, _ := events.Find(other.Tags, "d")
 		return other.Kind == events.KindIdentityProof && other.PubKey == event.PubKey && d == cert && !newerEvent(other, *event)
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+	current, err := r.store.Has(ctx, nostr.Filter{IDs: []string{event.ID}})
+	if err != nil || !current {
+		return err
+	}
+	return r.dropRevokedListings(ctx, cert, publishers)
+}
+
+// dropRevokedListings deletes the listings publishers signed for every app
+// whose certificate is cert. The catalog key's listing stays.
+func (r *T) dropRevokedListings(ctx context.Context, cert string, publishers []string) error {
+	assets, err := r.listedAssets(ctx, cert)
+	if err != nil {
+		return err
+	}
+	var apps []string
+	for _, asset := range assets {
+		if appID, ok := events.Find(asset.Tags, "i"); ok && appID != "" && !slices.Contains(apps, appID) {
+			apps = append(apps, appID)
+		}
+	}
+	var ids []string
+	for _, appID := range apps {
+		for _, pub := range publishers {
+			if pub == r.config.Info.Pubkey {
+				continue
+			}
+			found, err := eventsByApp(ctx, r.store, pub, appID)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, found...)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := r.store.Delete(ctx, nostr.Filter{IDs: ids}); err != nil {
+		return err
+	}
+	slog.Info("relay: revocation removed developer listings", "certificate", cert, "apps", apps, "events", len(ids))
+	return nil
 }
 
 // proofHasAPK reports whether a proof has an APK to be checked against: an
@@ -104,7 +163,7 @@ func (r *T) promoteClaim(ctx context.Context, proof nostr.Event, skipBroadcast s
 	}
 	for i := range assets {
 		x, _ := events.Find(assets[i].Tags, "x")
-		chain, readErr, ok := r.apkSigning(x, assetURL(assets[i].Tags))
+		chain, readErr, ok := r.apkSigning(x, r.assetURL(assets[i].Tags))
 		if !ok || readErr != "" {
 			continue
 		}

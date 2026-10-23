@@ -56,7 +56,28 @@ func Open(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("policy schema: %w", err)
 	}
+	if err := migrateNoticePublisher(db); err != nil {
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrateNoticePublisher adds the publisher a ban line came from, so lifting
+// that ban drops it. A line written before this has an empty publisher.
+func migrateNoticePublisher(db *sql.DB) error {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('ban_notices') WHERE name = 'kind'`).Scan(&n); err != nil {
+		return fmt.Errorf("policy schema: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	for _, column := range []string{"kind", "id"} {
+		if _, err := db.Exec(`ALTER TABLE ban_notices ADD COLUMN ` + column + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("policy schema: ban_notices.%s: %w", column, err)
+		}
+	}
+	return nil
 }
 
 // Normalize checks a publisher id.
@@ -166,9 +187,9 @@ func (s *Store) RecordBan(ctx context.Context, pub Publisher, reason string, has
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO ban_notices (app_id, reason) VALUES (?, ?)
-			ON CONFLICT (app_id) DO UPDATE SET reason = excluded.reason
-		`, appID, reason); err != nil {
+			INSERT INTO ban_notices (app_id, reason, kind, id) VALUES (?, ?, ?, ?)
+			ON CONFLICT (app_id) DO UPDATE SET reason = excluded.reason, kind = excluded.kind, id = excluded.id
+		`, appID, reason, pub.Kind, pub.ID); err != nil {
 			return err
 		}
 	}
@@ -225,15 +246,26 @@ func (s *Store) Publishers(ctx context.Context) ([]Entry, error) {
 	return out, rows.Err()
 }
 
-// RemovePublisher drops one publisher from the blacklist.
+// RemovePublisher drops one publisher from the blacklist, with the ban lines
+// its ban wrote, so a later removal of those app ids carries none.
 // Listings already deleted stay deleted. A missing row is success.
 func (s *Store) RemovePublisher(ctx context.Context, kind, id string) error {
 	pub, err := Normalize(kind, id)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM blacklist WHERE kind = ? AND id = ?`, pub.Kind, pub.ID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM blacklist WHERE kind = ? AND id = ?`, pub.Kind, pub.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ban_notices WHERE kind = ? AND id = ?`, pub.Kind, pub.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Hash is one banned file.
@@ -351,9 +383,21 @@ func Affected(pub Publisher, rows []Listing) (eventIDs, hashes, appIDs []string)
 	want := map[string]struct{}{}
 	switch pub.Kind {
 	case KindNostr:
+		// A developer key ban clears both slots for its apps, the indexer's too.
+		apps := map[string]struct{}{}
 		for _, row := range rows {
-			if row.Pubkey == pub.ID {
-				want[row.ID] = struct{}{}
+			if row.Pubkey != pub.ID {
+				continue
+			}
+			if appID, ok := listingApp(row); ok {
+				apps[appID] = struct{}{}
+			}
+		}
+		for _, row := range rows {
+			if appID, ok := listingApp(row); ok {
+				if _, banned := apps[appID]; banned {
+					want[row.ID] = struct{}{}
+				}
 			}
 		}
 	case KindForge:
@@ -429,6 +473,16 @@ func noteApp(seen map[string]struct{}, appIDs *[]string, tags nostr.Tags, key st
 	}
 	seen[appID] = struct{}{}
 	*appIDs = append(*appIDs, appID)
+}
+
+// listingApp is the app id of a listing row: d on an app, i on a release or asset.
+func listingApp(row Listing) (string, bool) {
+	key := "i"
+	if row.Kind == events.KindApp {
+		key = "d"
+	}
+	id, ok := events.Find(row.Tags, key)
+	return id, ok && id != ""
 }
 
 func markApp(want map[string]struct{}, rows []Listing, pubkey, appID string) {

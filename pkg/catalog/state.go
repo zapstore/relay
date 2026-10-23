@@ -181,11 +181,14 @@ func resolveAt(snapshot []nostr.Event, stackPubkey, catalogKey string, at time.T
 	}
 	var listings []Listing
 	for _, group := range candidates {
-		chosen, ok := chooseListing(group, proofs, at, catalogKey)
+		chosen, ok := chooseListing(group, catalogKey)
 		if !ok {
 			continue
 		}
 		listings = append(listings, chosen)
+	}
+	if catalogKey != "" {
+		profiles = publisherProfiles(profiles, catalogKey, listings, proofs, stacks)
 	}
 	slices.SortFunc(listings, func(a, b Listing) int {
 		return strings.Compare(a.AppID, b.AppID)
@@ -209,6 +212,38 @@ func resolveAt(snapshot []nostr.Event, stackPubkey, catalogKey string, at time.T
 		return strings.Compare(a.Pubkey, b.Pubkey)
 	})
 	return State{Listings: listings, Proofs: proofs, Stacks: stacks, Profiles: profiles, Relays: relays}
+}
+
+// publisherProfiles keeps the kind 0 of the catalog key and of every key that
+// signs a listing, a proof, or a stack. A key whose only events are comments
+// or zaps is not shipped to phones.
+func publisherProfiles(profiles []Profile, catalogKey string, listings []Listing, proofs []Proof, stacks []Stack) []Profile {
+	keep := map[string]struct{}{catalogKey: {}}
+	for _, l := range listings {
+		keep[l.App.PubKey] = struct{}{}
+	}
+	for _, p := range proofs {
+		keep[p.Pubkey] = struct{}{}
+	}
+	for _, s := range stacks {
+		keep[s.Pubkey] = struct{}{}
+	}
+	return slices.DeleteFunc(profiles, func(p Profile) bool {
+		_, ok := keep[p.Pubkey]
+		return !ok
+	})
+}
+
+// SelectedReleases maps each app id to the kind 30063 of the listing
+// selection picks, as bundles do. snapshot holds the apps' kinds 32267,
+// 30063, and 3063. An app with no complete listing is absent.
+func SelectedReleases(snapshot []nostr.Event, catalogKey string, at time.Time) map[string]nostr.Event {
+	state := resolveAt(snapshot, catalogKey, catalogKey, at)
+	out := make(map[string]nostr.Event, len(state.Listings))
+	for _, listing := range state.Listings {
+		out[listing.AppID] = listing.Release
+	}
+	return out
 }
 
 func pictureURL(event nostr.Event) string {
@@ -323,68 +358,62 @@ func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets
 	}, true
 }
 
-func chooseListing(group []Listing, proofs []Proof, at time.Time, catalogKey string) (Listing, bool) {
-	appCert := ""
-	if catalogKey != "" {
-		for _, listing := range group {
-			if listing.App.PubKey == catalogKey {
-				if cert, ok := listingCertificate(listing); ok {
-					appCert = cert
-				}
-			}
-		}
-	}
-	var eligible []Listing
-	for _, listing := range group {
-		if catalogKey != "" && listing.App.PubKey != catalogKey && !isDeveloperSlot(listing, proofs, at, appCert) {
-			continue
-		}
-		eligible = append(eligible, listing)
-	}
-	if len(eligible) == 0 {
+// chooseListing picks one listing per app id: the greatest version_code,
+// then a listing not signed by the catalog key, then the better app event.
+// Promotion already admits only the catalog key and one verified developer,
+// and a revocation removes that developer's listing, so proofs are not read.
+// When the catalog key lists the app, its signer is the app's certificate,
+// and a developer listing whose asset neither is signed by it nor names it
+// as an ancestor is not selected: the certificate may have moved since.
+func chooseListing(group []Listing, catalogKey string) (Listing, bool) {
+	group = onAppCertificate(group, catalogKey)
+	if len(group) == 0 {
 		return Listing{}, false
 	}
-	chosen := eligible[0]
-	for _, listing := range eligible[1:] {
-		if betterListing(listing, chosen, proofs, at, catalogKey, appCert) {
+	chosen := group[0]
+	for _, listing := range group[1:] {
+		if betterListing(listing, chosen, catalogKey) {
 			chosen = listing
 		}
 	}
 	return chosen, true
 }
 
-func betterListing(next, current Listing, proofs []Proof, at time.Time, catalogKey, appCert string) bool {
+func onAppCertificate(group []Listing, catalogKey string) []Listing {
+	if catalogKey == "" {
+		return group
+	}
+	var cert string
+	for _, listing := range group {
+		if listing.App.PubKey == catalogKey {
+			cert, _, _ = listingChain(listing)
+			break
+		}
+	}
+	if cert == "" {
+		return group
+	}
+	return slices.DeleteFunc(slices.Clone(group), func(listing Listing) bool {
+		if listing.App.PubKey == catalogKey {
+			return false
+		}
+		signer, ancestors, ok := listingChain(listing)
+		return !ok || (signer != cert && !slices.Contains(ancestors, cert))
+	})
+}
+
+func betterListing(next, current Listing, catalogKey string) bool {
 	nv := listingVersionCode(next)
 	cv := listingVersionCode(current)
 	if nv != cv {
 		return nv > cv
 	}
-	nextDev := isDeveloperSlot(next, proofs, at, appCertFor(next, current, catalogKey, appCert))
-	currentDev := isDeveloperSlot(current, proofs, at, appCertFor(next, current, catalogKey, appCert))
+	nextDev := next.App.PubKey != catalogKey
+	currentDev := current.App.PubKey != catalogKey
 	if nextDev != currentDev {
 		return nextDev
 	}
 	return betterEvent(next.App, current.App)
-}
-
-func appCertFor(next, current Listing, catalogKey, appCert string) string {
-	if appCert != "" {
-		return appCert
-	}
-	if catalogKey == "" {
-		return ""
-	}
-	if next.App.PubKey == catalogKey {
-		if cert, ok := listingCertificate(next); ok {
-			return cert
-		}
-	}
-	if current.App.PubKey == catalogKey {
-		if cert, ok := listingCertificate(current); ok {
-			return cert
-		}
-	}
-	return ""
 }
 
 func listingVersionCode(listing Listing) int64 {
@@ -405,31 +434,6 @@ func listingVersionCode(listing Listing) int64 {
 	return max
 }
 
-func isDeveloperSlot(listing Listing, proofs []Proof, at time.Time, appCert string) bool {
-	signer, ancestors, ok := listingChain(listing)
-	if !ok {
-		return false
-	}
-	cert := signer
-	if appCert != "" {
-		appCert = strings.ToLower(appCert)
-		if signer != appCert && !slices.Contains(ancestors, appCert) {
-			return false
-		}
-		cert = appCert
-	}
-	owner, delegate, ok := c1Publisher(proofs, []string{cert}, at)
-	if !ok {
-		return false
-	}
-	return listing.App.PubKey == owner || (delegate != "" && listing.App.PubKey == delegate)
-}
-
-func listingCertificate(listing Listing) (string, bool) {
-	signer, _, ok := listingChain(listing)
-	return signer, ok
-}
-
 // listingChain is an asset's signer and its ancestors. Extra apk_certificate_hash
 // values are ignored.
 func listingChain(listing Listing) (signer string, ancestors []string, ok bool) {
@@ -445,45 +449,6 @@ func listingChain(listing Listing) (signer string, ancestors []string, ok bool) 
 		return strings.ToLower(hash), older, true
 	}
 	return "", nil, false
-}
-
-// c1Publisher selects the active C1 owner for the certificates in certs.
-// Callers pass the app's current signer. Ancestor proofs do not count.
-// Replacement first: one current event per pubkey, greatest created_at, then
-// lowest event id. A revoked or expired current event drops that pubkey.
-// The owner is the newest pubkey that remains.
-func c1Publisher(proofs []Proof, certs []string, at time.Time) (owner, delegate string, ok bool) {
-	want := map[string]struct{}{}
-	for _, cert := range certs {
-		want[strings.ToLower(cert)] = struct{}{}
-	}
-	current := map[string]Proof{}
-	for i := range proofs {
-		if _, ok := want[strings.ToLower(proofs[i].D)]; !ok {
-			continue
-		}
-		key := proofs[i].Event.PubKey
-		prev, exists := current[key]
-		if exists && !betterEvent(proofs[i].Event, prev.Event) {
-			continue
-		}
-		current[key] = proofs[i]
-	}
-	var best *Proof
-	for _, proof := range current {
-		if !events.ProofActive(proof.Event, at) {
-			continue
-		}
-		if best == nil || betterEvent(proof.Event, best.Event) {
-			chosen := proof
-			best = &chosen
-		}
-	}
-	if best == nil {
-		return "", "", false
-	}
-	delegate, _ = events.Find(best.Event.Tags, "delegation")
-	return best.Pubkey, delegate, true
 }
 
 func betterEvent(next, current nostr.Event) bool {

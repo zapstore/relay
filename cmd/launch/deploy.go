@@ -56,11 +56,16 @@ func deployV2(ctx context.Context, t term) error {
 		return err
 	}
 	t.say("Dropped apps_fts from relay.db")
+	posts, replies, err := dropForumPosts(ctx, p.RelayData)
+	if err != nil {
+		return err
+	}
+	t.say("Deleted %d forum posts and %d replies. They remain in %s", posts, replies, backup)
 
 	_, signer, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{key: oldKey},
 		"RELAY_PUBKEY stays 78ce…",
-		"BUNDLE_INTERVAL=0",
-		"PRUNE_INTERVAL=0",
+		"CATALOG_BUNDLE_INTERVAL=0",
+		"BLOSSOM_PRUNE_INTERVAL=0",
 	)
 	if err != nil {
 		return err
@@ -71,7 +76,7 @@ func deployV2(ctx context.Context, t term) error {
 	if err := waitRelay(ctx, t, p.RelayAddr, oldKey); err != nil {
 		return err
 	}
-	sock := &nostrSocket{path: p.socket()}
+	sock := &nostrSocket{path: p.RelaySocket}
 	defer sock.Close()
 	if err := ensureRelays(ctx, t, sock, signer); err != nil {
 		return err

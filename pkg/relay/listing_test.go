@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -163,6 +164,20 @@ func TestListingWaitsForBlossom(t *testing.T) {
 	}
 	if slotHas(t, r.store, app.ID) || slotHas(t, r.store, asset.ID) {
 		t.Fatal("listing stored without a blossom blob")
+	}
+}
+
+func TestReleaseWithoutATagPromotes(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	app, release, asset := testTriple("n", catalogKey, blobs.put("apk"), strings.Repeat("ab", 32), 1)
+	release.Tags = slices.DeleteFunc(release.Tags, func(tag nostr.Tag) bool {
+		return len(tag) > 0 && tag[0] == "a"
+	})
+	r.holdListing(t.Context(), app)
+	r.holdListing(t.Context(), asset)
+	if res := r.holdListing(t.Context(), release); !res.ok || !res.broadcast {
+		t.Fatalf("release without a: %+v", res)
 	}
 }
 
@@ -343,10 +358,11 @@ func TestClaimFallsBackToTheAssetURL(t *testing.T) {
 	r := testRelay(t, blobs)
 	key := newTestKey(t)
 	r.readAPK = readChains(t, map[string]signing{"apk": {key.cert}})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("apk"))
 	}))
 	t.Cleanup(srv.Close)
+	r.fetch = srv.Client()
 	x := blobs.put("apk")
 	promoteIndexer(t, r, x, key.hash, nostr.Tag{"url", srv.URL + "/app.apk"})
 	delete(blobs.bodies, x)
@@ -378,6 +394,36 @@ func TestRevocationIsStoredOnArrival(t *testing.T) {
 	}
 	if kept, _ := pendingHas(t.Context(), r.store, proof.ID); kept {
 		t.Fatal("the older proof is still pending")
+	}
+}
+
+func TestRevocationDropsDeveloperListings(t *testing.T) {
+	r := testRelay(t, newFakeBlossom())
+	key := newTestKey(t)
+	proof := key.proof(t, "4", ownerKey, "")
+	devApp, devRelease, devAsset := testTriple("d", ownerKey, strings.Repeat("a", 64), key.hash, 5)
+	catApp, catRelease, catAsset := testTriple("c", catalogKey, strings.Repeat("b", 64), key.hash, 5)
+	for _, event := range []*nostr.Event{proof, devApp, devRelease, devAsset, catApp, catRelease, catAsset} {
+		if _, err := r.store.Save(t.Context(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revocation := &nostr.Event{
+		ID: strings.Repeat("5", 64), PubKey: ownerKey, Kind: events.KindIdentityProof,
+		CreatedAt: proof.CreatedAt + 1, Tags: nostr.Tags{{"d", key.hash}, {"revoked"}},
+	}
+	if res := r.persist(nil, revocation); !res.ok {
+		t.Fatalf("res %+v", res)
+	}
+	for _, event := range []*nostr.Event{devApp, devRelease, devAsset} {
+		if slotHas(t, r.store, event.ID) {
+			t.Errorf("developer kind %d kept after revocation", event.Kind)
+		}
+	}
+	for _, event := range []*nostr.Event{catApp, catRelease, catAsset} {
+		if !slotHas(t, r.store, event.ID) {
+			t.Errorf("catalog kind %d dropped by revocation", event.Kind)
+		}
 	}
 }
 

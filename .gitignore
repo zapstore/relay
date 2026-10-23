@@ -45,12 +45,12 @@ go.work.sum
 # Build output
 build/
 dist/
+/relay
 
 # AI memory and instructions
 .cursor/rules
 /spec/
 /docs/
-SPEC.md
 
 # air specific files
 /tmp/

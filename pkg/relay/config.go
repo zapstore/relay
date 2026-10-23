@@ -16,6 +16,11 @@ import (
 )
 
 type Config struct {
+	// BlobHosts are this relay's own blob hostnames, BLOSSOM_HOSTNAME and
+	// BLOSSOM_BUNNY_CDN_HOSTNAME. An APK URL on one is not downloaded: that
+	// file is in Blossom.
+	BlobHosts []string
+
 	// Hostname is the hostname of the relay, used to validate NIP42 authentication.
 	// Default is "".
 	Hostname string `env:"RELAY_HOSTNAME"`
@@ -25,7 +30,7 @@ type Config struct {
 
 	// QueueCapacity is the maximum number of events that can be queued for processing.
 	// Default is 1000.
-	QueueCapacity int `env:"RELAY_QUEUE_CAPACITY"`
+	QueueCapacity int `env:"RELAY_QUEUE_SIZE"`
 
 	// MaxMessageBytes is the maximum size of a message that can be sent to the relay.
 	// Default is 500_000 (0.5MB).
@@ -80,7 +85,6 @@ func NewConfig() Config {
 			// social and community kinds
 			events.KindProfile,
 			events.KindDeletion,
-			events.KindForumPost,
 			events.KindComment,
 			events.KindReport,
 			events.KindZap,
@@ -100,6 +104,7 @@ func NewConfig() Config {
 type Info struct {
 	Name string `env:"RELAY_NAME"`
 	// Pubkey is the catalog key: 64-character hex or an npub. An npub is stored as hex.
+	// Empty takes the SIGN_WITH public key at startup.
 	Pubkey      string `env:"RELAY_PUBKEY"`
 	Description string `env:"RELAY_DESCRIPTION"`
 	URL         string `env:"RELAY_URL"`
@@ -166,10 +171,7 @@ func (i Info) Validate() error {
 	if i.Name == "" {
 		return errors.New("relay name is not set")
 	}
-	if i.Pubkey == "" {
-		return errors.New("relay pubkey is not set")
-	}
-	if !nostr.IsValid32ByteHex(i.Pubkey) {
+	if i.Pubkey != "" && !nostr.IsValid32ByteHex(i.Pubkey) {
 		return errors.New("relay pubkey is not a valid 32 byte hex string")
 	}
 	if i.Description == "" {

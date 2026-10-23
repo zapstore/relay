@@ -92,7 +92,7 @@ func (j *job) finish(out string, err error) {
 }
 
 // runner owns the job goroutines. The zero value is ready to use.
-// shortcut: jobs live in memory and are lost on restart; admin_log keeps who started what.
+// shortcut: jobs live in memory and are lost on restart; the relay log keeps who started what.
 type runner struct {
 	mu     sync.Mutex
 	wg     sync.WaitGroup

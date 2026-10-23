@@ -64,6 +64,26 @@ func TestDiffDropsAppAndKeepsReplacement(t *testing.T) {
 	}
 }
 
+func TestOnlyPublisherProfilesShip(t *testing.T) {
+	catalog, prover, commenter := strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64)
+	profile := func(pub string) nostr.Event {
+		return nostr.Event{ID: pub[:1], Kind: 0, PubKey: pub, CreatedAt: 1}
+	}
+	proof := nostr.Event{ID: "proof", Kind: 30509, PubKey: prover, CreatedAt: 1, Tags: nostr.Tags{{"d", strings.Repeat("f", 64)}}}
+	raw := []nostr.Event{profile(catalog), profile(prover), profile(commenter), proof}
+
+	var got []string
+	for _, p := range Resolve(raw, catalog).Profiles {
+		got = append(got, p.Pubkey)
+	}
+	if len(got) != 2 || got[0] != catalog || got[1] != prover {
+		t.Fatalf("profiles %v, want the catalog key and the proof signer", got)
+	}
+	if n := len(Resolve(raw, "").Profiles); n != 3 {
+		t.Fatalf("a snapshot file keeps the profiles it shipped, got %d", n)
+	}
+}
+
 func TestKind0FollowsReplaceableKey(t *testing.T) {
 	pubkey := strings.Repeat("ab", 32)
 	older := nostr.Event{ID: "b", Kind: 0, PubKey: pubkey, CreatedAt: 1, Content: `{"picture":"https://cdn.example/a.png"}`}
