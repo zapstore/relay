@@ -40,6 +40,11 @@ func publishAll(ctx context.Context, t term, sock *nostrSocket, evs []nostr.Even
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
+		// A banned asset is not stored. Publishing the release and the app
+		// that follow would be a different rejection and would stop the window.
+		if skipEvent(e, rep.Banned) {
+			continue
+		}
 		ok, msg, err := sock.publish(ctx, e)
 		if err != nil {
 			return rep, err
@@ -68,6 +73,19 @@ func publishAll(ctx context.Context, t term, sock *nostrSocket, evs []nostr.Even
 		}
 	}
 	return rep, nil
+}
+
+// skipEvent is true for the rest of a listing whose file hash was banned.
+func skipEvent(e nostr.Event, banned map[string]bool) bool {
+	if !banned[eventAppID(e)] {
+		return false
+	}
+	switch e.Kind {
+	case events.KindApp, events.KindRelease, events.KindAsset:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r report) print(t term) {
