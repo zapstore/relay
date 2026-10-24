@@ -14,13 +14,21 @@ import (
 
 const usage = `Usage:
   launch preflight                                 Ask for the services and paths, and check them
-  launch deploy-v2                                 Window 1: relay v2 on the current catalog key
   launch rotate                                    Window 2: the new catalog key
   launch rotate --dry-run --relay <binary> <backup>  Rotate a copy of a backup with a throwaway key
   launch restore <backup>                          Put a backup back
 
-Answers are kept in launch.json in the working directory. Run as root on the
-production server. --dry-run runs anywhere and touches only a temporary copy.
+Answers are kept in launch.json in the working directory. These variables
+override the suggested answers, including a saved launch.json:
+LAUNCH_RELAY_UNIT, LAUNCH_INDEXER_UNIT, LAUNCH_PROXY_UNIT, LAUNCH_RELAY_ENV,
+LAUNCH_INDEXER_ENV, LAUNCH_RELAY_BINARY, LAUNCH_BACKUP_ROOT.
+The relay socket is not asked for when the relay env file can be read. v2
+listens on RELAY_SOCKET_PATH from the unit or the relay env file, or on
+relay.sock in DATA_DIR. LAUNCH_RELAY_SOCKET overrides that path. When an env
+file cannot be read, preflight asks for the data directory and the relay
+address instead. It does not store secrets.
+Run as root on the production server. --dry-run runs anywhere and touches
+only a temporary copy.
 `
 
 var errUsage = errors.New("see usage")
@@ -46,8 +54,6 @@ func run(ctx context.Context, args []string) error {
 	case "preflight":
 		_, err := loadSite(ctx, t)
 		return err
-	case "deploy-v2":
-		return deployV2(ctx, t)
 	case "rotate":
 		fs := flag.NewFlagSet("rotate", flag.ContinueOnError)
 		dry := fs.Bool("dry-run", false, "rotate a copy of a backup")

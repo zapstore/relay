@@ -25,108 +25,114 @@ func rotate(ctx context.Context, t term) error {
 		return err
 	}
 	t.say("\nWindow 2: the new catalog key.")
-	if err := t.confirm("Is relay v2 live on 78ce… (launch deploy-v2 done)?"); err != nil {
+	if err := t.confirm(ctx, "Is relay v2 live on 78ce…?"); err != nil {
 		return err
 	}
-	if err := t.confirm("Is the new key in hotbox, and does the released 1.1.3 trust it?"); err != nil {
+	if err := t.confirm(ctx, "Is the new key in hotbox, and does the released 1.1.3 trust it?"); err != nil {
 		return err
 	}
-	if err := t.confirm("Did launch rotate --dry-run pass on a recent backup?"); err != nil {
+	if err := t.confirm(ctx, "Did launch rotate --dry-run pass on a recent backup?"); err != nil {
 		return err
 	}
-	p, err := s.paths()
+	p, err := s.paths(ctx)
 	if err != nil {
 		return err
 	}
-	if err := t.confirm(fmt.Sprintf("Stop %s, %s, and %s now?", s.ProxyUnit, s.IndexerUnit, s.RelayUnit)); err != nil {
+	if err := t.confirm(ctx, fmt.Sprintf("Stop %s, %s, and %s now?", s.ProxyUnit, s.IndexerUnit, s.RelayUnit)); err != nil {
 		return err
 	}
-	if err := stopAll(ctx, t, s); err != nil {
-		return err
-	}
-	backup, err := takeBackup(t, s, p, "rotate")
-	if err != nil {
-		return err
-	}
-	pl, err := prepare(ctx, t, p.RelayData, p.indexerDB(), backup)
-	if err != nil {
-		return err
-	}
-	if err := t.confirm(fmt.Sprintf("Delete those %d events and the snapshots and bundles?", len(pl.Delete))); err != nil {
-		return err
-	}
-	if err := clearOld(ctx, t, p.RelayData, pl); err != nil {
-		return err
-	}
-
-	newKey, signer, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{},
-		"RELAY_PUBKEY=<the new key>",
-		"SIGN_WITH=<the new key's bunker URL>",
-		"CATALOG_BUNDLE_INTERVAL=0",
-		"BLOSSOM_PRUNE_INTERVAL=0",
-	)
-	if err != nil {
-		return err
-	}
-	if err := editIndexerEnv(ctx, t, s.IndexerEnv, newKey); err != nil {
-		return err
-	}
-	if err := systemctl(ctx, t, "start", s.RelayUnit); err != nil {
-		return err
-	}
-	if err := waitRelay(ctx, t, p.RelayAddr, newKey); err != nil {
-		return err
-	}
-	lud16, err := t.ask("lud16 for the new key's kind 0", lud16Of(pl.Profile))
-	if err != nil {
-		return err
-	}
-	evs, err := resign(ctx, pl, signer.Sign, newKey, lud16, time.Now())
-	if err != nil {
-		return err
-	}
-	sock := &nostrSocket{path: p.RelaySocket}
-	defer sock.Close()
-	rep, err := publishAll(ctx, t, sock, evs, false)
-	rep.print(t)
-	if err != nil {
-		return err
-	}
-	if err := checkRotation(ctx, t, sock, newKey, pl, rep); err != nil {
-		return err
-	}
-
-	if _, _, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{key: newKey, intervals: true},
-		"CATALOG_BUNDLE_INTERVAL back on (for example 5m), or remove the line",
-		"BLOSSOM_PRUNE_INTERVAL back on (for example 24h), or remove the line",
-	); err != nil {
-		return err
-	}
-	if err := systemctl(ctx, t, "restart", s.RelayUnit); err != nil {
-		return err
-	}
-	if err := waitRelay(ctx, t, p.RelayAddr, newKey); err != nil {
-		return err
-	}
-	for _, unit := range []string{s.IndexerUnit, s.ProxyUnit} {
-		if err := systemctl(ctx, t, "start", unit); err != nil {
-			return err
+	return hold(ctx, t, s, func() (bool, error) {
+		backup, err := takeBackup(ctx, t, s, p, "rotate")
+		if err != nil {
+			return false, err
 		}
-	}
-	t.say("\nWindow 2 is done. The catalog key is %s.", newKey)
-	t.say("Undo with: launch restore %s", backup)
-	t.say("Once prune has run, the APKs of the deleted listings are gone from Bunny,")
-	t.say("and a restore brings back their events without their files.")
-	t.say("\nThe indexer:")
-	t.say("  - publishes under the new key only when a source changes; its zsp HTTP")
-	t.say("    cache still says unchanged for the re-signed apps, so nothing is republished.")
-	t.say("  - does not ask the relay what is published. The relay's version guard,")
-	t.say("    on the version codes the re-sign kept, is what blocks a downgrade.")
-	if len(pl.Dropped) > 0 {
-		t.say("  - will not bring back the %d dropped apps until their source changes", len(pl.Dropped))
-		t.say("    or a fetch fails. Run the indexer on the ids in %s.", filepath.Join(backup, droppedFile))
-	}
-	return nil
+		pl, err := prepare(ctx, t, p.RelayData, p.indexerDB(), backup)
+		if err != nil {
+			return false, err
+		}
+		if err := t.confirm(ctx, fmt.Sprintf("Delete those %d events and the snapshots and bundles?", len(pl.Delete))); err != nil {
+			return false, err
+		}
+		if err := clearOld(ctx, t, p.RelayData, pl); err != nil {
+			return undone(backup, err)
+		}
+
+		newKey, signer, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{},
+			"RELAY_PUBKEY=<the new key>",
+			"SIGN_WITH=<the new key's bunker URL>",
+			"CATALOG_BUNDLE_INTERVAL=0",
+			"BLOSSOM_PRUNE_INTERVAL=0",
+		)
+		if err != nil {
+			return undone(backup, err)
+		}
+		if err := editIndexerEnv(ctx, t, s.IndexerEnv, newKey); err != nil {
+			return undone(backup, err)
+		}
+		p, err = s.paths(ctx)
+		if err != nil {
+			return undone(backup, err)
+		}
+		if err := systemctl(ctx, t, "start", s.RelayUnit); err != nil {
+			return undone(backup, err)
+		}
+		if err := waitRelay(ctx, t, p.RelayAddr, newKey); err != nil {
+			return undone(backup, err)
+		}
+		if err := waitSocket(ctx, t, p.RelaySocket); err != nil {
+			return undone(backup, err)
+		}
+		lud16, err := t.ask(ctx, "lud16 for the new key's kind 0", lud16Of(pl.Profile))
+		if err != nil {
+			return undone(backup, err)
+		}
+		evs, err := resign(ctx, pl, signer.Sign, newKey, lud16, time.Now())
+		if err != nil {
+			return undone(backup, err)
+		}
+		sock := &nostrSocket{path: p.RelaySocket}
+		defer sock.Close()
+		rep, err := publishAll(ctx, t, sock, evs, false)
+		rep.print(t)
+		if err != nil {
+			return undone(backup, err)
+		}
+		if err := checkRotation(ctx, t, sock, newKey, pl, rep); err != nil {
+			return undone(backup, err)
+		}
+
+		if _, _, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{key: newKey, intervals: true},
+			"CATALOG_BUNDLE_INTERVAL back on (for example 5m), or remove the line",
+			"BLOSSOM_PRUNE_INTERVAL back on (for example 24h), or remove the line",
+		); err != nil {
+			return undone(backup, err)
+		}
+		if err := systemctl(ctx, t, "restart", s.RelayUnit); err != nil {
+			return undone(backup, err)
+		}
+		if err := waitRelay(ctx, t, p.RelayAddr, newKey); err != nil {
+			return undone(backup, err)
+		}
+		for _, unit := range []string{s.IndexerUnit, s.ProxyUnit} {
+			if err := systemctl(ctx, t, "start", unit); err != nil {
+				return undone(backup, err)
+			}
+		}
+		t.say("\nWindow 2 is done. The catalog key is %s.", newKey)
+		t.say("Undo with: launch restore %s", backup)
+		t.say("Once prune has run, the APKs of the deleted listings are gone from Bunny,")
+		t.say("and a restore brings back their events without their files.")
+		t.say("\nThe indexer:")
+		t.say("  - publishes under the new key only when a source changes; its zsp HTTP")
+		t.say("    cache still says unchanged for the re-signed apps, so nothing is republished.")
+		t.say("  - does not ask the relay what is published. The relay's version guard,")
+		t.say("    on the version codes the re-sign kept, is what blocks a downgrade.")
+		if len(pl.Dropped) > 0 {
+			t.say("  - will not bring back the %d dropped apps until their source changes", len(pl.Dropped))
+			t.say("    or a fetch fails. Run the indexer on the ids in %s.", filepath.Join(backup, droppedFile))
+		}
+		return true, nil
+	})
 }
 
 // prepare reads 78ce…'s events from a stopped relay and writes the plan into dir.
@@ -222,7 +228,7 @@ const (
 // editIndexerEnv waits until the indexer's SIGN_WITH signs as newKey.
 func editIndexerEnv(ctx context.Context, t term, envFile, newKey string) error {
 	for {
-		if err := t.wait("Edit "+envFile+":", "SIGN_WITH=<the new key's bunker URL>"); err != nil {
+		if err := t.wait(ctx, "Edit "+envFile+":", "SIGN_WITH=<the new key's bunker URL>"); err != nil {
 			return err
 		}
 		signer, err := signerFor(ctx, envFile)
@@ -238,6 +244,9 @@ func editIndexerEnv(ctx context.Context, t term, envFile, newKey string) error {
 
 // dryRun rotates a copy of a backup on a throwaway relay with a throwaway key.
 func dryRun(ctx context.Context, t term, backup, relayBin string) error {
+	if err := requireFTS5(); err != nil {
+		return err
+	}
 	if _, err := readBackup(backup); err != nil {
 		return err
 	}
@@ -247,7 +256,7 @@ func dryRun(ctx context.Context, t term, backup, relayBin string) error {
 	}
 	t.say("Dry run in %s", tmp)
 	data := filepath.Join(tmp, "data")
-	if err := copyTree(filepath.Join(backup, backupRelayData), data); err != nil {
+	if err := copyTree(ctx, filepath.Join(backup, backupRelayData), data); err != nil {
 		return err
 	}
 	pl, err := prepare(ctx, t, data, filepath.Join(backup, backupIndexerData, "indexer.db"), tmp)

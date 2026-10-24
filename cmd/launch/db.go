@@ -77,6 +77,24 @@ func pendingBy(ctx context.Context, db *sql.DB, pubkey string) ([]nostr.Event, e
 	return out, rows.Err()
 }
 
+// requireFTS5 refuses to open a window when this binary cannot drop apps_fts.
+// The relay is built without fts5. launch is not: make launch-linux-amd64.
+func requireFTS5() error {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var on int
+	if err := db.QueryRow(`SELECT sqlite_compileoption_used('ENABLE_FTS5')`).Scan(&on); err != nil {
+		return fmt.Errorf("fts5: %w", err)
+	}
+	if on != 1 {
+		return errors.New("this launch binary has no FTS5, so it cannot drop apps_fts. Rebuild with -tags fts5 (make launch-linux-amd64)")
+	}
+	return nil
+}
+
 // dropFTS drops the v1 apps_fts index and its triggers. Dropping the table
 // needs a build with -tags fts5; the relay itself no longer does.
 func dropFTS(ctx context.Context, db *sql.DB) error {
@@ -193,65 +211,6 @@ func deleteEvents(ctx context.Context, db *sql.DB, ids []string) error {
 		}
 		if err := stmt.Close(); err != nil {
 			return err
-		}
-	}
-	return tx.Commit()
-}
-
-// appIDsSignedByOthers is every app id with a kind 32267 from a key other than pubkey.
-func appIDsSignedByOthers(ctx context.Context, db *sql.DB, pubkey string) (map[string]bool, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT DISTINCT t.value FROM events e
-		JOIN tags t ON t.event_id = e.id AND t.key = 'd'
-		WHERE e.kind = 32267 AND e.pubkey != ?`, pubkey)
-	if err != nil {
-		return nil, fmt.Errorf("query developer listings: %w", err)
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
-}
-
-type disabledApp struct {
-	ID     string
-	Reason string
-}
-
-func disabledApps(ctx context.Context, db *sql.DB) ([]disabledApp, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT app_id, COALESCE(disable_reason, '') FROM apps
-		WHERE enabled = 0 ORDER BY app_id`)
-	if err != nil {
-		return nil, fmt.Errorf("query disabled apps: %w", err)
-	}
-	defer rows.Close()
-	var out []disabledApp
-	for rows.Next() {
-		var a disabledApp
-		if err := rows.Scan(&a.ID, &a.Reason); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
-
-func enableApps(ctx context.Context, db *sql.DB, ids []string) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `UPDATE apps SET enabled = 1, disable_reason = NULL WHERE app_id = ?`, id); err != nil {
-			return fmt.Errorf("enable %s: %w", id, err)
 		}
 	}
 	return tx.Commit()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -25,13 +26,33 @@ func (t term) say(format string, args ...any) {
 }
 
 // ask reads one line. An empty answer is def.
-func (t term) ask(prompt, def string) (string, error) {
+// A cancelled ctx returns immediately. The operator can stop the window with Ctrl-C.
+func (t term) ask(ctx context.Context, prompt, def string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if def != "" {
 		fmt.Fprintf(t.out, "%s [%s]: ", prompt, def)
 	} else {
 		fmt.Fprintf(t.out, "%s: ", prompt)
 	}
-	line, err := t.in.ReadString('\n')
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := t.in.ReadString('\n')
+		ch <- result{line, err}
+	}()
+	var line string
+	var err error
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-ch:
+		line, err = r.line, r.err
+	}
 	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
 		return "", fmt.Errorf("read answer: %w", err)
 	}
@@ -43,9 +64,9 @@ func (t term) ask(prompt, def string) (string, error) {
 }
 
 // yes asks until the answer is yes or no.
-func (t term) yes(question string) (bool, error) {
+func (t term) yes(ctx context.Context, question string) (bool, error) {
 	for {
-		answer, err := t.ask(question+" (yes/no)", "")
+		answer, err := t.ask(ctx, question+" (yes/no)", "")
 		if err != nil {
 			return false, err
 		}
@@ -59,8 +80,8 @@ func (t term) yes(question string) (bool, error) {
 }
 
 // confirm stops the run unless the answer is yes.
-func (t term) confirm(question string) error {
-	ok, err := t.yes(question)
+func (t term) confirm(ctx context.Context, question string) error {
+	ok, err := t.yes(ctx, question)
 	if err != nil {
 		return err
 	}
@@ -71,11 +92,11 @@ func (t term) confirm(question string) error {
 }
 
 // wait shows what to do by hand and returns when the operator presses Enter.
-func (t term) wait(lines ...string) error {
+func (t term) wait(ctx context.Context, lines ...string) error {
 	t.say("")
 	for _, line := range lines {
 		t.say("  %s", line)
 	}
-	_, err := t.ask("Press Enter when done", "")
+	_, err := t.ask(ctx, "Press Enter when done", "")
 	return err
 }

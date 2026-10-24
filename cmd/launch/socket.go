@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -171,6 +172,31 @@ func waitRelay(ctx context.Context, t term, addr, key string) error {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("relay did not answer: %w (%w)", last, context.Cause(ctx))
+		case <-tick.C:
+		}
+	}
+}
+
+// waitSocket waits until path is a socket. Relay v2 creates it after it starts.
+func waitSocket(ctx context.Context, t term, path string) error {
+	t.say("Waiting for %s", path)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	var last error
+	for {
+		info, err := os.Stat(path)
+		switch {
+		case err == nil && info.Mode()&os.ModeSocket != 0:
+			return nil
+		case err == nil:
+			return fmt.Errorf("%s is not a socket", path)
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("relay socket %s did not appear: %w", path, last)
 		case <-tick.C:
 		}
 	}

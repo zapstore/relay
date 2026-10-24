@@ -2,8 +2,8 @@
 -- Note: 'd' tags for kinds 30000-39999 are already indexed by the base schema.
 --
 -- Older builds kept an FTS5 index (apps_fts). Search is vector search now.
--- Drop the triggers so an insert does not write that index. Dropping the table
--- needs fts5, so launch deploy-v2 drops it.
+-- Drop the triggers so an insert does not write that index. The table can
+-- stay: dropping it needs fts5, which this process is built without.
 
 DROP TRIGGER IF EXISTS app_fts_ai;
 DROP TRIGGER IF EXISTS app_fts_ad;

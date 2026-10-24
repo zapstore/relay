@@ -82,6 +82,7 @@ type SystemConfig struct {
 	Version string // no env variable, it's set at build time
 
 	// Dir is the data directory. It holds every database, blob, bundle, and socket.
+	// Required.
 	Dir      string   `env:"DATA_DIR"`
 	LogLevel LogLevel `env:"LOG_LEVEL"`
 

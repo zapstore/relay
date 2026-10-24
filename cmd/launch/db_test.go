@@ -3,10 +3,18 @@ package main
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+func TestRequireFTS5(t *testing.T) {
+	err := requireFTS5()
+	if err != nil && !strings.Contains(err.Error(), "fts5") {
+		t.Fatal(err)
+	}
+}
 
 func TestDropForumPosts(t *testing.T) {
 	dir := t.TempDir()
