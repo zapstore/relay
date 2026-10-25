@@ -441,7 +441,8 @@ func NotAllowed(pol *policy.Store) func(r blossy.Request, hints blossy.UploadHin
 }
 
 // NotAdmitted runs the publisher gate for uploads. A key that cannot publish
-// cannot upload.
+// a new app cannot upload, unless it is the active C1 owner or delegate of a
+// certificate on an app the relay already lists.
 func NotAdmitted(gate *policy.Gate) func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
 	return func(r blossy.Request, hints blossy.UploadHints) *blossom.Error {
 		if gate == nil || !r.IsAuthed() {
@@ -449,7 +450,7 @@ func NotAdmitted(gate *policy.Gate) func(r blossy.Request, hints blossy.UploadHi
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		err := gate.Admit(ctx, r.Pubkey())
+		err := gate.AdmitUpload(ctx, r.Pubkey())
 		if errors.Is(err, policy.ErrNotAdmitted) {
 			return ErrNotAllowed
 		}

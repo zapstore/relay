@@ -3,11 +3,14 @@ package policy
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
 )
 
@@ -150,6 +153,89 @@ func TestGateWhitelistSkipsVertex(t *testing.T) {
 	}
 	if wot.calls != 1 {
 		t.Fatalf("web of trust calls = %d, want 1", wot.calls)
+	}
+}
+
+func TestGateListedAppSkipsVertex(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	wot := &fakeWoT{scores: map[string]float64{}}
+	gate := NewGate(store, catalogKey, wot)
+	const appID = "com.example.app"
+	const cert = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	insertListedApp(t, store, appID, cert, devKey)
+
+	if err := gate.AdmitListing(ctx, paidKey, appID); err != nil {
+		t.Fatal(err)
+	}
+	if wot.calls != 0 {
+		t.Fatalf("web of trust calls = %d, want 0", wot.calls)
+	}
+	if err := gate.AdmitListing(ctx, paidKey, "com.other.app"); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("unlisted app: %v", err)
+	}
+	if err := gate.Admit(ctx, paidKey); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("pubkey-only: %v", err)
+	}
+	if err := gate.AdmitUpload(ctx, devKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.AdmitUpload(ctx, paidKey); err != nil {
+		t.Fatalf("delegate: %v", err)
+	}
+	if err := gate.AdmitUpload(ctx, strings.Repeat("c", 64)); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("stranger upload: %v", err)
+	}
+}
+
+func TestGateExpiredProofDoesNotAdmitUpload(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	gate := NewGate(store, catalogKey, nil)
+	const appID = "com.example.app"
+	const cert = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	insertGateEvent(t, store, catalogKey, events.KindApp, nostr.Tags{{"d", appID}})
+	insertGateEvent(t, store, catalogKey, events.KindAsset, nostr.Tags{{"i", appID}, {"apk_certificate_hash", cert}})
+	insertGateEvent(t, store, devKey, events.KindIdentityProof, nostr.Tags{{"d", cert}, {"expiry", "1"}})
+	if err := gate.AdmitUpload(ctx, devKey); !errors.Is(err, ErrNotAdmitted) {
+		t.Fatalf("expired proof: %v", err)
+	}
+}
+
+func insertListedApp(t *testing.T, store *Store, appID, cert, owner string) {
+	t.Helper()
+	insertGateEvent(t, store, catalogKey, events.KindApp, nostr.Tags{{"d", appID}})
+	insertGateEvent(t, store, catalogKey, events.KindAsset, nostr.Tags{{"i", appID}, {"apk_certificate_hash", cert}})
+	insertGateEvent(t, store, owner, events.KindIdentityProof, nostr.Tags{
+		{"d", cert},
+		{"expiry", "9999999999"},
+		{"delegation", paidKey},
+	})
+}
+
+func insertGateEvent(t *testing.T, store *Store, pubkey string, kind int, tags nostr.Tags) {
+	t.Helper()
+	raw, err := json.Marshal(tags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat(fmt.Sprintf("%x", kind), 64)[:64]
+	if kind == events.KindIdentityProof {
+		id = strings.Repeat("9", 64)
+	}
+	if _, err := store.db.Exec(
+		`INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig) VALUES (?, ?, 1, ?, ?, '', 'sig')`,
+		id, pubkey, kind, string(raw),
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range tags {
+		if len(tag) < 2 {
+			continue
+		}
+		if _, err := store.db.Exec(`INSERT INTO tags (event_id, key, value) VALUES (?, ?, ?)`, id, tag[0], tag[1]); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

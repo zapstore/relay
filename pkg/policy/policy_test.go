@@ -31,6 +31,13 @@ func testStore(t *testing.T) *Store {
 	)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`CREATE TABLE tags (
+		event_id TEXT NOT NULL,
+		key TEXT NOT NULL,
+		value TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
 	store, err := Open(db)
 	if err != nil {
 		t.Fatal(err)
