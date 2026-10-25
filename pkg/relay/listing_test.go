@@ -40,10 +40,8 @@ var (
 func TestListingStaysPendingUntilComplete(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
-	key := newTestKey(t)
-	r.readAPK = readChains(t, map[string]signing{"apk": {key.cert}})
 	x := blobs.put("apk")
-	app, release, asset := testTriple("a", catalogKey, x, key.hash, 1)
+	app, release, asset := testTriple("a", catalogKey, x, strings.Repeat("e", 64), 1)
 
 	if res := r.holdListing(t.Context(), app); res.msg != msgListingPending || !res.ok || res.broadcast {
 		t.Fatalf("app: %+v", res)
@@ -51,17 +49,15 @@ func TestListingStaysPendingUntilComplete(t *testing.T) {
 	if res := r.holdListing(t.Context(), release); res.msg != msgListingPending || res.broadcast {
 		t.Fatalf("release: %+v", res)
 	}
-	if res := r.holdListing(t.Context(), asset); res.msg != msgListingPending || res.broadcast {
-		t.Fatalf("asset: %+v", res)
-	}
 	if slotHas(t, r.store, app.ID) || slotHas(t, r.store, release.ID) {
-		t.Fatal("stored before the apk was read")
+		t.Fatal("stored before the listing was complete")
 	}
 	if len(blobs.promoted) != 0 {
 		t.Fatal("a file was promoted before its listing")
 	}
-
-	drainReads(t, r)
+	if res := r.holdListing(t.Context(), asset); !res.ok || !res.broadcast {
+		t.Fatalf("asset: %+v", res)
+	}
 	for _, id := range []string{app.ID, release.ID, asset.ID} {
 		if !slotHas(t, r.store, id) {
 			t.Fatalf("missing %s", id)
@@ -75,70 +71,55 @@ func TestListingStaysPendingUntilComplete(t *testing.T) {
 	}
 }
 
-func TestCatalogListingOfAListedFileIsNotRead(t *testing.T) {
-	r := testRelay(t, newFakeBlossom())
-	x := strings.Repeat("ab", 32)
-	prior := testAsset("p", strings.Repeat("9", 64), x, strings.Repeat("e", 64), 1)
-	saveSlotEvent(t, r.store, *prior)
-	app, release, asset := testTriple("a", catalogKey, x, strings.Repeat("e", 64), 1)
+func TestCatalogAPKIsNotRead(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	r.readAPK = func(io.ReadSeeker) (signing, error) {
+		t.Fatal("read a catalog key apk")
+		return nil, nil
+	}
+	app, release, asset := testTriple("a", catalogKey, blobs.put("apk"), strings.Repeat("e", 64), 1)
 	r.holdListing(t.Context(), app)
 	r.holdListing(t.Context(), asset)
 	if res := r.holdListing(t.Context(), release); !res.broadcast {
 		t.Fatalf("release: %+v", res)
 	}
-}
-
-func TestCatalogAPKMustBeSignedByItsCertificate(t *testing.T) {
-	blobs := newFakeBlossom()
-	r := testRelay(t, blobs)
-	key, other := newTestKey(t), newTestKey(t)
-	r.readAPK = readChains(t, map[string]signing{"apk": {other.cert}})
-	app, release, asset := testTriple("a", catalogKey, blobs.put("apk"), key.hash, 1)
-	r.holdListing(t.Context(), app)
-	r.holdListing(t.Context(), asset)
-	r.holdListing(t.Context(), release)
-	drainReads(t, r)
-	if slotHas(t, r.store, release.ID) {
-		t.Fatal("promoted an apk its asset does not name")
-	}
-	if kept, _ := pendingHas(t.Context(), r.store, release.ID); kept {
-		t.Fatal("refused release is still pending")
+	if len(r.apks.jobs) != 0 {
+		t.Fatal("queued a catalog key apk read")
 	}
 }
 
 func TestStoreSignedAPKIsRefused(t *testing.T) {
-	for _, pub := range []string{catalogKey, ownerKey} {
-		blobs := newFakeBlossom()
-		r := testRelay(t, blobs)
-		key := newTestKey(t)
-		saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
-		r.readAPK = func(io.ReadSeeker) (signing, error) {
-			return nil, &thirdPartyError{label: "fdroid", mark: "certificate subject"}
-		}
-		x := blobs.put("apk")
-		app, release, asset := testTriple("a", pub, x, key.hash, 1)
-		r.holdListing(t.Context(), app)
-		r.holdListing(t.Context(), asset)
-		if res := r.holdListing(t.Context(), release); !res.ok || res.msg != msgListingPending {
-			t.Fatalf("first send: %+v", res)
-		}
-		drainReads(t, r)
-		if slotHas(t, r.store, release.ID) {
-			t.Fatal("promoted a store-signed apk")
-		}
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
+	r.readAPK = func(io.ReadSeeker) (signing, error) {
+		return nil, &thirdPartyError{label: "fdroid", mark: "certificate subject"}
+	}
+	x := blobs.put("apk")
+	app, release, asset := testTriple("a", ownerKey, x, key.hash, 1)
+	r.holdListing(t.Context(), app)
+	r.holdListing(t.Context(), asset)
+	if res := r.holdListing(t.Context(), release); !res.ok || res.msg != msgListingPending {
+		t.Fatalf("first send: %+v", res)
+	}
+	drainReads(t, r)
+	if slotHas(t, r.store, release.ID) {
+		t.Fatal("promoted a store-signed apk")
+	}
 
-		// A second send of the same file is refused on the spot.
-		app, release, asset = testTriple("b", pub, x, key.hash, 1)
-		r.holdListing(t.Context(), app)
-		r.holdListing(t.Context(), asset)
-		res := r.holdListing(t.Context(), release)
-		if res.ok || !strings.HasPrefix(res.msg, "third-party signer: fdroid") {
-			t.Fatalf("%s resend: %+v", pub[:1], res)
-		}
+	// A second send of the same file is refused on the spot.
+	app, release, asset = testTriple("b", ownerKey, x, key.hash, 1)
+	r.holdListing(t.Context(), app)
+	r.holdListing(t.Context(), asset)
+	res := r.holdListing(t.Context(), release)
+	if res.ok || !strings.HasPrefix(res.msg, "third-party signer: fdroid") {
+		t.Fatalf("resend: %+v", res)
 	}
 }
 
-func TestPlayDeliveredAPKNeedsAProof(t *testing.T) {
+func TestPlayDeliveredAPKWithAProofIsListed(t *testing.T) {
 	key := newTestKey(t)
 	delivered := func(io.ReadSeeker) (signing, error) {
 		return signing{key.cert}, &thirdPartyError{label: "google-play", mark: "source stamp", delivery: true}
@@ -147,19 +128,7 @@ func TestPlayDeliveredAPKNeedsAProof(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	r.readAPK = delivered
-	app, release, asset := testTriple("a", catalogKey, blobs.put("apk"), key.hash, 1)
-	r.holdListing(t.Context(), app)
-	r.holdListing(t.Context(), asset)
-	r.holdListing(t.Context(), release)
-	drainReads(t, r)
-	if slotHas(t, r.store, release.ID) {
-		t.Fatal("the catalog key listed a Play-delivered apk")
-	}
-
-	blobs = newFakeBlossom()
-	r = testRelay(t, blobs)
-	r.readAPK = delivered
-	app, release, asset = testTriple("b", ownerKey, blobs.put("apk"), key.hash, 1)
+	app, release, asset := testTriple("b", ownerKey, blobs.put("apk"), key.hash, 1)
 	r.holdListing(t.Context(), app)
 	r.holdListing(t.Context(), asset)
 	r.holdListing(t.Context(), release)
@@ -179,8 +148,9 @@ func TestListingReadsAnAPKOutsideBlossom(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	r.fetch = srv.Client()
+	saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
 	sum := sha256.Sum256([]byte("apk"))
-	app, release, asset := testTriple("a", catalogKey, hex.EncodeToString(sum[:]), key.hash, 1)
+	app, release, asset := testTriple("a", ownerKey, hex.EncodeToString(sum[:]), key.hash, 1)
 	asset.Tags = append(asset.Tags, nostr.Tag{"url", srv.URL + "/app.apk"})
 	r.holdListing(t.Context(), app)
 	if res := r.holdListing(t.Context(), asset); res.msg != msgListingPending {
@@ -203,7 +173,8 @@ func TestListingReadsTheAPKCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.config.APKCacheDir, x+".apk"), []byte("apk"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	app, release, asset := testTriple("a", catalogKey, x, key.hash, 1)
+	saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
+	app, release, asset := testTriple("a", ownerKey, x, key.hash, 1)
 	asset.Tags = append(asset.Tags, nostr.Tag{"url", "https://unreachable.invalid/app.apk"})
 	r.holdListing(t.Context(), app)
 	r.holdListing(t.Context(), asset)

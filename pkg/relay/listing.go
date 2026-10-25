@@ -320,8 +320,10 @@ func refuse(format string, args ...any) releaseCheck {
 }
 
 // checkRelease judges one release for promotion. The triple must be complete
-// and every APK read, from Blossom, the APK cache, or the asset's url. No
-// store may have signed it. A developer APK must be signed by the app's
+// and, for a developer, every APK read, from Blossom, the APK cache, or the
+// asset's url. No store may have signed it. The catalog key's APK is not read:
+// the indexer verified it, and an asset without a url waits for its file in
+// Blossom. A developer APK must be signed by the app's
 // certificate or a successor in its lineage, and published by the active C1
 // owner or delegate, counting pending proofs that verify against it. Both
 // slots must pass the version guard.
@@ -359,10 +361,20 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 	}
 	check := releaseCheck{assets: assets}
 	if pubkey == r.config.Info.Pubkey {
-		check, err = r.checkCatalog(ctx, assets)
-		if err != nil || check.assets == nil {
-			return check, err
+		signer := assetSigner(assets[0])
+		if signer == "" {
+			return refuse("the asset names no apk_certificate_hash"), nil
 		}
+		for i := range assets {
+			if r.assetURL(assets[i].Tags) != "" {
+				continue
+			}
+			ready, err := r.assetInBlossom(ctx, &assets[i])
+			if err != nil || !ready {
+				return releaseCheck{}, err
+			}
+		}
+		check.cert = signer
 	} else {
 		check, err = r.checkDeveloper(ctx, pubkey, appID, assets)
 		if err != nil || check.assets == nil {
@@ -378,42 +390,6 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		return refuse("version_code %d is lower than %d, the last promoted release in this slot and channel", code, floor), nil
 	}
 	return check, nil
-}
-
-// checkCatalog reads every APK of a catalog key release and checks that it is
-// signed by the certificate its asset names, and carries no store's delivery
-// mark: without a C1 proof nothing shows the developer holds the key. A file
-// already named by a promoted asset is not read again, so a key rotation
-// promotes at once.
-func (r *T) checkCatalog(ctx context.Context, assets []nostr.Event) (releaseCheck, error) {
-	signer := assetSigner(assets[0])
-	if signer == "" {
-		return refuse("the asset names no apk_certificate_hash"), nil
-	}
-	for _, asset := range assets {
-		x, _ := events.Find(asset.Tags, "x")
-		listed, err := r.listedFile(ctx, x)
-		if err != nil {
-			return releaseCheck{}, err
-		}
-		if listed {
-			continue
-		}
-		got, readErr, ok := r.apkSigning(x, r.assetURL(asset.Tags))
-		if !ok {
-			return releaseCheck{}, nil
-		}
-		if readErr != "" {
-			return refuse("%s", readErr), nil
-		}
-		if delivered := r.apks.delivered(x); delivered != "" {
-			return refuse("%s", delivered), nil
-		}
-		if got.cert(assetSigner(asset)) == nil {
-			return refuse("the APK is not signed by the certificate its asset names"), nil
-		}
-	}
-	return releaseCheck{assets: assets, cert: signer}, nil
 }
 
 // listedFile reports a file a stored asset already names.

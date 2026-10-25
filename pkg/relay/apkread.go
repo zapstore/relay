@@ -45,12 +45,10 @@ type apkJob struct {
 }
 
 // readAPKResult is a signing chain read during this process. A restart reads
-// the file again. delivered is the refusal for a store's delivery mark,
-// which only a listing without a C1 proof gets.
+// the file again.
 type readAPKResult struct {
-	chain     signing
-	readErr   string
-	delivered string
+	chain   signing
+	readErr string
 }
 
 // apkReader reads APK certificates one at a time, off the event path.
@@ -76,13 +74,6 @@ func (a *apkReader) remember(blob string, res readAPKResult) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.read[blob] = res
-}
-
-// delivered returns the delivery mark refusal of a read APK, or "".
-func (a *apkReader) delivered(blob string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.read[blob].delivered
 }
 
 func (a *apkReader) cached(blob string) (signing, string, bool) {
@@ -141,9 +132,10 @@ func (r *T) runAPKReader(ctx context.Context) {
 }
 
 // readAPKJob reads one APK and remembers its certificates until the process
-// exits. A file that is not a verifiable APK, or that a store signed, is
-// remembered with the refusal, since the same bytes will not pass later. An
-// APK that could not be fetched returns an error.
+// exits. A file that is not a verifiable APK, or whose key a store holds, is
+// remembered with the refusal, since the same bytes will not pass later. A
+// store's delivery mark is not refused: a developer's C1 proof shows they
+// hold the key. An APK that could not be fetched returns an error.
 func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
@@ -156,7 +148,7 @@ func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	var store *thirdPartyError
 	if errors.As(readErr, &store) && store.delivery && len(chain) > 0 {
 		slog.Info("apk reader: read apk", "blob", job.blob, "signer", chain.signer(), "delivered_by", store.label)
-		r.apks.remember(job.blob, readAPKResult{chain: chain, delivered: store.Error()})
+		r.apks.remember(job.blob, readAPKResult{chain: chain})
 		return nil
 	}
 	if readErr != nil {
