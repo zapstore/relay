@@ -62,7 +62,7 @@ func TestProcessorRefusalDropsTheRelease(t *testing.T) {
 	}
 }
 
-func TestProcessorErrorKeepsTheReleasePending(t *testing.T) {
+func TestProcessorErrorStillLists(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	key := newTestKey(t)
@@ -76,11 +76,8 @@ func TestProcessorErrorKeepsTheReleasePending(t *testing.T) {
 	r.holdListing(t.Context(), release)
 	drainReads(t, r)
 	drainProcessing(t, r)
-	if slotHas(t, r.store, release.ID) {
-		t.Fatal("listed although processing failed")
-	}
-	if kept, _ := pendingHas(t.Context(), r.store, release.ID); !kept {
-		t.Fatal("a release whose processing failed was dropped")
+	if !slotHas(t, r.store, release.ID) {
+		t.Fatal("a release whose processing failed was not listed")
 	}
 }
 
@@ -108,10 +105,8 @@ func drainProcessing(t *testing.T, r *T) {
 	t.Helper()
 	for len(r.procs.jobs) > 0 {
 		listing := <-r.procs.jobs
-		refusal, err := r.processJob(t.Context(), listing)
-		r.procs.finish(listing.Release.ID, refusal, err)
-		if err == nil {
-			r.promoteProcessed(t.Context(), listing)
-		}
+		refusal, _ := r.processJob(t.Context(), listing)
+		r.procs.finish(listing.Release.ID, refusal)
+		r.promoteProcessed(t.Context(), listing)
 	}
 }

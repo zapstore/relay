@@ -52,11 +52,6 @@ type Config struct {
 	// Default is all kinds.
 	AllowedKinds []int `env:"RELAY_ALLOWED_EVENT_KINDS"`
 
-	// ReconcileInterval is the interval used by the reconciliation mechanism of the relay, in which
-	// pending events are checked for completeness, and moved to the normal events or deleted.
-	// Default is 1 minute.
-	ReconcileInterval time.Duration `env:"RELAY_RECONCILE_INTERVAL"`
-
 	// RemovePendingAfter is the duration after which pending events are removed from the relay.
 	// Default is 5 hours.
 	RemovePendingAfter time.Duration `env:"RELAY_REMOVE_PENDING_AFTER"`
@@ -98,7 +93,6 @@ func NewConfig() Config {
 			// NIP-C1 identity proof kind
 			events.KindIdentityProof,
 		},
-		ReconcileInterval:  1 * time.Minute,
 		RemovePendingAfter: 5 * time.Hour,
 		ProfileRelays:      []string{"wss://relay.vertexlab.io"},
 	}

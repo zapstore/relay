@@ -13,12 +13,12 @@ import (
 )
 
 // Processor runs on a release that passed admission, just before it is
-// listed: steroid's enrichment, and later security checks. A refusal drops
-// the release with that reason. An error retries it after processRetry.
+// listed: steroid's enrichment, and later security checks. It runs once per
+// release. A refusal drops the release with that reason. An error is logged
+// and the release is listed anyway.
 type Processor func(ctx context.Context, listing catalog.Listing, picture string) (refusal string, err error)
 
 const (
-	processRetry     = 10 * time.Minute
 	processTimeout   = 15 * time.Minute
 	processQueueSize = 64
 )
@@ -28,18 +28,16 @@ const (
 type processQueue struct {
 	jobs chan catalog.Listing
 
-	mu      sync.Mutex
-	queued  map[string]struct{}
-	retryAt map[string]time.Time
-	done    map[string]string // release id: refusal, "" when it passed
+	mu     sync.Mutex
+	queued map[string]struct{}
+	done   map[string]string // release id: refusal, "" when it passed
 }
 
 func newProcessQueue() *processQueue {
 	return &processQueue{
-		jobs:    make(chan catalog.Listing, processQueueSize),
-		queued:  map[string]struct{}{},
-		retryAt: map[string]time.Time{},
-		done:    map[string]string{},
+		jobs:   make(chan catalog.Listing, processQueueSize),
+		queued: map[string]struct{}{},
+		done:   map[string]string{},
 	}
 }
 
@@ -50,15 +48,12 @@ func (q *processQueue) result(release string) (refusal string, ok bool) {
 	return refusal, ok
 }
 
-// request queues a listing unless it is queued or waiting to retry.
+// request queues a listing unless it is queued.
 func (q *processQueue) request(listing catalog.Listing) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	id := listing.Release.ID
 	if _, ok := q.queued[id]; ok {
-		return
-	}
-	if time.Now().Before(q.retryAt[id]) {
 		return
 	}
 	select {
@@ -69,15 +64,10 @@ func (q *processQueue) request(listing catalog.Listing) {
 	}
 }
 
-func (q *processQueue) finish(release, refusal string, err error) {
+func (q *processQueue) finish(release, refusal string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	delete(q.queued, release)
-	if err != nil {
-		q.retryAt[release] = time.Now().Add(processRetry)
-		return
-	}
-	delete(q.retryAt, release)
 	q.done[release] = refusal
 }
 
@@ -126,18 +116,19 @@ func (r *T) runProcessor(ctx context.Context) {
 			return
 		case listing := <-r.procs.jobs:
 			refusal, err := r.processJob(ctx, listing)
-			r.procs.finish(listing.Release.ID, refusal, err)
 			if err != nil {
-				slog.Warn("processor: failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)
-				continue
+				if ctx.Err() != nil {
+					return
+				}
+				slog.Warn("processor: failed, listing without its artifacts", "release", listing.Release.ID, "app", listing.AppID, "error", err)
 			}
+			r.procs.finish(listing.Release.ID, refusal)
 			r.promoteProcessed(ctx, listing)
 		}
 	}
 }
 
-// promoteProcessed promotes the app of a processed release, without waiting
-// for the next reconcile.
+// promoteProcessed promotes the app of a processed release.
 func (r *T) promoteProcessed(ctx context.Context, listing catalog.Listing) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

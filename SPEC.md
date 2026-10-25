@@ -75,20 +75,33 @@ a mover uploads them to Bunny when it is set, then deletes the local copy.
 Without Bunny, promoted files stay in `blossom/`. Anything not promoted
 within `RELAY_REMOVE_PENDING_AFTER` is deleted, events and files.
 
+Promotion runs when what a listing waits on arrives: its event, the upload
+of its APK, the read of its APK, or its processing. An upload or a read
+retries only the pending listings whose asset names that file, and the
+pending claims for its certificate. Once at start and then every hour, the
+relay sweeps the whole buffer zone, for what a restart left pending, and
+deletes what expired.
+
 A listing does not need its APK in this relay's Blossom. The relay reads
 each developer APK's signer and v3 lineage off the event path, from the
 buffer zone or Bunny, else from `$DATA_DIR/apk-cache/<sha256>.apk`, else
 from the asset's `url`, checking the sha256. It keeps the result in memory;
-a restart reads the file again. A developer listing waits until every APK
-is read. The catalog key's APK is not read: the indexer verified it, and
-the relay pins the `apk_certificate_hash` its asset names. A catalog key
-asset without a `url` waits until its file is in Blossom.
+a restart reads the file again. Only a pending asset's APK is read: a
+developer listing waits until each of those is read, and a stored asset
+or release was read when it was promoted and is not checked again. The
+catalog key's APK is not read: the indexer verified it, and the relay pins
+the `apk_certificate_hash` its asset names. A catalog key asset without a
+`url` waits until its file is in Blossom. A file downloaded from a `url`
+is kept at `$DATA_DIR/apk-cache/<sha256>.apk`, so the enricher reads it
+there. A file that cannot be fetched is fetched again, after 15 seconds
+and doubling up to 5 minutes, until it is read or nothing pending names it.
 
 An admitted release is processed just before it is listed: the relay's
 `Processor`, one release at a time, off the event path. Today that is the
 enricher; security checks will join it. An app the enricher could not
 finish is still listed, without its artifacts, until an operator runs
-`enrich` again. A refusal drops the release with its reason. An error keeps it pending and retries after ten minutes. A
+`enrich` again. It runs once per release: an error is logged and the
+release is listed. A refusal drops the release with its reason. A
 release whose every file is already listed, by the same test, is not
 processed again. Results are kept in memory by release id.
 
@@ -101,8 +114,8 @@ holds it. The refusal is `third-party signer: <store>, by its <mark>`. Since the
 refused at once. `cmd/signers` reports which stored or local APKs the
 rules match.
 
-The `apk-cache` directory belongs to the indexer, which writes each APK it
-verified before publishing it. The relay only reads it. Nothing prunes it
+The indexer writes each APK it verified to `apk-cache` before publishing
+it; the relay adds the ones it downloads from a `url`. Nothing prunes it
 yet.
 
 A listing kept in the buffer zone is answered `OK` true with a message
@@ -112,8 +125,9 @@ them by sending the release again.
 A new proof is checked against the certificate of the promoted APK for its
 app, else against the buffered APK of the listing it came with. The relay
 reads that certificate from the file itself: from the buffer zone, else
-from Bunny, else from the asset's `url`. A proof with neither APK is
-refused. `cert` is ignored.
+from Bunny, else from the asset's `url`. Only the newest listed APK with
+that certificate is read. A proof with neither APK is refused. `cert` is
+ignored.
 
 ## Local client
 
@@ -149,8 +163,8 @@ Selection is stored on write, not decided per REQ. Table `listings` holds
 one row per app id with a kind `32267`: the selected kind `30063`, or NULL
 when no listing is complete. Its signer holds the slot. Triggers on `events`
 clear an app's row when any of its three kinds is inserted or deleted, by
-any writer. The relay fills every app with no row after each event, on each
-reconcile, after a ban, and at start, reading and writing in one
+any writer. The relay fills every app with no row after each event, after
+each promotion, on each sweep, after a ban, and at start, reading and writing in one
 transaction, so a write that lands in between fails the fill rather than
 leaving a stale row. A REQ drops the events of other signers; an app with
 no selected release is not filtered. The webapp reads the same table.
