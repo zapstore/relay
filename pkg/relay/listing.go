@@ -223,7 +223,14 @@ func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast str
 	}
 
 	releases := pendingReleases
-	if len(releases) == 0 {
+	if len(releases) == 0 && len(pendingAssets) > 0 {
+		// A pending asset can complete a release that is already stored. Load
+		// only the releases that name one of these assets. The app's other
+		// stored releases stay as they are.
+		if releases, err = r.storedReleasesForAssets(ctx, pubkey, pendingAssets); err != nil {
+			return nil, err
+		}
+	} else if len(releases) == 0 {
 		if releases, err = r.storedReleases(ctx, pubkey, appID); err != nil {
 			return nil, err
 		}
@@ -281,6 +288,38 @@ func (r *T) listingApp(ctx context.Context, pubkey, appID string, pending *nostr
 		return nil, err
 	}
 	return &event, nil
+}
+
+// storedReleasesForAssets returns stored releases that name one of assets.
+// A pending asset whose release is already stored is promoted with that
+// release. Releases that do not name the asset are left alone.
+func (r *T) storedReleasesForAssets(ctx context.Context, pubkey string, assets map[string]nostr.Event) ([]nostr.Event, error) {
+	if len(assets) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(assets)+2)
+	args = append(args, events.KindRelease, pubkey)
+	for id := range assets {
+		args = append(args, id)
+	}
+	rows, err := r.store.DB.QueryContext(ctx, `
+		SELECT DISTINCT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
+		FROM events e
+		JOIN tags t ON t.event_id = e.id
+		WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'e' AND t.value`+inClause(len(assets)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []nostr.Event
+	for rows.Next() {
+		event, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
 }
 
 func (r *T) storedReleases(ctx context.Context, pubkey, appID string) ([]nostr.Event, error) {

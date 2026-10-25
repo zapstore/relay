@@ -71,6 +71,28 @@ func TestListingStaysPendingUntilComplete(t *testing.T) {
 	}
 }
 
+func TestPendingAssetDoesNotRereadStoredReleases(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	reads := 0
+	r.readAPK = func(io.ReadSeeker) (signing, error) {
+		reads++
+		return nil, errors.New("read")
+	}
+	for _, n := range []string{"o", "p"} {
+		asset := testAsset(n, ownerKey, blobs.put(n), strings.Repeat("e", 64), 1)
+		saveSlotEvent(t, r.store, *asset)
+		saveSlotEvent(t, r.store, *testRelease(n, ownerKey, "1.0."+n, "main", asset.ID))
+	}
+	fresh := testAsset("n", ownerKey, blobs.put("new"), strings.Repeat("e", 64), 3)
+	if res := r.holdListing(t.Context(), fresh); !res.ok {
+		t.Fatalf("asset: %+v", res)
+	}
+	if reads != 0 {
+		t.Fatalf("read %d stored apks for an asset no release names", reads)
+	}
+}
+
 func TestCatalogAPKIsNotRead(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
