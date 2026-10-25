@@ -65,15 +65,16 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 	if err != nil {
 		return 0, err
 	}
+	// The bundle goes first: the snapshot makes nextN the served epoch.
+	if err := writeAtomic(BundlePath(data, latest, nextN), body); err != nil {
+		return 0, err
+	}
 	snap := SnapPath(data, nextN)
 	if err := WriteSnap(snap, next.Events(), next.Notices); err != nil {
 		return 0, err
 	}
 	at := time.Unix(bundledAt, 0)
 	if err := os.Chtimes(snap, at, at); err != nil {
-		return 0, err
-	}
-	if err := writeAtomic(BundlePath(data, latest, nextN), body); err != nil {
 		return 0, err
 	}
 	if err := writeFloor(data, nextN); err != nil {

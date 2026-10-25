@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -256,21 +257,38 @@ func signManifest(ctx context.Context, from, to, bundledAt int64, members []memb
 	return json.Marshal(event)
 }
 
+// writeAtomic renames a finished temp file onto path. Each call needs its own
+// temp: EnsureBundle can write the same path concurrently without seal.lock.
 func writeAtomic(path string, body []byte) error {
-	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".partial"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+	f, err := os.CreateTemp(dir, ".partial-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
-}
-
-func filepathDir(path string) string {
-	i := strings.LastIndex(path, "/")
-	if i < 0 {
-		return "."
+	tmp := f.Name()
+	done := false
+	defer func() {
+		if !done {
+			os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		return err
 	}
-	return path[:i]
+	if err := f.Chmod(0o644); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	done = true
+	return nil
 }
