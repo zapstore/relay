@@ -76,13 +76,13 @@ Without Bunny, promoted files stay in `blossom/`. Anything not promoted
 within `RELAY_REMOVE_PENDING_AFTER` is deleted, events and files.
 
 A listing does not need its APK in this relay's Blossom. The relay reads
-each APK's signer and v3 lineage off the event path, from the buffer zone
-or Bunny, else from `$DATA_DIR/apk-cache/<sha256>.apk`, else from the
-asset's `url`, checking the sha256. It keeps the result in memory; a
-restart reads the file again. A listing waits until every APK is read. A
-catalog key asset whose file a stored asset already names is not read
-again. The catalog key's APK must be
-signed by the certificate its asset names.
+each developer APK's signer and v3 lineage off the event path, from the
+buffer zone or Bunny, else from `$DATA_DIR/apk-cache/<sha256>.apk`, else
+from the asset's `url`, checking the sha256. It keeps the result in memory;
+a restart reads the file again. A developer listing waits until every APK
+is read. The catalog key's APK is not read: the indexer verified it, and
+the relay pins the `apk_certificate_hash` its asset names. A catalog key
+asset without a `url` waits until its file is in Blossom.
 
 An admitted release is processed just before it is listed: the relay's
 `Processor`, one release at a time, off the event path. Today that is the
@@ -92,13 +92,12 @@ finish is still listed, without its artifacts, until an operator runs
 release whose every file is already listed, by the same test, is not
 processed again. Results are kept in memory by release id.
 
-No store may hold the signing key. `pkg/relay/signers.txt` lists what
-shows one: F-Droid's build-key subject and store certificates, refused on
-any listing, and the marks Play adds on delivery, its source stamp and
-frosting. A delivery mark refuses only a catalog key listing: a developer
-listing has a C1 proof signed with the certificate key, which shows the
-developer holds it. The refusal is `third-party signer: <store>, by its
-<mark>`. Since the read is remembered, sending the release again is
+No store may hold the signing key of a developer APK.
+`pkg/relay/signers.txt` lists what shows one: F-Droid's build-key subject
+and store certificates, which are refused, and the marks Play adds on
+delivery, its source stamp and frosting, which are not: a developer listing
+has a C1 proof signed with the certificate key, which shows the developer
+holds it. The refusal is `third-party signer: <store>, by its <mark>`. Since the read is remembered, sending the release again is
 refused at once. `cmd/signers` reports which stored or local APKs the
 rules match.
 
@@ -130,8 +129,12 @@ first byte is the control channel.
 The relay ranks its selected listings, as [Search](../product/specs/search.md#relay)
 defines, for a NIP-50 REQ on kind `32267`. Vectors and facts come from `artifacts.db`.
 The query encoder is the enricher's, loaded at start from `LEAF_MODEL_DIR`
-with `ONNXRUNTIME_LIB`; the relay does not start without it. A
-promoted listing is ranked without waiting for a snapshot. Queries are not logged.
+with `ONNXRUNTIME_LIB`; the relay does not start without it. Before it
+listens, the relay loads the selected listings and their artifacts for
+ranking, filling every missing `listings` row; a failure stops the start.
+It reloads them every minute in the background, keeping the previous set
+when a reload fails, so a search never waits for a load. A promoted listing
+is ranked within a minute, without waiting for a snapshot. Queries are not logged.
 
 ## Queries
 
