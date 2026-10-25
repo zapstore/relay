@@ -23,18 +23,17 @@ type Loader func(ctx context.Context) ([]Entry, error)
 // Encoder turns a normalized query into a leaf-ir-v1 vector.
 type Encoder func(ctx context.Context, query string) ([]int8, error)
 
-// Engine ranks the live selection. It reloads the listings when they are
-// older than its refresh interval. A nil encoder, or a failing query, ranks
-// without the vector.
+// Engine ranks the live selection. Load fills it before the relay serves, and
+// Run reloads it every refresh interval, so a search never waits for a load.
+// A nil encoder, or a failing query, ranks without the vector.
 type Engine struct {
 	load    Loader
 	encode  Encoder
 	refresh time.Duration
 	log     *slog.Logger
 
-	mu       sync.Mutex
-	entries  []Entry
-	loadedAt time.Time
+	mu      sync.Mutex
+	entries []Entry
 }
 
 func NewEngine(load Loader, encode Encoder, refresh time.Duration, log *slog.Logger) *Engine {
@@ -175,23 +174,53 @@ func (e *Engine) Search(ctx context.Context, req Request) (Result, error) {
 	return Result{Hits: hits}, nil
 }
 
-func (e *Engine) snapshot(ctx context.Context) ([]Entry, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.entries != nil && time.Since(e.loadedAt) < e.refresh {
-		return e.entries, nil
-	}
+// Load reads the selected listings now. On failure the previous selection
+// stays.
+func (e *Engine) Load(ctx context.Context) error {
 	entries, err := e.load(ctx)
 	if err != nil {
-		if e.entries != nil {
-			e.log.Error("search: reload failed; ranking the previous selection", "error", err)
-			return e.entries, nil
-		}
-		return nil, err
+		return err
 	}
 	if entries == nil {
 		entries = []Entry{}
 	}
-	e.entries, e.loadedAt = entries, time.Now()
-	return entries, nil
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.entries = entries
+	return nil
+}
+
+// Run reloads the selection every refresh interval until ctx is done.
+func (e *Engine) Run(ctx context.Context) {
+	tick := time.NewTicker(e.refresh)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			loadCtx, cancel := context.WithTimeout(ctx, e.refresh)
+			err := e.Load(loadCtx)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				e.log.Error("search: reload failed; ranking the previous selection", "error", err)
+			}
+		}
+	}
+}
+
+// snapshot returns the loaded selection, loading it first when nothing has.
+func (e *Engine) snapshot(ctx context.Context) ([]Entry, error) {
+	e.mu.Lock()
+	entries := e.entries
+	e.mu.Unlock()
+	if entries != nil {
+		return entries, nil
+	}
+	if err := e.Load(ctx); err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.entries, nil
 }

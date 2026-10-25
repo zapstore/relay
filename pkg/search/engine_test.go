@@ -105,16 +105,22 @@ func TestEngineReload(t *testing.T) {
 		return testEntries(), nil
 	}, nil, time.Hour, slog.Default())
 
+	if err := engine.Load(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
 		if _, err := engine.Search(t.Context(), Request{Query: "Notes"}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if loads != 1 {
-		t.Fatalf("loads = %d within the refresh interval", loads)
+		t.Fatalf("loads = %d: a search loaded the selection", loads)
 	}
 
-	engine.refresh, fail = 0, true
+	fail = true
+	if err := engine.Load(t.Context()); err == nil {
+		t.Fatal("a failed reload returned no error")
+	}
 	result, err := engine.Search(t.Context(), Request{Query: "Notes"})
 	if err != nil || len(result.Hits) == 0 {
 		t.Fatalf("a failed reload dropped the previous selection: %v %v", result.Hits, err)

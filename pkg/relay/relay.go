@@ -191,11 +191,15 @@ func readOnlyEvent(rely.Client, *nostr.Event) error {
 // Handler is the WebSocket relay. Mount it at "/" beside other routes.
 func (r *T) Handler() http.Handler { return r.server }
 
-// StartAndServe starts the relay. handler receives every request; nil serves only the WebSocket relay.
+// StartAndServe starts the relay. handler receives every request; nil serves
+// only the WebSocket relay. Every app has its selected release before the
+// relay listens.
 func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	r.reselect(ctx)
+	if err := reselect(ctx, r.store, r.config.Info.Pubkey); err != nil {
+		return fmt.Errorf("fill listings: %w", err)
+	}
 	var wg sync.WaitGroup
 	wg.Add(4)
 	go func() {

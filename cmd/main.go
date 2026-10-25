@@ -272,10 +272,19 @@ func start(cfg config.Config) (err error) {
 	}
 	defer func() { err = errors.Join(err, enc.Close()) }()
 	engine := search.NewEngine(relay.SearchListings(relayDB, cfg.Relay.Info.Pubkey, artifacts.Path(dataDir)), enc.Query, time.Minute, slog.Default())
+	// Loading the selection fills every missing listings row, so the relay
+	// serves neither an empty search nor an empty live read.
+	if err := engine.Load(ctx); err != nil {
+		return fmt.Errorf("search: %w", err)
+	}
 	rel.UseSearch(engine)
 	mux := routes(bundle.Shared(), rel.Handler())
 
 	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		engine.Run(gctx)
+		return nil
+	})
 	if watch {
 		g.Go(func() error {
 			credits.WatchCredits(gctx)
