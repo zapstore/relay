@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -53,15 +52,9 @@ func rotate(ctx context.Context, t term) error {
 		if err := t.confirm(ctx, fmt.Sprintf("Delete those %d events and the snapshots and bundles?", len(pl.Delete))); err != nil {
 			return false, err
 		}
-		if err := clearOld(ctx, t, p.RelayData, pl); err != nil {
-			return undone(backup, err)
-		}
-
-		newKey, signer, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{},
+		newKey, signer, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{intervals: true},
 			"RELAY_PUBKEY=<the new key>",
 			"SIGN_WITH=<the new key's bunker URL>",
-			"CATALOG_BUNDLE_INTERVAL=0",
-			"BLOSSOM_PRUNE_INTERVAL=0",
 		)
 		if err != nil {
 			return undone(backup, err)
@@ -69,6 +62,23 @@ func rotate(ctx context.Context, t term) error {
 		if err := editIndexerEnv(ctx, t, s.IndexerEnv, newKey); err != nil {
 			return undone(backup, err)
 		}
+		lud16, err := t.ask(ctx, "lud16 for the new key's kind 0", lud16Of(pl.Profile))
+		if err != nil {
+			return undone(backup, err)
+		}
+		evs, err := resign(ctx, pl, signer.Sign, newKey, lud16, time.Now())
+		if err != nil {
+			return undone(backup, err)
+		}
+		if err := clearOld(ctx, t, p.RelayData, pl); err != nil {
+			return undone(backup, err)
+		}
+		rep, err := storeAll(ctx, t, p.RelayData, evs)
+		rep.print(t)
+		if err != nil {
+			return undone(backup, err)
+		}
+
 		p, err = s.paths(ctx)
 		if err != nil {
 			return undone(backup, err)
@@ -82,35 +92,9 @@ func rotate(ctx context.Context, t term) error {
 		if err := waitSocket(ctx, t, p.RelaySocket); err != nil {
 			return undone(backup, err)
 		}
-		lud16, err := t.ask(ctx, "lud16 for the new key's kind 0", lud16Of(pl.Profile))
-		if err != nil {
-			return undone(backup, err)
-		}
-		evs, err := resign(ctx, pl, signer.Sign, newKey, lud16, time.Now())
-		if err != nil {
-			return undone(backup, err)
-		}
 		sock := &nostrSocket{path: p.RelaySocket}
 		defer sock.Close()
-		rep, err := publishAll(ctx, t, sock, evs, false)
-		rep.print(t)
-		if err != nil {
-			return undone(backup, err)
-		}
 		if err := checkRotation(ctx, t, sock, newKey, pl, rep); err != nil {
-			return undone(backup, err)
-		}
-
-		if _, _, err := editRelayEnv(ctx, t, s.RelayEnv, relayEnvWant{key: newKey, intervals: true},
-			"CATALOG_BUNDLE_INTERVAL back on (for example 5m), or remove the line",
-			"BLOSSOM_PRUNE_INTERVAL back on (for example 24h), or remove the line",
-		); err != nil {
-			return undone(backup, err)
-		}
-		if err := systemctl(ctx, t, "restart", s.RelayUnit); err != nil {
-			return undone(backup, err)
-		}
-		if err := waitRelay(ctx, t, p.RelayAddr, newKey); err != nil {
 			return undone(backup, err)
 		}
 		for _, unit := range []string{s.IndexerUnit, s.ProxyUnit} {
@@ -263,11 +247,24 @@ func dryRun(ctx context.Context, t term, backup, relayBin string) error {
 	if err != nil {
 		return err
 	}
+	sk := nostr.GeneratePrivateKey()
+	signer, err := catalog.ParseSigner(sk)
+	if err != nil {
+		return err
+	}
+	lud16 := lud16Of(pl.Profile)
+	if lud16 == "" {
+		lud16 = "dry-run@example.invalid"
+	}
+	evs, err := resign(ctx, pl, signer.Sign, signer.PubKey, lud16, time.Now())
+	if err != nil {
+		return err
+	}
 	if err := clearOld(ctx, t, data, pl); err != nil {
 		return err
 	}
-	sk := nostr.GeneratePrivateKey()
-	signer, err := catalog.ParseSigner(sk)
+	rep, err := storeAll(ctx, t, data, evs)
+	rep.print(t)
 	if err != nil {
 		return err
 	}
@@ -283,26 +280,10 @@ func dryRun(ctx context.Context, t term, backup, relayBin string) error {
 	if err := waitRelay(ctx, t, addr, signer.PubKey); err != nil {
 		return fmt.Errorf("%w (log: %s)", err, filepath.Join(tmp, "relay.log"))
 	}
-	lud16 := lud16Of(pl.Profile)
-	if lud16 == "" {
-		lud16 = "dry-run@example.invalid"
-	}
-	evs, err := resign(ctx, pl, signer.Sign, signer.PubKey, lud16, time.Now())
-	if err != nil {
-		return err
-	}
 	sock := &nostrSocket{path: filepath.Join(data, "relay.sock")}
 	defer sock.Close()
-	rep, err := publishAll(ctx, t, sock, evs, true)
-	rep.print(t)
-	if err != nil {
-		return err
-	}
 	checkErr := checkRotation(ctx, t, sock, signer.PubKey, pl, rep)
 	t.say("Relay log: %s", filepath.Join(tmp, "relay.log"))
-	if rep.failures() > 0 {
-		return errors.Join(fmt.Errorf("%d events rejected", rep.failures()), checkErr)
-	}
 	if checkErr != nil {
 		return checkErr
 	}

@@ -4,70 +4,67 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
-	"github.com/zapstore/relay/pkg/relay"
+	"github.com/zapstore/relay/pkg/policy"
+	"github.com/zapstore/relay/pkg/relay/store"
 )
 
-// msgBlobPending must match relay/pkg/relay/listing.go: the asset's file is not in Blossom.
-const msgBlobPending = "the event will be saved when the referenced blob is uploaded"
-
-// report counts what the relay answered.
+// report counts what was stored.
 type report struct {
-	Published int
-	// Banned are app ids whose asset names a banned file hash.
+	Stored int
+	// Banned are app ids with a listing event the relay's policy rejects.
 	Banned map[string]bool
-	// Failed counts every other rejection by reason.
-	Failed  map[string]int
-	Samples []string
 }
 
-func (r report) failures() int {
-	n := 0
-	for _, c := range r.Failed {
-		n += c
+// storeAll writes the re-signed events into relay.db while the relay is
+// stopped. Every listing was already listed under oldKey, so the relay's
+// admission gate has nothing left to check, except a ban: a listing with an
+// event the policy rejects is skipped whole.
+func storeAll(ctx context.Context, t term, relayData string, evs []nostr.Event) (report, error) {
+	rep := report{Banned: map[string]bool{}}
+	db, err := store.New(filepath.Join(relayData, "relay.db"))
+	if err != nil {
+		return rep, err
 	}
-	return n
-}
+	defer db.Close()
+	pol, err := policy.Open(db.DB)
+	if err != nil {
+		return rep, err
+	}
+	for i := range evs {
+		if !listingEvent(evs[i]) {
+			continue
+		}
+		verdict, err := pol.EventVerdict(ctx, &evs[i])
+		if err != nil {
+			return rep, err
+		}
+		if verdict.Reject || verdict.Reason != "" {
+			rep.Banned[eventAppID(evs[i])] = true
+		}
+	}
 
-// publishAll publishes in order. keepGoing collects failures instead of stopping at the first.
-func publishAll(ctx context.Context, t term, sock *nostrSocket, evs []nostr.Event, keepGoing bool) (report, error) {
-	rep := report{Banned: map[string]bool{}, Failed: map[string]int{}}
-	t.say("Publishing %d events over %s", len(evs), sock.path)
+	t.say("Storing %d events in %s", len(evs), filepath.Join(relayData, "relay.db"))
 	for i, e := range evs {
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
-		// A banned asset is not stored. Publishing the release and the app
-		// that follow would be a different rejection and would stop the window.
 		if skipEvent(e, rep.Banned) {
 			continue
 		}
-		ok, msg, err := sock.publish(ctx, e)
+		if nostr.IsReplaceableKind(e.Kind) || nostr.IsAddressableKind(e.Kind) {
+			_, err = db.Replace(ctx, &e)
+		} else {
+			_, err = db.Save(ctx, &e)
+		}
 		if err != nil {
-			return rep, err
+			return rep, fmt.Errorf("store kind %d %s (%s): %w", e.Kind, e.ID, eventAppID(e), err)
 		}
-		switch {
-		case !ok && msg == relay.ErrFileNotAllowed.Error():
-			rep.Banned[eventAppID(e)] = true
-			continue
-		case ok && msg == msgBlobPending:
-			ok, msg = false, "asset file is not in Blossom"
-		}
-		if !ok {
-			rep.Failed[msg]++
-			sample := fmt.Sprintf("kind %d %s (%s): %s", e.Kind, e.ID, eventAppID(e), msg)
-			if len(rep.Samples) < 20 {
-				rep.Samples = append(rep.Samples, sample)
-			}
-			if !keepGoing {
-				return rep, fmt.Errorf("relay rejected %s", sample)
-			}
-			continue
-		}
-		rep.Published++
+		rep.Stored++
 		if (i+1)%500 == 0 {
 			t.say("  %d of %d", i+1, len(evs))
 		}
@@ -75,11 +72,7 @@ func publishAll(ctx context.Context, t term, sock *nostrSocket, evs []nostr.Even
 	return rep, nil
 }
 
-// skipEvent is true for the rest of a listing whose file hash was banned.
-func skipEvent(e nostr.Event, banned map[string]bool) bool {
-	if !banned[eventAppID(e)] {
-		return false
-	}
+func listingEvent(e nostr.Event) bool {
 	switch e.Kind {
 	case events.KindApp, events.KindRelease, events.KindAsset:
 		return true
@@ -88,16 +81,15 @@ func skipEvent(e nostr.Event, banned map[string]bool) bool {
 	}
 }
 
+// skipEvent is true for every event of a banned listing.
+func skipEvent(e nostr.Event, banned map[string]bool) bool {
+	return listingEvent(e) && banned[eventAppID(e)]
+}
+
 func (r report) print(t term) {
-	t.say("Published %d events.", r.Published)
+	t.say("Stored %d events.", r.Stored)
 	if len(r.Banned) > 0 {
-		t.say("Skipped %d apps with a banned file hash: %v", len(r.Banned), slices.Sorted(maps.Keys(r.Banned)))
-	}
-	for _, reason := range slices.Sorted(maps.Keys(r.Failed)) {
-		t.say("  ! %d rejected: %s", r.Failed[reason], reason)
-	}
-	for _, s := range r.Samples {
-		t.say("    %s", s)
+		t.say("Skipped %d banned apps: %v", len(r.Banned), slices.Sorted(maps.Keys(r.Banned)))
 	}
 }
 
