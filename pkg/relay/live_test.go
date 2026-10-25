@@ -65,7 +65,7 @@ func TestLiveRead(t *testing.T) {
 		}
 	})
 	t.Run("listing:asset sends the app and its lowest-id top asset", func(t *testing.T) {
-		got := ids(read(t, nostr.Filter{Search: "listing:asset filter:e2ee", Tags: nostr.TagMap{"d": {"com.example.pair"}}}))
+		got := ids(read(t, nostr.Filter{Search: "listing:asset filter:offline_capable", Tags: nostr.TagMap{"d": {"com.example.pair"}}}))
 		if strings.Join(got, " ") != "40 4a" {
 			t.Fatalf("events %v", got)
 		}
@@ -104,13 +104,13 @@ func TestLiveRead(t *testing.T) {
 
 func TestLiveReadTokens(t *testing.T) {
 	for search, want := range map[string][2]bool{
-		"listing:all":                {false, true},
-		"LISTING:ASSET":              {true, true},
-		"listing:asset listing:all":  {false, true},
-		"listing:asset -filter:e2ee": {true, true},
-		"maps listing:all":           {false, false},
-		"filter:e2ee":                {false, false},
-		"listing:everything":         {false, false},
+		"listing:all":                           {false, true},
+		"LISTING:ASSET":                         {true, true},
+		"listing:asset listing:all":             {false, true},
+		"listing:asset -filter:offline_capable": {true, true},
+		"maps listing:all":                      {false, false},
+		"filter:offline_capable":                {false, false},
+		"listing:everything":                    {false, false},
 	} {
 		assetOnly, ok := liveRead(nostr.Filters{{Search: search}})
 		if assetOnly != want[0] || ok != want[1] {

@@ -36,13 +36,13 @@ func TestSearchREQ(t *testing.T) {
 		t.Fatalf("hits %+v, want the selected developer listing", got)
 	}
 
-	filter.Search = "example filter:e2ee"
+	filter.Search = "example filter:source_available"
 	if got, err := r.query(t.Context(), nil, "s", nostr.Filters{filter}); err != nil || len(got) != 0 {
-		t.Fatalf("filter:e2ee kept a listing without the fact: %d %v", len(got), err)
+		t.Fatalf("filter:source_available kept a listing without the fact: %d %v", len(got), err)
 	}
-	filter.Search = "example e2ee -filter:e2ee"
+	filter.Search = "example source available -filter:source_available"
 	if got, err := r.query(t.Context(), nil, "s", nostr.Filters{filter}); err != nil || len(got) != 1 {
-		t.Fatalf("-filter:e2ee did not drop the phrase filter: %d %v", len(got), err)
+		t.Fatalf("-filter:source_available did not drop the phrase filter: %d %v", len(got), err)
 	}
 
 	hash := strings.Repeat("ab", 32)

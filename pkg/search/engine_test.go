@@ -62,11 +62,11 @@ func TestEngineSearch(t *testing.T) {
 }
 
 func TestExtensions(t *testing.T) {
-	query, add, remove := Extensions("maps  Filter:e2ee -filter:offline_capable filter:nonsense e2ee:chat")
+	query, add, remove := Extensions("maps  Filter:source_available -filter:offline_capable filter:nonsense filter:e2ee e2ee:chat")
 	if query != "maps e2ee:chat" {
 		t.Errorf("query = %q", query)
 	}
-	if !slices.Equal(add, []string{"e2ee"}) || !slices.Equal(remove, []string{"offline_capable"}) {
+	if !slices.Equal(add, []string{"source_available"}) || !slices.Equal(remove, []string{"offline_capable"}) {
 		t.Errorf("add %v remove %v", add, remove)
 	}
 

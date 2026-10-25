@@ -28,16 +28,15 @@ const (
 )
 
 // Fact bits. 1<<3 was accountless, 1<<4 tracking, 1<<5 decentralized,
-// 1<<6 ads. Do not reuse them.
+// 1<<6 ads, 1<<7 e2ee. Do not reuse them.
 const (
 	FactSourceAvailable = 1
 	FactGoogle          = 1 << 1
 	FactOffline         = 1 << 2
-	FactE2EE            = 1 << 7
 )
 
 // Facts are the search facts, by name.
-var Facts = []string{"source_available", "google_services", "offline_capable", "e2ee"}
+var Facts = []string{"source_available", "google_services", "offline_capable"}
 
 // HardBit is the bit a fact must have set. No Google services sets none; it excludes instead.
 func HardBit(fact string) int {
@@ -46,8 +45,6 @@ func HardBit(fact string) int {
 		return FactSourceAvailable
 	case "offline_capable":
 		return FactOffline
-	case "e2ee":
-		return FactE2EE
 	}
 	return 0
 }
@@ -96,7 +93,6 @@ var pills = []pill{
 	{fact: "offline_capable", bit: FactOffline, words: []string{"works", "offline"}, keywords: []string{"offline"}},
 	{fact: "source_available", bit: FactSourceAvailable, words: []string{"source", "available"}, phraseOnly: true},
 	{fact: "source_available", bit: FactSourceAvailable, words: []string{"open", "source"}, phraseOnly: true},
-	{fact: "e2ee", bit: FactE2EE, words: []string{"e2ee"}, phraseOnly: true},
 }
 
 var pillByKey = map[string]int{
@@ -104,7 +100,6 @@ var pillByKey = map[string]int{
 	"offline_capable":  FactOffline,
 	"source_available": FactSourceAvailable,
 	"open_source":      FactSourceAvailable,
-	"e2ee":             FactE2EE,
 }
 
 // Normalize trims, collapses whitespace, lowercases, and cuts to MaxQueryBytes.

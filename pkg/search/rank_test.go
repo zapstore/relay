@@ -32,7 +32,6 @@ var fixtureBits = map[string]int{
 	"source_available": FactSourceAvailable,
 	"google_services":  FactGoogle,
 	"offline_capable":  FactOffline,
-	"e2ee":             FactE2EE,
 }
 
 func TestSharedFixture(t *testing.T) {
@@ -90,8 +89,8 @@ func TestParseSecurity(t *testing.T) {
 	if got.FactBits != FactSourceAvailable|FactOffline || !slices.Equal(got.Keywords, []string{"nostr"}) {
 		t.Fatalf("%+v", got)
 	}
-	legacy := ParseSecurity("\"e2ee\",\"yes\",\"\"\n\"google_services\",\"no\",\"\"\n---\nbody\n---\n")
-	if legacy.FactBits != FactE2EE {
+	legacy := ParseSecurity("\"offline_capable\",\"yes\",\"\"\n\"google_services\",\"no\",\"\"\n---\nbody\n---\n")
+	if legacy.FactBits != FactOffline {
 		t.Fatalf("legacy %+v", legacy)
 	}
 	if ParseSecurity("not a file").FactBits != 0 {
