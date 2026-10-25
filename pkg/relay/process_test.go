@@ -85,12 +85,13 @@ func TestProcessorErrorKeepsTheReleasePending(t *testing.T) {
 }
 
 func TestListedFileIsNotProcessedAgain(t *testing.T) {
-	r := testRelay(t, newFakeBlossom())
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
 	r.UseProcessor(func(context.Context, catalog.Listing, string) (string, error) {
 		t.Error("an already listed file was processed")
 		return "", nil
 	})
-	x := strings.Repeat("ab", 32)
+	x := blobs.put("apk")
 	prior := testAsset("p", strings.Repeat("9", 64), x, strings.Repeat("e", 64), 1)
 	saveSlotEvent(t, r.store, *prior)
 	app, release, asset := testTriple("a", catalogKey, x, strings.Repeat("e", 64), 1)
@@ -101,15 +102,16 @@ func TestListedFileIsNotProcessedAgain(t *testing.T) {
 	}
 }
 
-// drainProcessing runs queued processing and reconciles until nothing is queued.
+// drainProcessing runs queued processing and promotes each processed app
+// until nothing is queued.
 func drainProcessing(t *testing.T, r *T) {
 	t.Helper()
 	for len(r.procs.jobs) > 0 {
 		listing := <-r.procs.jobs
 		refusal, err := r.processJob(t.Context(), listing)
 		r.procs.finish(listing.Release.ID, refusal, err)
-		if err := r.reconcile(t.Context()); err != nil {
-			t.Fatal(err)
+		if err == nil {
+			r.promoteProcessed(t.Context(), listing)
 		}
 	}
 }

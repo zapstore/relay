@@ -131,11 +131,23 @@ func (r *T) runProcessor(ctx context.Context) {
 				slog.Warn("processor: failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)
 				continue
 			}
-			if err := r.reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				slog.Error("processor: reconcile failed", "error", err)
-			}
+			r.promoteProcessed(ctx, listing)
 		}
 	}
+}
+
+// promoteProcessed promotes the app of a processed release, without waiting
+// for the next reconcile.
+func (r *T) promoteProcessed(ctx context.Context, listing catalog.Listing) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := r.promoteListing(ctx, listing.Release.PubKey, listing.AppID, ""); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.Error("processor: promote failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)
+		}
+		return
+	}
+	r.reselect(ctx)
 }
 
 func (r *T) processJob(ctx context.Context, listing catalog.Listing) (string, error) {
