@@ -20,12 +20,14 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/pippellia-btc/blossom"
 	"github.com/zapstore/relay/pkg/events"
+	"github.com/zapstore/relay/pkg/relay/store"
 )
 
 const (
-	// readRetry is how long an APK that could not be fetched waits before
-	// another try.
-	readRetry = 10 * time.Minute
+	// An APK that could not be fetched is fetched again after readBackoff,
+	// doubling up to readBackoffMax, until it is read or nothing waits on it.
+	readBackoff    = 15 * time.Second
+	readBackoffMax = 5 * time.Minute
 	// readTimeout bounds one APK read, including a download.
 	readTimeout   = 5 * time.Minute
 	readQueueSize = 16
@@ -40,8 +42,9 @@ var (
 // apkJob asks for the certificates of the APK with sha256 blob. url is where
 // to download it when Blossom does not have it.
 type apkJob struct {
-	blob string
-	url  string
+	blob  string
+	url   string
+	tries int
 }
 
 // readAPKResult is a signing chain read during this process. A restart reads
@@ -55,18 +58,16 @@ type readAPKResult struct {
 type apkReader struct {
 	jobs chan apkJob
 
-	mu      sync.Mutex
-	queued  map[string]struct{}
-	retryAt map[string]time.Time
-	read    map[string]readAPKResult
+	mu     sync.Mutex
+	queued map[string]struct{} // queued, being read, or waiting to fetch again
+	read   map[string]readAPKResult
 }
 
 func newAPKReader() *apkReader {
 	return &apkReader{
-		jobs:    make(chan apkJob, readQueueSize),
-		queued:  map[string]struct{}{},
-		retryAt: map[string]time.Time{},
-		read:    map[string]readAPKResult{},
+		jobs:   make(chan apkJob, readQueueSize),
+		queued: map[string]struct{}{},
+		read:   map[string]readAPKResult{},
 	}
 }
 
@@ -83,33 +84,26 @@ func (a *apkReader) cached(blob string) (signing, string, bool) {
 	return hit.chain, hit.readErr, ok
 }
 
-// request queues a read unless the blob is queued or waiting to retry.
+// request queues a read unless the blob is already queued. A full queue
+// holds the job until there is room; it is never dropped.
 func (a *apkReader) request(job apkJob) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.queued[job.blob]; ok {
 		return
 	}
-	if time.Now().Before(a.retryAt[job.blob]) {
-		return
-	}
+	a.queued[job.blob] = struct{}{}
 	select {
 	case a.jobs <- job:
-		a.queued[job.blob] = struct{}{}
 	default:
-		slog.Warn("apk reader queue is full", "blob", job.blob)
+		go func() { a.jobs <- job }()
 	}
 }
 
-func (a *apkReader) done(blob string, failed bool) {
+func (a *apkReader) done(blob string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.queued, blob)
-	if failed {
-		a.retryAt[blob] = time.Now().Add(readRetry)
-	} else {
-		delete(a.retryAt, blob)
-	}
 }
 
 func (r *T) runAPKReader(ctx context.Context) {
@@ -118,17 +112,136 @@ func (r *T) runAPKReader(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-r.apks.jobs:
-			err := r.readAPKJob(ctx, job)
-			r.apks.done(job.blob, err != nil)
-			if err != nil {
-				slog.Warn("apk reader: apk unavailable", "blob", job.blob, "error", err)
+			if err := r.readAPKJob(ctx, job); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				slog.Warn("apk reader: apk unavailable, fetching again", "blob", job.blob, "tries", job.tries+1, "error", err)
+				go r.fetchAgain(ctx, job)
 				continue
 			}
-			if err := r.reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				slog.Error("apk reader: reconcile failed", "error", err)
+			r.apks.done(job.blob)
+			if err := r.promoteWaitingOn(ctx, job.blob); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("apk reader: promote failed", "blob", job.blob, "error", err)
 			}
 		}
 	}
+}
+
+// fetchAgain queues a failed read again after its backoff, unless nothing
+// waits on the blob any more.
+func (r *T) fetchAgain(ctx context.Context, job apkJob) {
+	job.tries++
+	delay := readBackoffMax
+	if job.tries < 6 {
+		delay = min(readBackoff<<(job.tries-1), readBackoffMax)
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(delay):
+	}
+	waited, err := r.waitedOn(ctx, job.blob)
+	if err == nil && !waited {
+		r.apks.done(job.blob)
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case r.apks.jobs <- job:
+	}
+}
+
+// waitedOn reports a pending asset that names blob, or a pending claim for
+// the certificate of a stored asset that names it.
+func (r *T) waitedOn(ctx context.Context, blob string) (bool, error) {
+	assets, err := r.store.PendingTagged(ctx, events.KindAsset, "x", blob)
+	if err != nil || len(assets) > 0 {
+		return len(assets) > 0, err
+	}
+	certs, err := storedAssetCerts(ctx, r.store, blob)
+	if err != nil {
+		return false, err
+	}
+	for _, cert := range certs {
+		proofs, err := r.store.PendingTagged(ctx, events.KindIdentityProof, "d", cert)
+		if err != nil || len(proofs) > 0 {
+			return len(proofs) > 0, err
+		}
+	}
+	return false, nil
+}
+
+// promoteWaitingOn promotes what waited on the read of blob: the pending
+// listings whose asset names it, and the pending claims for the certificate
+// of a stored asset that names it.
+func (r *T) promoteWaitingOn(ctx context.Context, blob string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	assets, err := r.store.PendingTagged(ctx, events.KindAsset, "x", blob)
+	if err != nil {
+		return err
+	}
+	seen := map[string]struct{}{}
+	for _, asset := range assets {
+		appID, ok := listingAppID(&asset)
+		if !ok {
+			continue
+		}
+		key := asset.PubKey + ":" + appID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if _, err := r.promoteListing(ctx, asset.PubKey, appID, ""); err != nil {
+			return err
+		}
+	}
+
+	certs, err := storedAssetCerts(ctx, r.store, blob)
+	if err != nil {
+		return err
+	}
+	for _, cert := range certs {
+		proofs, err := r.store.PendingTagged(ctx, events.KindIdentityProof, "d", cert)
+		if err != nil {
+			return err
+		}
+		for _, proof := range proofs {
+			if _, err := r.promoteClaim(ctx, proof, ""); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(seen) > 0 || len(certs) > 0 {
+		r.reselect(ctx)
+	}
+	return nil
+}
+
+// storedAssetCerts returns the certificates named by stored assets of blob.
+func storedAssetCerts(ctx context.Context, db store.T, blob string) ([]string, error) {
+	rows, err := db.DB.QueryContext(ctx, `
+		SELECT DISTINCT lower(c.value) FROM tags x
+		JOIN events e ON e.id = x.event_id AND e.kind = ?
+		JOIN tags c ON c.event_id = e.id AND c.key = 'apk_certificate_hash'
+		WHERE x.key = 'x' AND x.value = ?
+	`, events.KindAsset, blob)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var certs []string
+	for rows.Next() {
+		var cert string
+		if err := rows.Scan(&cert); err != nil {
+			return nil, err
+		}
+		certs = append(certs, cert)
+	}
+	return certs, rows.Err()
 }
 
 // readAPKJob reads one APK and remembers its certificates until the process
@@ -205,7 +318,46 @@ func (r *T) openAPK(ctx context.Context, job apkJob) (io.ReadSeeker, func(), err
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return nil, nil, fmt.Errorf("fetch apk: status %d", res.StatusCode)
 	}
+	if r.config.APKCacheDir != "" {
+		return keepAPK(res.Body, r.config.APKCacheDir, job.blob)
+	}
 	return tempAPK(res.Body, job.blob)
+}
+
+// keepAPK writes a downloaded APK to <dir>/<blob>.apk after checking its
+// sha256, so the enricher reads it there instead of downloading it again.
+func keepAPK(r io.Reader, dir, blob string) (io.ReadSeeker, func(), error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, nil, err
+	}
+	f, err := os.CreateTemp(dir, ".relay-apk-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	fail := func(err error) (io.ReadSeeker, func(), error) {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, nil, err
+	}
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(r, maxAPK+1))
+	if err != nil {
+		return fail(err)
+	}
+	if n > maxAPK {
+		return fail(errAPKTooBig)
+	}
+	if hex.EncodeToString(hasher.Sum(nil)) != blob {
+		return fail(errAPKHash)
+	}
+	if err := os.Rename(f.Name(), filepath.Join(dir, blob+".apk")); err != nil {
+		return fail(err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return f, func() { f.Close() }, nil
 }
 
 // cachedAPK opens <APKCacheDir>/<blob>.apk when its sha256 is blob. The

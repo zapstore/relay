@@ -141,6 +141,16 @@ func (s T) PendingListing(ctx context.Context, appID string) ([]nostr.Event, err
 		appID, events.KindApp, events.KindRelease, events.KindAsset)
 }
 
+// PendingTagged returns the pending events of kind with a key tag whose
+// value is value, ignoring case.
+func (s T) PendingTagged(ctx context.Context, kind int, key, value string) ([]nostr.Event, error) {
+	return s.queryPending(ctx, `
+		SELECT raw FROM pending_events WHERE kind = ? AND EXISTS (
+			SELECT 1 FROM json_each(json_extract(raw, '$.tags'))
+			WHERE json_extract(value, '$[0]') = ? AND lower(json_extract(value, '$[1]')) = lower(?)
+		)`, kind, key, value)
+}
+
 func (s T) queryPending(ctx context.Context, query string, args ...any) ([]nostr.Event, error) {
 	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {

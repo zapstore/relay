@@ -68,9 +68,8 @@ type T struct {
 	pol       *policy.Store
 	analytics *analytics.Engine
 
-	blossom Blossom
-	uploads chan upload
-
+	blossom     Blossom
+	uploads     chan upload
 	profileJobs chan string
 	apks        *apkReader
 	process     Processor
@@ -276,8 +275,20 @@ func (r *T) NotifyUpload(hash blossom.Hash, mime string) error {
 	}
 }
 
+// sweepInterval is how often reconcile runs, after once at start. Promotion
+// does not wait for it: an event, an upload, a read, or processing promotes
+// what it completes. The sweep picks up what a restart left pending and
+// deletes what expired.
+const sweepInterval = time.Hour
+
 func (r *T) runReconcile(ctx context.Context) {
-	ticker := time.NewTicker(r.config.ReconcileInterval)
+	sweep := func() {
+		if err := r.reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("reconcile failed", "error", err)
+		}
+	}
+	sweep()
+	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -285,18 +296,13 @@ func (r *T) runReconcile(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			err := r.reconcile(ctx)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				slog.Error("reconcile failed", "error", err)
-			}
+			sweep()
 
 		case u := <-r.uploads:
 			if u.mime == "application/vnd.android.package-archive" {
-				// because assets are supposed to reference APKs in their "x" tags,
-				// reconcile only when an APK is uploaded
-				err := r.reconcile(ctx)
+				err := r.promoteWaitingOn(ctx, u.hash.Hex())
 				if err != nil && !errors.Is(err, context.Canceled) {
-					slog.Error("reconcile failed", "error", err)
+					slog.Error("upload: promote failed", "blob", u.hash.Hex(), "error", err)
 				}
 			}
 		}

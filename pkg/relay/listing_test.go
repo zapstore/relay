@@ -93,6 +93,72 @@ func TestPendingAssetDoesNotRereadStoredReleases(t *testing.T) {
 	}
 }
 
+func TestReleaseReadsOnlyItsPendingAssets(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
+	reads := 0
+	chains := readChains(t, map[string]signing{"new": {key.cert}})
+	r.readAPK = func(apk io.ReadSeeker) (signing, error) {
+		reads++
+		return chains(apk)
+	}
+	app, release, old := testTriple("o", ownerKey, blobs.put("old"), key.hash, 1)
+	for _, e := range []*nostr.Event{app, release, old} {
+		saveSlotEvent(t, r.store, *e)
+	}
+
+	fresh := testAsset("n", ownerKey, blobs.put("new"), key.hash, 2)
+	next := testRelease("n", ownerKey, "1.1.0", "main", old.ID)
+	next.CreatedAt = 20
+	next.Tags = append(next.Tags, nostr.Tag{"e", fresh.ID})
+	r.holdListing(t.Context(), fresh)
+	r.holdListing(t.Context(), next)
+	drainReads(t, r)
+	if !slotHas(t, r.store, next.ID) {
+		t.Fatal("release was not promoted")
+	}
+	if reads != 1 {
+		t.Fatalf("read %d apks, want only the pending one", reads)
+	}
+}
+
+func TestClaimReadsOnlyTheNewestAPK(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	for _, n := range []string{"o", "p", "q"} {
+		saveSlotEvent(t, r.store, *testAsset(n, catalogKey, blobs.put(n), key.hash, 1))
+	}
+	if _, err := r.promoteClaim(t.Context(), *key.proof(t, "4", ownerKey, ""), ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.apks.jobs) != 1 {
+		t.Fatalf("queued %d apk reads for one claim, want 1", len(r.apks.jobs))
+	}
+}
+
+func TestURLDownloadIsKeptForEnrichment(t *testing.T) {
+	r := testRelay(t, newFakeBlossom())
+	r.config.APKCacheDir = t.TempDir()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("apk"))
+	}))
+	t.Cleanup(srv.Close)
+	r.fetch = srv.Client()
+	r.readAPK = readChains(t, map[string]signing{"apk": {newTestKey(t).cert}})
+	sum := sha256.Sum256([]byte("apk"))
+	x := hex.EncodeToString(sum[:])
+	if err := r.readAPKJob(t.Context(), apkJob{blob: x, url: srv.URL + "/app.apk"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(r.config.APKCacheDir, x+".apk"))
+	if err != nil || string(body) != "apk" {
+		t.Fatalf("apk cache: %q, %v", body, err)
+	}
+}
+
 func TestCatalogAPKIsNotRead(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
@@ -297,6 +363,28 @@ func TestListingWaitsForBlossom(t *testing.T) {
 	}
 	if slotHas(t, r.store, app.ID) || slotHas(t, r.store, asset.ID) {
 		t.Fatal("listing stored without a blossom blob")
+	}
+}
+
+func TestUploadPromotesTheListingWaitingOnIt(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	sum := sha256.Sum256([]byte("apk"))
+	x := hex.EncodeToString(sum[:])
+	app, release, asset := testTriple("a", catalogKey, x, strings.Repeat("e", 64), 1)
+	r.holdListing(t.Context(), app)
+	r.holdListing(t.Context(), release)
+	if res := r.holdListing(t.Context(), asset); res.msg != msgBlobPending {
+		t.Fatalf("asset: %+v", res)
+	}
+	if got := blobs.put("apk"); got != x {
+		t.Fatalf("blob %s, want %s", got, x)
+	}
+	if err := r.promoteWaitingOn(t.Context(), x); err != nil {
+		t.Fatal(err)
+	}
+	if !slotHas(t, r.store, release.ID) {
+		t.Fatal("the upload did not promote the listing waiting on it")
 	}
 }
 
@@ -661,7 +749,7 @@ func drainReads(t *testing.T, r *T) {
 		for len(r.apks.jobs) > 0 {
 			job := <-r.apks.jobs
 			err := r.readAPKJob(t.Context(), job)
-			r.apks.done(job.blob, err != nil)
+			r.apks.done(job.blob)
 			if err != nil {
 				t.Fatal(err)
 			}
