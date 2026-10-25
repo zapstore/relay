@@ -230,9 +230,15 @@ func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast str
 		if releases, err = r.storedReleasesForAssets(ctx, pubkey, pendingAssets); err != nil {
 			return nil, err
 		}
-	} else if len(releases) == 0 {
-		if releases, err = r.storedReleases(ctx, pubkey, appID); err != nil {
+	} else if len(releases) == 0 && pendingApp != nil {
+		// A pending app alone is promoted with the newest stored release. That
+		// release was checked when it was promoted.
+		release, ok, err := r.latestStoredRelease(ctx, pubkey, appID)
+		if err != nil {
 			return nil, err
+		}
+		if ok {
+			releases = []nostr.Event{release}
 		}
 	}
 	refused = map[string]string{}
@@ -322,26 +328,15 @@ func (r *T) storedReleasesForAssets(ctx context.Context, pubkey string, assets m
 	return out, rows.Err()
 }
 
-func (r *T) storedReleases(ctx context.Context, pubkey, appID string) ([]nostr.Event, error) {
-	rows, err := r.store.DB.QueryContext(ctx, `
+func (r *T) latestStoredRelease(ctx context.Context, pubkey, appID string) (nostr.Event, bool, error) {
+	return loadEvent(ctx, r.store, `
 		SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
 		FROM events e
 		JOIN tags t ON t.event_id = e.id
 		WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'i' AND t.value = ?
+		ORDER BY e.created_at DESC, e.id ASC
+		LIMIT 1
 	`, events.KindRelease, pubkey, appID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []nostr.Event
-	for rows.Next() {
-		event, err := scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, event)
-	}
-	return out, rows.Err()
 }
 
 // releaseCheck is the outcome of judging one release. assets is set when the
@@ -399,6 +394,13 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		return refuse("%s", reason), nil
 	}
 	check := releaseCheck{assets: assets}
+	stored, err := r.admitted(ctx, release, assets, pendingAssets)
+	if err != nil {
+		return releaseCheck{}, err
+	}
+	if stored {
+		return check, nil
+	}
 	if pubkey == r.config.Info.Pubkey {
 		signer := assetSigner(assets[0])
 		if signer == "" {
@@ -415,7 +417,7 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		}
 		check.cert = signer
 	} else {
-		check, err = r.checkDeveloper(ctx, pubkey, appID, assets)
+		check, err = r.checkDeveloper(ctx, pubkey, appID, assets, pendingAssets)
 		if err != nil || check.assets == nil {
 			return check, err
 		}
@@ -431,20 +433,36 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 	return check, nil
 }
 
+// admitted reports a release that is stored with all of its assets: it
+// passed its checks when it was promoted, so none run again.
+func (r *T) admitted(ctx context.Context, release nostr.Event, assets []nostr.Event, pendingAssets map[string]nostr.Event) (bool, error) {
+	for _, asset := range assets {
+		if _, ok := pendingAssets[asset.ID]; ok {
+			return false, nil
+		}
+	}
+	kept, err := pendingHas(ctx, r.store, release.ID)
+	return !kept, err
+}
+
 // listedFile reports a file a stored asset already names.
 func (r *T) listedFile(ctx context.Context, x string) (bool, error) {
 	return r.store.Has(ctx, nostr.Filter{Kinds: []int{events.KindAsset}, Tags: nostr.TagMap{"x": []string{x}}})
 }
 
-// checkDeveloper reads every APK of a developer release and checks it against
-// the certificate on the current asset, or for a new app the signer of its APK.
-func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []nostr.Event) (releaseCheck, error) {
+// checkDeveloper reads the APK of each pending asset of a developer release
+// and checks it against the certificate on the current asset, or for a new
+// app the signer of its APK. A stored asset was read when it was promoted.
+func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []nostr.Event, pendingAssets map[string]nostr.Event) (releaseCheck, error) {
 	appCert, _, err := appCertificate(ctx, r.store, r.config.Info.Pubkey, appID)
 	if err != nil {
 		return releaseCheck{}, err
 	}
 	var chain signing
 	for _, asset := range assets {
+		if _, ok := pendingAssets[asset.ID]; !ok {
+			continue
+		}
 		x, _ := events.Find(asset.Tags, "x")
 		got, readErr, ok := r.apkSigning(x, r.assetURL(asset.Tags))
 		if !ok {
@@ -466,6 +484,9 @@ func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []n
 			return refuse("%s", errCertificate), nil
 		}
 		chain = signing{got.cert(appCert)}
+	}
+	if appCert == "" {
+		return releaseCheck{}, nil
 	}
 
 	proofs, err := r.checkedProofs(ctx, chain)
@@ -489,26 +510,28 @@ func (r *T) versionGuard(ctx context.Context, pubkey, appID string, release nost
 	channel, _ := events.Find(release.Tags, "c")
 	d, _ := events.Find(release.Tags, "d")
 	indexer := pubkey == r.config.Info.Pubkey
+	// One query: each stored release of the app with the assets it names.
 	rows, err := r.store.DB.QueryContext(ctx, `
-		SELECT e.pubkey, e.tags FROM events e
-		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = ? AND t.key = 'i' AND t.value = ?
-	`, events.KindRelease, appID)
+		SELECT r.pubkey, r.tags, a.tags FROM events r
+		JOIN tags ti ON ti.event_id = r.id AND ti.key = 'i' AND ti.value = ?
+		JOIN tags te ON te.event_id = r.id AND te.key = 'e'
+		JOIN events a ON a.id = te.value AND a.kind = ?
+		WHERE r.kind = ?
+	`, appID, events.KindAsset, events.KindRelease)
 	if err != nil {
 		return 0, 0, err
 	}
-	var ids []string
+	defer rows.Close()
 	for rows.Next() {
-		var pub, raw string
-		if err := rows.Scan(&pub, &raw); err != nil {
-			rows.Close()
+		var pub, rawRelease, rawAsset string
+		if err := rows.Scan(&pub, &rawRelease, &rawAsset); err != nil {
 			return 0, 0, err
 		}
 		if (pub == r.config.Info.Pubkey) != indexer {
 			continue
 		}
 		var tags nostr.Tags
-		if err := tags.Scan(raw); err != nil {
+		if err := tags.Scan(rawRelease); err != nil {
 			continue
 		}
 		if c, _ := events.Find(tags, "c"); c != channel {
@@ -517,24 +540,13 @@ func (r *T) versionGuard(ctx context.Context, pubkey, appID string, release nost
 		if otherD, _ := events.Find(tags, "d"); pub == pubkey && otherD == d {
 			continue
 		}
-		ids = append(ids, events.FindAll(tags, "e")...)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, 0, err
-	}
-	var promoted []nostr.Event
-	for _, id := range ids {
-		asset, ok, err := loadEvent(ctx, r.store, `
-			SELECT id, pubkey, created_at, kind, tags, content, sig FROM events WHERE id = ? AND kind = ?
-		`, id, events.KindAsset)
-		if err != nil {
-			return 0, 0, err
+		var assetTags nostr.Tags
+		if err := assetTags.Scan(rawAsset); err != nil {
+			continue
 		}
-		if ok {
-			promoted = append(promoted, asset)
-		}
+		floor = max(floor, maxVersionCode([]nostr.Event{{Tags: assetTags}}))
 	}
-	return code, maxVersionCode(promoted), nil
+	return code, floor, rows.Err()
 }
 
 func maxVersionCode(assets []nostr.Event) int64 {

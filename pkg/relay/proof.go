@@ -97,7 +97,7 @@ func (r *T) storeRevocation(ctx context.Context, event *nostr.Event) error {
 // dropRevokedListings deletes the listings publishers signed for every app
 // whose certificate is cert. The catalog key's listing stays.
 func (r *T) dropRevokedListings(ctx context.Context, cert string, publishers []string) error {
-	assets, err := r.listedAssets(ctx, cert)
+	assets, err := r.listedAssets(ctx, cert, 0)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (r *T) dropRevokedListings(ctx context.Context, cert string, publishers []s
 // from the proof's owner or delegate.
 func (r *T) proofHasAPK(ctx context.Context, proof *nostr.Event) (bool, error) {
 	cert, _ := events.Find(proof.Tags, "d")
-	assets, err := r.listedAssets(ctx, cert)
+	assets, err := r.listedAssets(ctx, cert, 1)
 	if err != nil || len(assets) > 0 {
 		return len(assets) > 0, err
 	}
@@ -152,24 +152,22 @@ func (r *T) proofHasAPK(ctx context.Context, proof *nostr.Event) (bool, error) {
 	return false, nil
 }
 
-// promoteClaim checks a pending proof against the promoted APK of an app
-// listed with its certificate. It reports whether the proof was promoted.
-// An APK that has not been read yet is queued for the reader.
+// promoteClaim checks a pending proof against the newest APK listed with its
+// certificate. It reports whether the proof was promoted. An APK not read
+// yet is queued for the reader.
 func (r *T) promoteClaim(ctx context.Context, proof nostr.Event, skipBroadcast string) (bool, error) {
 	cert, _ := events.Find(proof.Tags, "d")
-	assets, err := r.listedAssets(ctx, cert)
+	assets, err := r.listedAssets(ctx, cert, 1)
 	if err != nil || len(assets) == 0 {
 		return false, err
 	}
-	for i := range assets {
-		x, _ := events.Find(assets[i].Tags, "x")
-		chain, readErr, ok := r.apkSigning(x, r.assetURL(assets[i].Tags))
-		if !ok || readErr != "" {
-			continue
-		}
-		if c := chain.cert(strings.ToLower(cert)); c != nil {
-			return r.commitCheckedProof(ctx, proof, c, skipBroadcast)
-		}
+	x, _ := events.Find(assets[0].Tags, "x")
+	chain, readErr, ok := r.apkSigning(x, r.assetURL(assets[0].Tags))
+	if !ok || readErr != "" {
+		return false, nil
+	}
+	if c := chain.cert(strings.ToLower(cert)); c != nil {
+		return r.commitCheckedProof(ctx, proof, c, skipBroadcast)
 	}
 	return false, nil
 }
@@ -234,8 +232,11 @@ func (r *T) checkedProofs(ctx context.Context, chain signing) ([]nostr.Event, er
 }
 
 // listedAssets returns the stored assets of every listed app whose app
-// certificate is cert, newest first.
-func (r *T) listedAssets(ctx context.Context, cert string) ([]nostr.Event, error) {
+// certificate is cert, newest first. limit, when positive, caps them.
+func (r *T) listedAssets(ctx context.Context, cert string, limit int) ([]nostr.Event, error) {
+	if limit <= 0 {
+		limit = -1
+	}
 	rows, err := r.store.DB.QueryContext(ctx, `
 		SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
 		FROM events e
@@ -245,7 +246,8 @@ func (r *T) listedAssets(ctx context.Context, cert string) ([]nostr.Event, error
 		    WHERE key = 'apk_certificate_hash' AND lower(value) = ?
 		  )
 		ORDER BY e.created_at DESC
-	`, events.KindAsset, strings.ToLower(cert))
+		LIMIT ?
+	`, events.KindAsset, strings.ToLower(cert), limit)
 	if err != nil {
 		return nil, err
 	}
