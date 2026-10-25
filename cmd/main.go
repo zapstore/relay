@@ -103,6 +103,7 @@ func start(cfg config.Config) (err error) {
 	}
 	defer func() { err = errors.Join(err, relayDB.Close()) }()
 	cfg.Blossom.Dir = filepath.Join(dataDir, "blossom")
+	cfg.Relay.APKCacheDir = filepath.Join(dataDir, "apk-cache")
 
 	blossomDB, err := blossom.NewDB(filepath.Join(dataDir, "blossom.db"))
 	if err != nil {
@@ -143,8 +144,9 @@ func start(cfg config.Config) (err error) {
 	}
 	// The gate: the catalog key, a key that already published a kind 32267,
 	// a whitelisted key, or a pubkey above the web of trust threshold may publish.
-	// Without VERTEX_SECRET_KEY only the catalog key, whitelisted keys, and
-	// keys that already published may publish.
+	// An app id that already has a kind 32267 skips the gate.
+	// Without VERTEX_SECRET_KEY only those keys, and listings for an app the
+	// relay already has, may publish.
 	var wot policy.WebOfTrust
 	var credits vertex.Client
 	watch := false
@@ -193,9 +195,11 @@ func start(cfg config.Config) (err error) {
 		return err
 	}
 
-	enrichApps := func(ctx context.Context, ids []string) error {
-		return enrich.IDs(ctx, dataDir, relayDBPath, ids)
-	}
+	// Every admitted release is enriched just before it is listed. A seal only
+	// enriches when an operator names a filter.
+	rel.UseProcessor(func(ctx context.Context, listing catalog.Listing, picture string) (string, error) {
+		return "", enrich.Listing(ctx, dataDir, listing, picture)
+	})
 	seal := func(ctx context.Context, req control.SealRequest) (string, error) {
 		if req.HasFrom {
 			if _, err := catalog.EnsureBundle(ctx, dataDir, req.From, req.To, signer, pol.Notices); err != nil {
@@ -207,7 +211,7 @@ func start(cfg config.Config) (err error) {
 		if sealErr != nil {
 			return "", sealErr
 		}
-		runEnrich := enrichApps
+		var runEnrich catalog.Enricher
 		if req.Filter != "" {
 			runEnrich = func(ctx context.Context, _ []string) error {
 				return enrich.Filter(ctx, dataDir, relayDBPath, req.Filter)
@@ -295,7 +299,7 @@ func start(cfg config.Config) (err error) {
 	})
 	if cfg.Catalog.Interval > 0 {
 		g.Go(func() error {
-			catalog.Loop(gctx, cfg.Catalog.Interval, dataDir, relayDBPath, signer, pol.Notices, slog.Default(), enrichApps)
+			catalog.Loop(gctx, cfg.Catalog.Interval, dataDir, relayDBPath, signer, pol.Notices, slog.Default(), nil)
 			return nil
 		})
 	}

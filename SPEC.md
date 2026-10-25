@@ -26,7 +26,10 @@ The [publisher policy](../product/specs/publisher-policy.md) is the gate.
 This process runs it after the blacklist, on listing events (kind `32267`,
 `30063`, `3063`) and on Blossom uploads. `RELAY_PUBKEY` is the catalog key.
 A key on the whitelist, or one that has already published a kind `32267`,
-is not sent to Vertex. The operator adds a key with `allow` on `relay.sock`
+is not sent to Vertex. A listing event for an app id that already has a
+kind `32267` skips the gate; the C1 check still decides the developer slot.
+An upload from the active C1 owner or delegate of a certificate on such an
+app is accepted, because the upload names no app id. The operator adds a key with `allow` on `relay.sock`
 or from the webapp's `/admin`, which sends it there. `disallow` removes it. `allowed` lists the keys.
 The web of trust threshold is `VERTEX_THRESHOLD`.
 
@@ -72,10 +75,40 @@ a mover uploads them to Bunny when it is set, then deletes the local copy.
 Without Bunny, promoted files stay in `blossom/`. Anything not promoted
 within `RELAY_REMOVE_PENDING_AFTER` is deleted, events and files.
 
-The relay reads an APK's signer and v3 lineage when a developer listing or
-a proof needs it, and does not store the result. A restart reads the file
-again. A developer listing waits until its APK is read. The catalog key's
-APK is not read.
+A listing does not need its APK in this relay's Blossom. The relay reads
+each APK's signer and v3 lineage off the event path, from the buffer zone
+or Bunny, else from `$DATA_DIR/apk-cache/<sha256>.apk`, else from the
+asset's `url`, checking the sha256. It keeps the result in memory; a
+restart reads the file again. A listing waits until every APK is read. A
+catalog key asset whose file a stored asset already names is not read
+again. The catalog key's APK must be
+signed by the certificate its asset names.
+
+An admitted release is processed just before it is listed: the relay's
+`Processor`, one release at a time, off the event path. Today that is the
+enricher; security checks will join it. An app the enricher could not
+finish is still listed, without its artifacts, until an operator runs
+`enrich` again. A refusal drops the release with its reason. An error keeps it pending and retries after ten minutes. A
+release whose every file is already listed, by the same test, is not
+processed again. Results are kept in memory by release id.
+
+No store may hold the signing key. `pkg/relay/signers.txt` lists what
+shows one: F-Droid's build-key subject and store certificates, refused on
+any listing, and the marks Play adds on delivery, its source stamp and
+frosting. A delivery mark refuses only a catalog key listing: a developer
+listing has a C1 proof signed with the certificate key, which shows the
+developer holds it. The refusal is `third-party signer: <store>, by its
+<mark>`. Since the read is remembered, sending the release again is
+refused at once. `cmd/signers` reports which stored or local APKs the
+rules match.
+
+The `apk-cache` directory belongs to the indexer, which writes each APK it
+verified before publishing it. The relay only reads it. Nothing prunes it
+yet.
+
+A listing kept in the buffer zone is answered `OK` true with a message
+that starts `pending:`. Refusals found later are logged; a client learns
+them by sending the release again.
 
 A new proof is checked against the certificate of the promoted APK for its
 app, else against the buffered APK of the listing it came with. The relay
@@ -181,7 +214,9 @@ it does not write one uncompressed directory per epoch.
 ## Process
 
 The [enricher](../steroid/SPEC.md) writes `about`, `security`, `vector`,
-and `icon` in `data/artifacts.db`. It does not write a snapshot.
+and `icon` in `data/artifacts.db` when a release is admitted, before it is
+listed. It does not write a snapshot. A bundle includes the artifacts that
+match each listing's current APK.
 
 The relay, on `CATALOG_BUNDLE_INTERVAL` (default five minutes):
 
@@ -189,16 +224,13 @@ The relay, on `CATALOG_BUNDLE_INTERVAL` (default five minutes):
    `30267`, and the catalog key's kind `10067`.
 2. Applies [selection](../product/specs/catalog.md#selection).
 3. Compares it with the previous snapshot. An unchanged catalog writes nothing.
-4. Otherwise calls the enricher for the apps in that diff. A cache that
-   already matches the listing is left untouched. An enricher failure is
-   logged and the snapshot is still written.
-5. Writes snapshot `N` and the signed bundle `(N-1)-N`.
+4. Otherwise writes snapshot `N` and the signed bundle `(N-1)-N`.
 
 `CATALOG_BUNDLE_INTERVAL=0` disables the tick. `relay bundle` writes one snapshot and exits. `relay bundle <app-id>` enriches only the listings whose id contains that string; the snapshot is still the whole catalog, so a filter never removes an app from phones. A filter that matches nothing is an error and writes nothing. The tick takes no filter.
 
 One seal runs at a time per data directory, across processes: `relay bundle` and a running relay take `seal.lock`, so an epoch is never written twice.
 
-`READ_ONLY=true` rejects events on the WebSocket and on `relay.sock`, Blossom uploads, and `relay.sock` bans and whitelist changes. Queries, downloads, and `GET /v1/bundle` stay. The bundle tick and `relay bundle` still enrich, then sign with `SIGN_WITH`.
+`READ_ONLY=true` rejects events on the WebSocket and on `relay.sock`, Blossom uploads, and `relay.sock` bans and whitelist changes. Queries, downloads, and `GET /v1/bundle` stay. The bundle tick and `relay bundle` still sign with `SIGN_WITH`; `relay bundle <app-id>` still enriches.
 
 `SIGN_WITH` is required. It is `1`, 64-character hex, `nsec`, or a `bunker://`
 URL from hotbox. Its public key must equal `RELAY_PUBKEY`. Hex and `nsec`

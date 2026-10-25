@@ -17,9 +17,11 @@ import (
 	"github.com/zapstore/relay/pkg/relay/store"
 )
 
+// A listing kept in the buffer zone is answered OK with one of these. Clients
+// tell it from a stored event by the "pending:" prefix.
 const (
-	msgBlobPending    = "the event will be saved when the referenced blob is uploaded"
-	msgListingPending = "the listing will be saved when it is complete"
+	msgBlobPending    = "pending: the event will be saved when the referenced blob is uploaded"
+	msgListingPending = "pending: the listing will be saved once its checks pass"
 )
 
 var fileHash = regexp.MustCompile(`[0-9a-f]{64}`)
@@ -83,7 +85,7 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 		}
 		return persistResult{ok: true}
 	}
-	if event.Kind == events.KindAsset {
+	if event.Kind == events.KindAsset && r.assetURL(event.Tags) == "" {
 		ready, err := r.assetInBlossom(ctx, event)
 		if err != nil {
 			slog.Error("relay: failed to check asset blob", "event", event.ID, "error", err)
@@ -241,6 +243,19 @@ func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast str
 		if check.assets == nil {
 			continue
 		}
+		refusal, done, err := r.processed(ctx, appID, app, release, check.assets)
+		if err != nil {
+			return nil, err
+		}
+		if !done {
+			continue
+		}
+		if refusal != "" {
+			if err := r.refuseRelease(ctx, release, refuse("%s", refusal), pendingAssets, refused); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if err := r.commitListing(ctx, app, &release, check, pendingAssets, skipBroadcast); err != nil {
 			return nil, err
 		}
@@ -305,7 +320,8 @@ func refuse(format string, args ...any) releaseCheck {
 }
 
 // checkRelease judges one release for promotion. The triple must be complete
-// and its files in Blossom. A developer APK must be read, signed by the app's
+// and every APK read, from Blossom, the APK cache, or the asset's url. No
+// store may have signed it. A developer APK must be signed by the app's
 // certificate or a successor in its lineage, and published by the active C1
 // owner or delegate, counting pending proofs that verify against it. Both
 // slots must pass the version guard.
@@ -341,20 +357,12 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		}
 		return refuse("%s", reason), nil
 	}
-	for i := range assets {
-		ready, err := r.assetInBlossom(ctx, &assets[i])
-		if err != nil || !ready {
-			return releaseCheck{}, err
-		}
-	}
-
 	check := releaseCheck{assets: assets}
 	if pubkey == r.config.Info.Pubkey {
-		signer := assetSigner(assets[0])
-		if signer == "" {
-			return refuse("the asset names no apk_certificate_hash"), nil
+		check, err = r.checkCatalog(ctx, assets)
+		if err != nil || check.assets == nil {
+			return check, err
 		}
-		check.cert = signer
 	} else {
 		check, err = r.checkDeveloper(ctx, pubkey, appID, assets)
 		if err != nil || check.assets == nil {
@@ -372,6 +380,47 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 	return check, nil
 }
 
+// checkCatalog reads every APK of a catalog key release and checks that it is
+// signed by the certificate its asset names, and carries no store's delivery
+// mark: without a C1 proof nothing shows the developer holds the key. A file
+// already named by a promoted asset is not read again, so a key rotation
+// promotes at once.
+func (r *T) checkCatalog(ctx context.Context, assets []nostr.Event) (releaseCheck, error) {
+	signer := assetSigner(assets[0])
+	if signer == "" {
+		return refuse("the asset names no apk_certificate_hash"), nil
+	}
+	for _, asset := range assets {
+		x, _ := events.Find(asset.Tags, "x")
+		listed, err := r.listedFile(ctx, x)
+		if err != nil {
+			return releaseCheck{}, err
+		}
+		if listed {
+			continue
+		}
+		got, readErr, ok := r.apkSigning(x, r.assetURL(asset.Tags))
+		if !ok {
+			return releaseCheck{}, nil
+		}
+		if readErr != "" {
+			return refuse("%s", readErr), nil
+		}
+		if delivered := r.apks.delivered(x); delivered != "" {
+			return refuse("%s", delivered), nil
+		}
+		if got.cert(assetSigner(asset)) == nil {
+			return refuse("the APK is not signed by the certificate its asset names"), nil
+		}
+	}
+	return releaseCheck{assets: assets, cert: signer}, nil
+}
+
+// listedFile reports a file a stored asset already names.
+func (r *T) listedFile(ctx context.Context, x string) (bool, error) {
+	return r.store.Has(ctx, nostr.Filter{Kinds: []int{events.KindAsset}, Tags: nostr.TagMap{"x": []string{x}}})
+}
+
 // checkDeveloper reads every APK of a developer release and checks it against
 // the certificate on the current asset, or for a new app the signer of its APK.
 func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []nostr.Event) (releaseCheck, error) {
@@ -382,12 +431,12 @@ func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []n
 	var chain signing
 	for _, asset := range assets {
 		x, _ := events.Find(asset.Tags, "x")
-		got, readErr, ok := r.apkSigning(x, "")
+		got, readErr, ok := r.apkSigning(x, r.assetURL(asset.Tags))
 		if !ok {
 			return releaseCheck{}, nil
 		}
 		if readErr != "" {
-			return refuse("the APK could not be verified: %s", readErr), nil
+			return refuse("%s", readErr), nil
 		}
 		if appCert == "" {
 			appCert = got.signer()

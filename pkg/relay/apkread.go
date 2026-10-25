@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -31,7 +32,7 @@ const (
 )
 
 var (
-	errNoAPK     = errors.New("the apk is neither in blossom nor at a url")
+	errNoAPK     = errors.New("the apk is not in blossom or the apk cache, and has no url")
 	errAPKHash   = errors.New("the downloaded apk does not match its hash")
 	errAPKTooBig = errors.New("apk exceeds the size limit")
 )
@@ -44,10 +45,12 @@ type apkJob struct {
 }
 
 // readAPKResult is a signing chain read during this process. A restart reads
-// the file again.
+// the file again. delivered is the refusal for a store's delivery mark,
+// which only a listing without a C1 proof gets.
 type readAPKResult struct {
-	chain   signing
-	readErr string
+	chain     signing
+	readErr   string
+	delivered string
 }
 
 // apkReader reads APK certificates one at a time, off the event path.
@@ -69,10 +72,17 @@ func newAPKReader() *apkReader {
 	}
 }
 
-func (a *apkReader) remember(blob string, chain signing, readErr string) {
+func (a *apkReader) remember(blob string, res readAPKResult) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.read[blob] = readAPKResult{chain: chain, readErr: readErr}
+	a.read[blob] = res
+}
+
+// delivered returns the delivery mark refusal of a read APK, or "".
+func (a *apkReader) delivered(blob string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.read[blob].delivered
 }
 
 func (a *apkReader) cached(blob string) (signing, string, bool) {
@@ -131,9 +141,9 @@ func (r *T) runAPKReader(ctx context.Context) {
 }
 
 // readAPKJob reads one APK and remembers its certificates until the process
-// exits. A file that is not a verifiable APK is remembered with the reason,
-// since the same bytes will not verify later. An APK that could not be
-// fetched returns an error.
+// exits. A file that is not a verifiable APK, or that a store signed, is
+// remembered with the refusal, since the same bytes will not pass later. An
+// APK that could not be fetched returns an error.
 func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
@@ -143,17 +153,28 @@ func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	}
 	defer cleanup()
 	chain, readErr := r.readAPK(body)
+	var store *thirdPartyError
+	if errors.As(readErr, &store) && store.delivery && len(chain) > 0 {
+		slog.Info("apk reader: read apk", "blob", job.blob, "signer", chain.signer(), "delivered_by", store.label)
+		r.apks.remember(job.blob, readAPKResult{chain: chain, delivered: store.Error()})
+		return nil
+	}
 	if readErr != nil {
-		slog.Warn("apk reader: not a verifiable apk", "blob", job.blob, "error", readErr)
-		r.apks.remember(job.blob, nil, readErr.Error())
+		reason := "the APK could not be verified: " + readErr.Error()
+		if store != nil {
+			reason = store.Error()
+		}
+		slog.Warn("apk reader: apk refused", "blob", job.blob, "reason", reason)
+		r.apks.remember(job.blob, readAPKResult{readErr: reason})
 		return nil
 	}
 	slog.Info("apk reader: read apk", "blob", job.blob, "signer", chain.signer())
-	r.apks.remember(job.blob, chain, "")
+	r.apks.remember(job.blob, readAPKResult{chain: chain})
 	return nil
 }
 
-// openAPK returns the APK from Blossom, buffer zone first, else from job.url.
+// openAPK returns the APK from Blossom, buffer zone first, else from the APK
+// cache, else from job.url.
 func (r *T) openAPK(ctx context.Context, job apkJob) (io.ReadSeeker, func(), error) {
 	hash, err := blossom.ParseHash(job.blob)
 	if err != nil {
@@ -174,6 +195,9 @@ func (r *T) openAPK(ctx context.Context, job apkJob) (io.ReadSeeker, func(), err
 		defer body.Close()
 		return tempAPK(body, job.blob)
 	}
+	if body, cleanup, ok := r.cachedAPK(job.blob); ok {
+		return body, cleanup, nil
+	}
 	if job.url == "" {
 		return nil, nil, errNoAPK
 	}
@@ -190,6 +214,30 @@ func (r *T) openAPK(ctx context.Context, job apkJob) (io.ReadSeeker, func(), err
 		return nil, nil, fmt.Errorf("fetch apk: status %d", res.StatusCode)
 	}
 	return tempAPK(res.Body, job.blob)
+}
+
+// cachedAPK opens <APKCacheDir>/<blob>.apk when its sha256 is blob. The
+// indexer writes that directory; the relay only reads it.
+func (r *T) cachedAPK(blob string) (io.ReadSeeker, func(), bool) {
+	if r.config.APKCacheDir == "" {
+		return nil, nil, false
+	}
+	f, err := os.Open(filepath.Join(r.config.APKCacheDir, blob+".apk"))
+	if err != nil {
+		return nil, nil, false
+	}
+	hasher := sha256.New()
+	n, err := io.Copy(hasher, io.LimitReader(f, maxAPK+1))
+	if err != nil || n > maxAPK || hex.EncodeToString(hasher.Sum(nil)) != blob {
+		f.Close()
+		slog.Warn("apk reader: cached apk does not match its hash", "blob", blob)
+		return nil, nil, false
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, nil, false
+	}
+	return f, func() { f.Close() }, true
 }
 
 // tempAPK copies an APK to a temporary file and checks its sha256.

@@ -86,7 +86,7 @@ func TestBufferZone(t *testing.T) {
 	assetEvent := sign(t, sk, nostr.Event{Kind: 3063, Tags: nostr.Tags{
 		{"i", "com.example.app"}, {"x", hash}, {"version", "1.0.0"}, {"version_code", "1"},
 		{"f", "android-arm64-v8a"}, {"m", "application/vnd.android.package-archive"},
-		{"apk_certificate_hash", hash},
+		{"apk_certificate_hash", testReleaseSigner},
 	}})
 	app := sign(t, sk, nostr.Event{Kind: 32267, Tags: nostr.Tags{
 		{"d", "com.example.app"}, {"name", "Example"}, {"f", "android-arm64-v8a"},
@@ -99,10 +99,18 @@ func TestBufferZone(t *testing.T) {
 		publishSocket(t, socket, event)
 	}
 
-	if code := status(t, http.MethodGet, blobURL); code != http.StatusOK {
-		t.Fatalf("promoted GET = %d, want 200", code)
+	// The relay reads the APK off the event path, then promotes.
+	deadline := time.Now().Add(5 * time.Second)
+	for status(t, http.MethodGet, blobURL) != http.StatusOK {
+		if time.Now().After(deadline) {
+			t.Fatal("promoted GET is not 200")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// testReleaseSigner is the certificate sha256 of test-release.apk.
+const testReleaseSigner = "d3bd3d00681ef7da9d157961477304ff86086ba6002354dbf6a3dc5ea3f7266a"
 
 func publishSocket(t *testing.T, path string, event nostr.Event) {
 	t.Helper()

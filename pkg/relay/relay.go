@@ -73,6 +73,8 @@ type T struct {
 
 	profileJobs chan string
 	apks        *apkReader
+	process     Processor
+	procs       *processQueue
 	readAPK     func(io.ReadSeeker) (signing, error)
 	fetch       *http.Client
 
@@ -164,6 +166,7 @@ func Setup(
 		uploads:     make(chan upload, 100),
 		profileJobs: make(chan string, 100),
 		apks:        newAPKReader(),
+		procs:       newProcessQueue(),
 		readAPK:     readSigning,
 		fetch:       publicFetch,
 	}
@@ -194,7 +197,7 @@ func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler
 	defer cancel()
 	r.reselect(ctx)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		r.runReconcile(ctx)
@@ -206,6 +209,10 @@ func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler
 	go func() {
 		defer wg.Done()
 		r.runAPKReader(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		r.runProcessor(ctx)
 	}()
 	r.server.Start(ctx)
 	if handler == nil {
@@ -955,7 +962,8 @@ func proofOwner(ctx context.Context, db store.T, catalogKey, appID string) (stri
 
 // NotAdmitted runs the publisher gate for listing events. The catalog key,
 // a pubkey that already published a kind 32267, a whitelisted pubkey, or a
-// pubkey above the web-of-trust threshold may publish.
+// pubkey above the web-of-trust threshold may publish. An app id that
+// already has a kind 32267 skips the gate; the C1 check still decides the slot.
 // Other kinds pass. See the publisher policy.
 func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
@@ -969,7 +977,8 @@ func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := gate.Admit(ctx, e.PubKey)
+		appID, _ := listingAppID(e)
+		err := gate.AdmitListing(ctx, e.PubKey, appID)
 		if errors.Is(err, policy.ErrNotAdmitted) {
 			return ErrPublisherNotAllowed
 		}

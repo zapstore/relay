@@ -21,6 +21,10 @@ type Config struct {
 	// file is in Blossom.
 	BlobHosts []string
 
+	// APKCacheDir is $DATA_DIR/apk-cache, where the indexer keeps the APKs it
+	// verified as <sha256>.apk. The relay reads an APK there before its url.
+	APKCacheDir string
+
 	// Hostname is the hostname of the relay, used to validate NIP42 authentication.
 	// Default is "".
 	Hostname string `env:"RELAY_HOSTNAME"`

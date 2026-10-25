@@ -246,6 +246,9 @@ func SelectedReleases(snapshot []nostr.Event, catalogKey string, at time.Time) m
 	return out
 }
 
+// ProfilePicture is the picture URL of a kind 0 profile, or "".
+func ProfilePicture(event nostr.Event) string { return pictureURL(event) }
+
 func pictureURL(event nostr.Event) string {
 	var body struct {
 		Picture string `json:"picture"`
