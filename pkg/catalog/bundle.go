@@ -62,7 +62,9 @@ func matchingApps(st State, filter string) []string {
 	return out
 }
 
-// Loop bundles once, then again every interval, until ctx is cancelled.
+// Loop bundles every interval until ctx is cancelled. It bundles at once only
+// when data holds no snapshot, so a restart does not compete with the first
+// clients for the database.
 func Loop(ctx context.Context, every time.Duration, data, dbPath string, signer Signer, notices func(context.Context) (map[string]string, error), log *slog.Logger, enrich Enricher) {
 	if every <= 0 {
 		return
@@ -84,7 +86,13 @@ func Loop(ctx context.Context, every time.Duration, data, dbPath string, signer 
 		}
 		log.Info("bundle", "epoch", n)
 	}
-	run()
+	latest, err := LatestSnap(data)
+	if err != nil {
+		log.Error("bundle", "error", err)
+	}
+	if err != nil || latest == 0 {
+		run()
+	}
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
