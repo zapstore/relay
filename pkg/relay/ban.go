@@ -16,23 +16,24 @@ import (
 var errBanCatalogKey = errors.New("the catalog key is never banned")
 
 // ApplyBan stores the publisher, removes that publisher's listings, stored
-// and in the buffer zone, and reselects the apps they were in. A banned
-// Nostr key also loses every other event waiting in the buffer zone.
-func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey string, pub policy.Publisher, reason string) error {
+// and in the buffer zone, and selects the apps that still have a hidden slot.
+// It returns every app id whose search entry changed. A banned Nostr key also
+// loses every other event waiting in the buffer zone.
+func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey string, pub policy.Publisher, reason string) ([]string, error) {
 	pub, err := policy.Normalize(pub.Kind, pub.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if pub.Kind == policy.KindNostr && pub.ID == catalogKey {
-		return errBanCatalogKey
+		return nil, errBanCatalogKey
 	}
 	rows, err := loadListings(ctx, db)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pending, err := db.ListPending(ctx, bufferedKinds())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	isPending := map[string]struct{}{}
 	for _, event := range pending {
@@ -43,13 +44,13 @@ func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey str
 	}
 	ids, hashes, apps := policy.Affected(pub, rows)
 	if err := pol.RecordBan(ctx, pub, reason, hashes, apps); err != nil {
-		return err
+		return nil, err
 	}
 	var stored []string
 	for _, id := range ids {
 		if _, ok := isPending[id]; ok {
 			if err := db.DeletePending(ctx, id); err != nil {
-				return fmt.Errorf("drop pending event %s: %w", id, err)
+				return nil, fmt.Errorf("drop pending event %s: %w", id, err)
 			}
 			continue
 		}
@@ -61,16 +62,20 @@ func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey str
 				continue
 			}
 			if err := db.DeletePending(ctx, event.ID); err != nil {
-				return fmt.Errorf("drop pending event %s: %w", event.ID, err)
+				return nil, fmt.Errorf("drop pending event %s: %w", event.ID, err)
 			}
 		}
 	}
-	for batch := range slices.Chunk(stored, reselectBatch) {
+	for batch := range slices.Chunk(stored, batchSize) {
 		if _, err := db.Delete(ctx, nostr.Filter{IDs: batch}); err != nil {
-			return fmt.Errorf("delete banned listings: %w", err)
+			return nil, fmt.Errorf("delete banned listings: %w", err)
 		}
 	}
-	return reselect(ctx, db, catalogKey)
+	hidden, err := selectHidden(ctx, db, catalogKey)
+	if err != nil {
+		return nil, err
+	}
+	return append(apps, hidden...), nil
 }
 
 // loadListings reads every stored app, release, and asset so a forge or

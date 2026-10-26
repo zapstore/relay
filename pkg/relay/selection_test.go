@@ -2,8 +2,6 @@ package relay
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -45,8 +43,10 @@ func TestSelectSlots(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			db := setup(t, tc.catalogCode)
-			if err := reselect(context.Background(), db, catalog); err != nil {
-				t.Fatal(err)
+			for _, app := range []string{appID, solo} {
+				if err := selectApp(context.Background(), db, catalog, app); err != nil {
+					t.Fatal(err)
+				}
 			}
 			kept := querySlots(t, db, tc.filters)
 			got := map[string]int{}
@@ -70,7 +70,7 @@ func TestSelectSlots(t *testing.T) {
 	}
 }
 
-func TestReselect(t *testing.T) {
+func TestSelectHiddenAfterDelete(t *testing.T) {
 	const appID = "com.example.app"
 	cert := strings.Repeat("cd", 32)
 	catalog := testPubkey(t)
@@ -85,30 +85,21 @@ func TestReselect(t *testing.T) {
 		}
 		return out
 	}
-	stored := func(t *testing.T, db store.T) (string, bool) {
-		t.Helper()
-		var release sql.NullString
-		err := db.DB.QueryRowContext(ctx, `SELECT release_id FROM listings WHERE app_id = ?`, appID).Scan(&release)
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", false
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		return release.String, true
-	}
 
 	db := newSlotDB(t)
 	saveListing(t, db, catalog, appID, cert, "1", "3")
-	saveListing(t, db, developer, appID, cert, "2", "2")
-	if _, ok := stored(t, db); ok {
-		t.Fatal("a write clears the selection")
-	}
-	if err := reselect(ctx, db, catalog); err != nil {
+	if err := selectApp(ctx, db, catalog, appID); err != nil {
 		t.Fatal(err)
 	}
-	if release, _ := stored(t, db); release != strings.Repeat("11", 32) {
-		t.Fatalf("selected release %q, want the catalog key's", release)
+	if n := hiddenEvents(t, db); n != 0 {
+		t.Fatalf("one slot: %d hidden events, want 0", n)
+	}
+	saveListing(t, db, developer, appID, cert, "2", "2")
+	if err := selectApp(ctx, db, catalog, appID); err != nil {
+		t.Fatal(err)
+	}
+	if n := hiddenEvents(t, db); n != 3 {
+		t.Fatalf("two slots: %d hidden events, want the developer's 3", n)
 	}
 	if got := signers(t, db); len(got) != 1 || got[0] != catalog {
 		t.Fatalf("before: %v, want the catalog key", got)
@@ -116,28 +107,93 @@ func TestReselect(t *testing.T) {
 	if _, err := db.Delete(ctx, nostr.Filter{Authors: []string{catalog}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := stored(t, db); ok {
-		t.Fatal("a deletion clears the selection")
-	}
-	if got := signers(t, db); len(got) != 1 || got[0] != developer {
-		t.Fatalf("an app with no selection is not filtered: %v", got)
-	}
-	if err := reselect(ctx, db, catalog); err != nil {
+	if _, err := selectHidden(ctx, db, catalog); err != nil {
 		t.Fatal(err)
 	}
-	if release, _ := stored(t, db); release != strings.Repeat("21", 32) {
-		t.Fatalf("selected release %q, want the developer's", release)
+	if n := hiddenEvents(t, db); n != 0 {
+		t.Fatalf("after deleting the selected slot: %d hidden events, want 0", n)
 	}
+	if got := signers(t, db); len(got) != 1 || got[0] != developer {
+		t.Fatalf("after: %v, want the developer", got)
+	}
+}
+
+func TestPromotionHidesTheOtherSlot(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	r.readAPK = readChains(t, map[string]signing{"dev-apk": {key.cert}})
+	apps := nostr.Filters{{Kinds: []int{events.KindApp}, Tags: nostr.TagMap{"d": []string{testApp}}, Limit: 10}}
+	visible := func(t *testing.T) []string {
+		t.Helper()
+		got, err := r.query(t.Context(), nil, "q", apps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, event := range got {
+			out = append(out, event.PubKey)
+		}
+		return out
+	}
+
+	catApp, catRelease, catAsset := testTriple("c", catalogKey, blobs.put("cat-apk"), key.hash, 1)
+	for _, event := range []*nostr.Event{catApp, catAsset, catRelease} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	if !slotHas(t, r.store, catRelease.ID) {
+		t.Fatal("the catalog listing was not promoted")
+	}
+	if n := hiddenEvents(t, r.store); n != 0 {
+		t.Fatalf("one slot: %d hidden events", n)
+	}
+
+	devApp, devRelease, devAsset := testTriple("b", ownerKey, blobs.put("dev-apk"), key.hash, 2)
+	for _, event := range []*nostr.Event{devApp, devAsset, devRelease} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	if res := r.persist(nil, key.proof(t, "4", ownerKey, "")); !res.ok {
+		t.Fatalf("proof: %+v", res)
+	}
+	if !slotHas(t, r.store, devRelease.ID) {
+		t.Fatal("the developer listing was not promoted")
+	}
+	if got := visible(t); len(got) != 1 || got[0] != ownerKey {
+		t.Fatalf("two slots: apps from %v, want the developer's", got)
+	}
+	if n := hiddenEvents(t, r.store); n != 3 {
+		t.Fatalf("two slots: %d hidden events, want the catalog's 3", n)
+	}
+
+	revocation := &nostr.Event{
+		ID: strings.Repeat("5", 64), PubKey: ownerKey, Kind: events.KindIdentityProof,
+		CreatedAt: nostr.Now() + 10, Tags: nostr.Tags{{"d", key.hash}, {"revoked"}},
+	}
+	if res := r.persist(nil, revocation); !res.ok {
+		t.Fatalf("revocation: %+v", res)
+	}
+	if got := visible(t); len(got) != 1 || got[0] != catalogKey {
+		t.Fatalf("after revocation: apps from %v, want the catalog key's", got)
+	}
+	if n := hiddenEvents(t, r.store); n != 0 {
+		t.Fatalf("after revocation: %d hidden events", n)
+	}
+}
+
+func hiddenEvents(t *testing.T, db store.T) int {
+	t.Helper()
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM events WHERE hidden = 1`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func querySlots(t *testing.T, db store.T, filters nostr.Filters) []nostr.Event {
 	t.Helper()
-	ctx := context.Background()
-	result, err := db.Query(ctx, filters...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kept, err := selectSlots(ctx, db, filters, result)
+	kept, err := db.QueryVisible(context.Background(), filters...)
 	if err != nil {
 		t.Fatal(err)
 	}

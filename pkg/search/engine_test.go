@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -32,7 +31,7 @@ func TestEngineSearch(t *testing.T) {
 		encodeCalls++
 		return nil, errors.New("model gone")
 	}
-	engine := NewEngine(func(context.Context) ([]Entry, error) { return testEntries(), nil }, failing, time.Minute, slog.Default())
+	engine := NewEngine(func(context.Context) ([]Entry, error) { return testEntries(), nil }, nil, failing, slog.Default())
 
 	result, err := engine.Search(t.Context(), Request{Query: "Notes"})
 	if err != nil {
@@ -74,7 +73,7 @@ func TestExtensions(t *testing.T) {
 		{App: App{ID: "org.example.maps", Name: "Maps", FactBits: FactOffline}},
 		{App: App{ID: "org.example.atlas", Name: "Atlas maps"}},
 	}
-	engine := NewEngine(func(context.Context) ([]Entry, error) { return entries, nil }, nil, time.Minute, slog.Default())
+	engine := NewEngine(func(context.Context) ([]Entry, error) { return entries, nil }, nil, nil, slog.Default())
 	search := func(raw string) []string {
 		query, add, remove := Extensions(raw)
 		result, err := engine.Search(t.Context(), Request{Query: query, Add: add, Remove: remove})
@@ -103,7 +102,7 @@ func TestEngineReload(t *testing.T) {
 			return nil, errors.New("db gone")
 		}
 		return testEntries(), nil
-	}, nil, time.Hour, slog.Default())
+	}, nil, nil, slog.Default())
 
 	if err := engine.Load(t.Context()); err != nil {
 		t.Fatal(err)
@@ -126,8 +125,36 @@ func TestEngineReload(t *testing.T) {
 		t.Fatalf("a failed reload dropped the previous selection: %v %v", result.Hits, err)
 	}
 
-	empty := NewEngine(func(context.Context) ([]Entry, error) { return nil, errors.New("db gone") }, nil, time.Hour, slog.Default())
+	empty := NewEngine(func(context.Context) ([]Entry, error) { return nil, errors.New("db gone") }, nil, nil, slog.Default())
 	if _, err := empty.Search(t.Context(), Request{Query: "Notes"}); err == nil {
 		t.Fatal("first load failure was ignored")
+	}
+}
+
+func TestEngineSync(t *testing.T) {
+	engine := NewEngine(func(context.Context) ([]Entry, error) { return testEntries(), nil }, func(_ context.Context, id string) (Entry, bool, error) {
+		if id == "org.example.notes" {
+			return Entry{}, false, nil
+		}
+		return Entry{App: App{ID: id, Name: "Fresh"}}, true, nil
+	}, nil, slog.Default())
+	if err := engine.Load(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Sync(t.Context(), "org.example.notes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Sync(t.Context(), "org.example.fresh"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Search(t.Context(), Request{Query: "fresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := hitIDs(result); !slices.Equal(ids, []string{"org.example.fresh"}) {
+		t.Fatalf("after sync: %v", ids)
+	}
+	if result, _ := engine.Search(t.Context(), Request{Query: "notes"}); len(result.Hits) != 0 {
+		t.Fatal("the dropped app is still ranked")
 	}
 }

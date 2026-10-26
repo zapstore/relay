@@ -136,9 +136,7 @@ func (r *T) promoteProcessed(ctx context.Context, listing catalog.Listing) {
 		if !errors.Is(err, context.Canceled) {
 			slog.Error("processor: promote failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)
 		}
-		return
 	}
-	r.reselect(ctx)
 }
 
 func (r *T) processJob(ctx context.Context, listing catalog.Listing) (string, error) {

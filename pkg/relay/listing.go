@@ -724,6 +724,10 @@ func (r *T) commitListing(ctx context.Context, app *nostr.Event, release *nostr.
 	}
 
 	appID := listingAppIDOrEmpty(release)
+	if err := selectApp(ctx, r.store, r.config.Info.Pubkey, appID); err != nil {
+		return err
+	}
+	r.SyncSearch(ctx, appID)
 	slog.Info("listing promoted", "pubkey", release.PubKey, "app_id", appID)
 	for _, event := range saved {
 		if event.Kind == events.KindApp && r.profileJobs != nil {

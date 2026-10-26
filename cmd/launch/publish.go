@@ -10,6 +10,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/policy"
+	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/relay/store"
 )
 
@@ -24,7 +25,7 @@ type report struct {
 // stopped. Every listing was already listed under oldKey, so the relay's
 // admission gate has nothing left to check, except a ban: a listing with an
 // event the policy rejects is skipped whole.
-func storeAll(ctx context.Context, t term, relayData string, evs []nostr.Event) (report, error) {
+func storeAll(ctx context.Context, t term, relayData, catalogKey string, evs []nostr.Event) (report, error) {
 	rep := report{Banned: map[string]bool{}}
 	db, err := store.New(filepath.Join(relayData, "relay.db"))
 	if err != nil {
@@ -68,6 +69,9 @@ func storeAll(ctx context.Context, t term, relayData string, evs []nostr.Event) 
 		if (i+1)%500 == 0 {
 			t.say("  %d of %d", i+1, len(evs))
 		}
+	}
+	if err := relay.SelectAll(ctx, db, catalogKey); err != nil {
+		return rep, err
 	}
 	return rep, nil
 }

@@ -214,10 +214,6 @@ func (r *T) promoteWaitingOn(ctx context.Context, blob string) error {
 			}
 		}
 	}
-
-	if len(seen) > 0 || len(certs) > 0 {
-		r.reselect(ctx)
-	}
 	return nil
 }
 

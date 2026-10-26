@@ -390,5 +390,6 @@ func (r *T) deleteAppListings(ctx context.Context, appID string) (int, error) {
 	if err != nil {
 		return n, err
 	}
+	r.SyncSearch(ctx, appID)
 	return n + pending, nil
 }

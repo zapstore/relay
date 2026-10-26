@@ -42,7 +42,7 @@ func TestStoreAllSkipsABannedListing(t *testing.T) {
 	}
 	db.Close()
 
-	rep, err := storeAll(t.Context(), newTerm(strings.NewReader(""), io.Discard), data, evs)
+	rep, err := storeAll(t.Context(), newTerm(strings.NewReader(""), io.Discard), data, "", evs)
 	if err != nil {
 		t.Fatal(err)
 	}

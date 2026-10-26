@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
@@ -20,14 +19,17 @@ func TestSearchREQ(t *testing.T) {
 	developer := testPubkey(t)
 	saveListing(t, r.store, catalogKey, "com.example.app", cert, "1", "2")
 	saveListing(t, r.store, developer, "com.example.app", cert, "2", "2")
+	if err := SelectAll(t.Context(), r.store, catalogKey); err != nil {
+		t.Fatal(err)
+	}
 	filter := nostr.Filter{Kinds: []int{events.KindApp}, Search: "example", Limit: 10}
 
 	if _, err := r.query(t.Context(), nil, "s", nostr.Filters{filter}); !errors.Is(err, store.ErrUnsupportedREQ) {
 		t.Fatalf("without an engine: %v", err)
 	}
 
-	loader := SearchListings(r.store, catalogKey, filepath.Join(t.TempDir(), "artifacts.db"))
-	r.UseSearch(search.NewEngine(loader, nil, time.Minute, slog.Default()))
+	loader := SearchListings(r.store, filepath.Join(t.TempDir(), "artifacts.db"))
+	r.UseSearch(search.NewEngine(loader, nil, nil, slog.Default()))
 	got, err := r.query(t.Context(), nil, "s", nostr.Filters{filter})
 	if err != nil {
 		t.Fatal(err)

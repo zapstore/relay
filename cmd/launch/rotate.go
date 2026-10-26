@@ -73,7 +73,7 @@ func rotate(ctx context.Context, t term) error {
 		if err := clearOld(ctx, t, p.RelayData, pl); err != nil {
 			return undone(backup, err)
 		}
-		rep, err := storeAll(ctx, t, p.RelayData, evs)
+		rep, err := storeAll(ctx, t, p.RelayData, newKey, evs)
 		rep.print(t)
 		if err != nil {
 			return undone(backup, err)
@@ -263,7 +263,7 @@ func dryRun(ctx context.Context, t term, backup, relayBin string) error {
 	if err := clearOld(ctx, t, data, pl); err != nil {
 		return err
 	}
-	rep, err := storeAll(ctx, t, data, evs)
+	rep, err := storeAll(ctx, t, data, signer.PubKey, evs)
 	rep.print(t)
 	if err != nil {
 		return err

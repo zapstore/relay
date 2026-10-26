@@ -3,8 +3,10 @@ package store
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -52,6 +54,134 @@ func TestStoreRefusesTextSearch(t *testing.T) {
 		if _, err := store.Query(ctx, nostr.Filter{Kinds: []int{events.KindApp}, Search: search, Limit: 10}); !errors.Is(err, ErrUnsupportedREQ) {
 			t.Fatalf("search %q error = %v, want ErrUnsupportedREQ", search, err)
 		}
+	}
+}
+
+func TestPragmasOnEveryConnection(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	var conns []*sql.Conn
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	for i := range 4 {
+		c, err := store.DB.Conn(ctx)
+		if err != nil {
+			t.Fatalf("conn %d: %v", i, err)
+		}
+		conns = append(conns, c)
+
+		var busy, fk, cache int64
+		for pragma, dst := range map[string]*int64{"busy_timeout": &busy, "foreign_keys": &fk, "cache_size": &cache} {
+			if err := c.QueryRowContext(ctx, "PRAGMA "+pragma).Scan(dst); err != nil {
+				t.Fatalf("conn %d: PRAGMA %s: %v", i, pragma, err)
+			}
+		}
+		if busy != busyTimeout.Milliseconds() || fk != 1 || cache != -int64(cacheSize/sqlite.KiB) {
+			t.Errorf("conn %d: busy_timeout=%d foreign_keys=%d cache_size=%d", i, busy, fk, cache)
+		}
+	}
+}
+
+func TestTagsOfDeletedEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	store, err := New(path)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	for _, id := range []string{"kept", "deleted"} {
+		event := nostr.Event{ID: id, PubKey: "pk", Kind: events.KindAsset, Tags: nostr.Tags{{"i", "a"}}, Sig: "sig"}
+		if _, err := store.Save(ctx, &event); err != nil {
+			t.Fatalf("failed to save %s: %v", id, err)
+		}
+	}
+	defer store.Close()
+
+	// A connection without foreign keys, so no cascade.
+	raw, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`DELETE FROM events WHERE id = 'deleted'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := tagEventIDs(t, store.DB); !slices.Equal(got, []string{"kept"}) {
+		t.Fatalf("after delete, tags belong to %v, want [kept]", got)
+	}
+}
+
+func tagEventIDs(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT DISTINCT event_id FROM tags ORDER BY event_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func TestQueryAssetByAppAndPlatform(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	assets := []nostr.Event{
+		{ID: "a-arm64-old", CreatedAt: 100, Tags: nostr.Tags{{"i", "a"}, {"f", "android-arm64-v8a"}}},
+		{ID: "a-arm64-new", CreatedAt: 200, Tags: nostr.Tags{{"i", "a"}, {"f", "android-arm64-v8a"}, {"f", "android-armeabi-v7a"}}},
+		{ID: "a-x86", CreatedAt: 300, Tags: nostr.Tags{{"i", "a"}, {"f", "android-x86_64"}}},
+		{ID: "b-arm64", CreatedAt: 150, Tags: nostr.Tags{{"i", "b"}, {"f", "android-arm64-v8a"}}},
+	}
+	for i := range assets {
+		assets[i].Kind = events.KindAsset
+		assets[i].PubKey = "pk"
+		assets[i].Sig = "sig"
+		if _, err := store.Save(ctx, &assets[i]); err != nil {
+			t.Fatalf("failed to save %s: %v", assets[i].ID, err)
+		}
+	}
+
+	since := nostr.Timestamp(160)
+	filter := func(app string, platforms ...string) nostr.Filter {
+		return nostr.Filter{Kinds: []int{events.KindAsset}, Tags: nostr.TagMap{"i": {app}, "f": platforms}, Limit: 1}
+	}
+	newB := filter("b", "android-arm64-v8a")
+	newB.Since = &since
+	filters := []nostr.Filter{
+		filter("a", "android-arm64-v8a"),
+		filter("a", "android-armeabi-v7a", "android-x86_64"),
+		filter("b", "android-arm64-v8a"),
+		newB,
+		filter("missing", "android-arm64-v8a"),
+	}
+
+	got, err := store.Query(ctx, filters...)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	var ids []string
+	for _, e := range got {
+		ids = append(ids, e.ID)
+	}
+	want := []string{"a-arm64-new", "a-x86", "b-arm64"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("ids = %v, want %v", ids, want)
 	}
 }
 

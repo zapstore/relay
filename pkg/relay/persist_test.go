@@ -7,19 +7,19 @@ import (
 	"github.com/zapstore/relay/pkg/events"
 )
 
-func TestOnlyListingChangesReselect(t *testing.T) {
+func TestOnlyDeletionsSelectHidden(t *testing.T) {
 	for kind, want := range map[int]bool{
 		nostr.KindDeletion:       true,
-		events.KindApp:           true,
-		events.KindRelease:       true,
-		events.KindAsset:         true,
 		events.KindIdentityProof: true,
+		events.KindApp:           false,
+		events.KindRelease:       false,
+		events.KindAsset:         false,
 		events.KindComment:       false,
 		events.KindZap:           false,
 		events.KindProfile:       false,
 		events.KindStack:         false,
 	} {
-		if got := changesListings(kind); got != want {
+		if got := deletesListings(kind); got != want {
 			t.Errorf("kind %d: %v, want %v", kind, got, want)
 		}
 	}

@@ -25,15 +25,41 @@ var schema string
 
 type T struct {
 	*sqlite.Store
+	// HiddenAdded is true when New added events.hidden, so no app has its
+	// slots selected yet.
+	HiddenAdded bool
+}
+
+const (
+	busyTimeout = 10 * time.Second
+	cacheSize   = 128 * sqlite.MiB // per connection
+	maxConns    = 16
+)
+
+// dsn returns the connection string for path. A PRAGMA run through the pool
+// reaches one connection only, so per-connection settings go here, where
+// the driver applies them to every connection it opens.
+func dsn(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	if !strings.HasPrefix(path, "file:") {
+		path = "file:" + path
+	}
+	return fmt.Sprintf("%s%s_busy_timeout=%d&_foreign_keys=1&_cache_size=%d",
+		path, sep, busyTimeout.Milliseconds(), -int64(cacheSize/sqlite.KiB))
 }
 
 func New(path string) (T, error) {
 	store, err := sqlite.New(
-		path,
+		dsn(path),
 		sqlite.WithAdditionalSchema(schema),
 		sqlite.WithQueryBuilder(queryBuilder),
-		sqlite.WithBusyTimeout(10*time.Second),
-		sqlite.WithCacheSize(256*sqlite.MiB),
+		// sqlite.New overwrites the busy timeout and cache size on the
+		// connection it uses for setup. These restore them there.
+		sqlite.WithBusyTimeout(busyTimeout),
+		sqlite.WithCacheSize(cacheSize),
 		sqlite.WithoutEventPolicy(), // events have been validated by the relay
 		sqlite.WithoutQueryPolicy(), // req queries have been validated by the relay
 		sqlite.WithoutCountPolicy(), // count queries have been validated by the relay
@@ -41,12 +67,39 @@ func New(path string) (T, error) {
 	if err != nil {
 		return T{}, err
 	}
+	// Idle connections stay open so their page cache survives between queries.
+	store.DB.SetMaxOpenConns(maxConns)
+	store.DB.SetMaxIdleConns(maxConns)
 	s := T{Store: store}
 	if err := s.migratePendingAppID(); err != nil {
 		store.Close()
 		return T{}, err
 	}
+	if s.HiddenAdded, err = s.addHidden(); err != nil {
+		store.Close()
+		return T{}, err
+	}
 	return s, nil
+}
+
+// addHidden adds events.hidden. It reports whether the column was added.
+// hidden is 1 on the kinds 32267, 30063, and 3063 of the slot that was not
+// selected, when an app has two slots. Every other event has 0.
+func (s T) addHidden() (bool, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'hidden'`).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("failed to check events: %w", err)
+	}
+	if n == 0 {
+		if _, err := s.DB.Exec(`ALTER TABLE events ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return false, fmt.Errorf("failed to add events.hidden: %w", err)
+		}
+	}
+	if _, err := s.DB.Exec(`CREATE INDEX IF NOT EXISTS events_hidden_idx ON events(id) WHERE hidden = 1`); err != nil {
+		return false, fmt.Errorf("failed to index events.hidden: %w", err)
+	}
+	return n == 0, nil
 }
 
 // migratePendingAppID adds pending_events.app_id, fills it from raw, and indexes it.
@@ -324,16 +377,116 @@ func Validate(filters ...nostr.Filter) error {
 	return nil
 }
 
-// queryBuilder rejects a search. Filters without a search field use the
-// default query builder.
+// queryBuilder rejects a search. Otherwise it builds the same queries as
+// [sqlite.DefaultQueryBuilder], except for the tags in [existsTags]. Hidden
+// events match: the relay's own reads need every slot.
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
+	return buildQueries(filters, false)
+}
+
+// QueryVisible is [sqlite.Store.Query] for a REQ: a filter that names no
+// author skips hidden events, so a client sees one slot per app. A filter
+// naming authors keeps them: publishers read their own listing either way.
+func (s T) QueryVisible(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error) {
+	queries, err := buildQueries(filters, true)
+	if err != nil {
+		return nil, err
+	}
+	var out []nostr.Event
+	for _, q := range queries {
+		rows, err := s.DB.QueryContext(ctx, q.SQL, q.Args...)
+		if err != nil {
+			return out, fmt.Errorf("failed to fetch events: %w", err)
+		}
+		for rows.Next() {
+			var e nostr.Event
+			if err := rows.Scan(&e.ID, &e.PubKey, &e.CreatedAt, &e.Kind, &e.Tags, &e.Content, &e.Sig); err != nil {
+				rows.Close()
+				return out, fmt.Errorf("failed to scan event row: %w", err)
+			}
+			out = append(out, e)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return out, fmt.Errorf("failed to scan event rows: %w", err)
+		}
+	}
+	return out, nil
+}
+
+func buildQueries(filters nostr.Filters, visible bool) ([]sqlite.Query, error) {
 	if err := Validate(filters...); err != nil {
 		return nil, err
 	}
 	if searchesIn(filters) > 0 {
 		return nil, fmt.Errorf("%w: text search is not supported", ErrUnsupportedREQ)
 	}
-	return sqlite.DefaultQueryBuilder(filters...)
+	queries := make([]sqlite.Query, 0, len(filters))
+	for _, filter := range filters {
+		conds, args := filterSQL(filter)
+		if visible && len(filter.Authors) == 0 {
+			conds = append(conds, "e.hidden = 0")
+		}
+		query := "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events AS e"
+		if len(conds) > 0 {
+			query += " WHERE " + strings.Join(conds, " AND ")
+		}
+		query += " ORDER BY e.created_at DESC, e.id ASC LIMIT ?"
+		args = append(args, filter.Limit)
+		queries = append(queries, sqlite.Query{SQL: query, Args: args})
+	}
+	return queries, nil
+}
+
+// existsTags are tag keys whose values match most events of a kind, like f
+// (platform) on kind 3063. An IN subquery on such a key lists nearly every
+// event before the other conditions apply, so they are checked per row.
+var existsTags = map[string]bool{"f": true}
+
+// filterSQL converts a filter to SQL conditions and their arguments.
+func filterSQL(filter nostr.Filter) (conds []string, args []any) {
+	if len(filter.IDs) > 0 {
+		conds = append(conds, "e.id"+inClause(len(filter.IDs)))
+		for _, id := range filter.IDs {
+			args = append(args, id)
+		}
+	}
+	if len(filter.Kinds) > 0 {
+		conds = append(conds, "e.kind"+inClause(len(filter.Kinds)))
+		for _, kind := range filter.Kinds {
+			args = append(args, kind)
+		}
+	}
+	if len(filter.Authors) > 0 {
+		conds = append(conds, "e.pubkey"+inClause(len(filter.Authors)))
+		for _, pk := range filter.Authors {
+			args = append(args, pk)
+		}
+	}
+	if filter.Until != nil {
+		conds = append(conds, "e.created_at <= ?")
+		args = append(args, int64(*filter.Until))
+	}
+	if filter.Since != nil {
+		conds = append(conds, "e.created_at >= ?")
+		args = append(args, int64(*filter.Since))
+	}
+	for key, vals := range filter.Tags {
+		if len(vals) == 0 || key == "" {
+			continue
+		}
+		if existsTags[key] {
+			conds = append(conds, "EXISTS (SELECT 1 FROM tags AS t WHERE t.event_id = e.id AND t.key = ? AND t.value"+inClause(len(vals))+")")
+		} else {
+			conds = append(conds, "e.id IN (SELECT event_id FROM tags WHERE key = ? AND value"+inClause(len(vals))+")")
+		}
+		args = append(args, key)
+		for _, v := range vals {
+			args = append(args, v)
+		}
+	}
+	return conds, args
 }
 
 // searchesIn counts the number of filters with a non-empty search term.

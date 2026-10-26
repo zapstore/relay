@@ -109,6 +109,12 @@ func Setup(
 	analytics *analytics.Engine,
 	readOnly bool,
 ) (*T, error) {
+	// Once, on the database that just gained events.hidden: before any read.
+	if store.HiddenAdded {
+		if err := SelectAll(context.Background(), store, config.Info.Pubkey); err != nil {
+			return nil, fmt.Errorf("select slots: %w", err)
+		}
+	}
 
 	server := rely.NewRelay(
 		rely.WithAuthURL(config.Hostname),
@@ -192,14 +198,10 @@ func readOnlyEvent(rely.Client, *nostr.Event) error {
 func (r *T) Handler() http.Handler { return r.server }
 
 // StartAndServe starts the relay. handler receives every request; nil serves
-// only the WebSocket relay. Every app has its selected release before the
-// relay listens.
+// only the WebSocket relay.
 func (r *T) StartAndServe(ctx context.Context, addr string, handler http.Handler) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if err := reselect(ctx, r.store, r.config.Info.Pubkey); err != nil {
-		return fmt.Errorf("fill listings: %w", err)
-	}
 	var wg sync.WaitGroup
 	wg.Add(4)
 	go func() {
@@ -353,10 +355,6 @@ func (r *T) reconcile(ctx context.Context) error {
 		}
 	}
 
-	if err := reselect(ctx, r.store, r.config.Info.Pubkey); err != nil {
-		errs = append(errs, err)
-	}
-
 	cutoff := time.Now().UTC().Add(-r.config.RemovePendingAfter)
 	if err := r.store.DeleteExpiredPending(ctx, cutoff); err != nil {
 		errs = append(errs, fmt.Errorf("failed to delete expired pending events: %w", err))
@@ -369,12 +367,15 @@ func (r *T) reconcile(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// reselect fills the selection of apps whose listings changed. On failure
-// the rows stay empty, and the next event or reconcile fills them.
-func (r *T) reselect(ctx context.Context) {
-	if err := reselect(ctx, r.store, r.config.Info.Pubkey); err != nil {
-		slog.Error("relay: failed to reselect listings", "error", err)
+// selectHidden reselects the apps with a hidden slot, after a write that may
+// have deleted listing events, and updates search for each of them.
+func (r *T) selectHidden(ctx context.Context) {
+	ids, err := selectHidden(ctx, r.store, r.config.Info.Pubkey)
+	if err != nil {
+		slog.Error("relay: failed to select slots", "error", err)
+		return
 	}
+	r.SyncSearch(ctx, ids...)
 }
 
 func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
@@ -401,18 +402,18 @@ func (p persistResult) result() rely.EventResult {
 	return res
 }
 
-// changesListings reports whether persisting an event of this kind can store
-// or delete a listing event: a deletion, a listing event, or a proof that
-// promotes or replaces a developer slot. Only those make reselect do work.
-func changesListings(kind int) bool {
-	return kind == nostr.KindDeletion || listingKind(kind) || kind == events.KindIdentityProof
+// deletesListings reports whether persisting an event of this kind can
+// delete a listing event: a deletion, or a proof that revokes or replaces a
+// developer slot. Promotion selects the app it stores.
+func deletesListings(kind int) bool {
+	return kind == nostr.KindDeletion || kind == events.KindIdentityProof
 }
 
 func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if changesListings(event.Kind) {
-		defer r.reselect(ctx)
+	if deletesListings(event.Kind) {
+		defer r.selectHidden(ctx)
 	}
 
 	if r.analytics != nil {
@@ -464,6 +465,7 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 
 	var deleted int
 	var err error
+	apps := appsOf(ctx, r.store, event)
 
 	switch {
 	case event.PubKey == r.config.Info.Pubkey:
@@ -501,7 +503,61 @@ func (r *T) handleDelete(ctx context.Context, event *nostr.Event) error {
 	if _, err := r.store.Save(ctx, event); err != nil {
 		return fmt.Errorf("failed to save delete request: %w", err)
 	}
+	r.SyncSearch(ctx, apps...)
 	return nil
+}
+
+// appsOf is the app ids whose listings a kind 5 names, read before the
+// events are deleted so search can drop or replace them.
+func appsOf(ctx context.Context, db store.T, event *nostr.Event) []string {
+	var ids []string
+	if app := developerRemovalApp(event); app != "" {
+		ids = append(ids, app)
+	}
+	var refs []string
+	for _, tag := range event.Tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "a":
+			ref, err := events.ParseAddressableRef(tag[1])
+			if err != nil {
+				continue
+			}
+			switch ref.Kind {
+			case events.KindApp:
+				ids = append(ids, ref.DTag)
+			case events.KindRelease:
+				app, _, _ := strings.Cut(ref.DTag, "@")
+				if app != "" {
+					ids = append(ids, app)
+				}
+			}
+		case "e":
+			refs = append(refs, tag[1])
+		}
+	}
+	if len(refs) == 0 {
+		return ids
+	}
+	found, err := appIDs(ctx, db.DB, `
+		SELECT DISTINCT t.value FROM events e JOIN tags t ON t.event_id = e.id
+		WHERE e.id`+inClause(len(refs))+` AND ((e.kind = ? AND t.key = 'd') OR (e.kind IN (?, ?) AND t.key = 'i'))`,
+		append(anySlice(refs), events.KindApp, events.KindRelease, events.KindAsset)...)
+	if err != nil {
+		slog.Error("relay: failed to name deleted apps", "error", err)
+		return ids
+	}
+	return append(ids, found...)
+}
+
+func anySlice(values []string) []any {
+	out := make([]any, len(values))
+	for i, value := range values {
+		out[i] = value
+	}
+	return out
 }
 
 func cloneTags(tags nostr.TagMap) nostr.TagMap {
@@ -561,16 +617,12 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 			return nil, queryFailed(ctx, "failed to search", err, filters, start)
 		}
 	} else {
-		result, err = r.store.Query(ctx, filters...)
+		result, err = r.store.QueryVisible(ctx, filters...)
 		if errors.Is(err, store.ErrUnsupportedREQ) {
 			return nil, err
 		}
 		if err != nil {
 			return nil, queryFailed(ctx, "failed to query events", err, filters, start)
-		}
-		result, err = selectSlots(ctx, r.store, filters, result)
-		if err != nil {
-			return nil, queryFailed(ctx, "failed to select listing slots", err, filters, start)
 		}
 	}
 

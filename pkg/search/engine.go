@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -20,24 +19,27 @@ type Entry struct {
 // Loader returns the selected listings with their artifacts.
 type Loader func(ctx context.Context) ([]Entry, error)
 
+// AppLoader returns one app's entry. ok is false when the app is not visible.
+type AppLoader func(ctx context.Context, appID string) (Entry, bool, error)
+
 // Encoder turns a normalized query into a leaf-ir-v1 vector.
 type Encoder func(ctx context.Context, query string) ([]int8, error)
 
-// Engine ranks the live selection. Load fills it before the relay serves, and
-// Run reloads it every refresh interval, so a search never waits for a load.
-// A nil encoder, or a failing query, ranks without the vector.
+// Engine ranks the live selection. Load fills it before the relay serves.
+// Sync replaces one app after a write. A nil encoder, or a failing query,
+// ranks without the vector.
 type Engine struct {
-	load    Loader
-	encode  Encoder
-	refresh time.Duration
-	log     *slog.Logger
+	load   Loader
+	one    AppLoader
+	encode Encoder
+	log    *slog.Logger
 
 	mu      sync.Mutex
 	entries []Entry
 }
 
-func NewEngine(load Loader, encode Encoder, refresh time.Duration, log *slog.Logger) *Engine {
-	return &Engine{load: load, encode: encode, refresh: refresh, log: log}
+func NewEngine(load Loader, one AppLoader, encode Encoder, log *slog.Logger) *Engine {
+	return &Engine{load: load, one: one, encode: encode, log: log}
 }
 
 // Request is one search. Match, when set, must accept a listing's kind 32267
@@ -190,23 +192,35 @@ func (e *Engine) Load(ctx context.Context) error {
 	return nil
 }
 
-// Run reloads the selection every refresh interval until ctx is done.
-func (e *Engine) Run(ctx context.Context) {
-	tick := time.NewTicker(e.refresh)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			loadCtx, cancel := context.WithTimeout(ctx, e.refresh)
-			err := e.Load(loadCtx)
-			cancel()
-			if err != nil && ctx.Err() == nil {
-				e.log.Error("search: reload failed; ranking the previous selection", "error", err)
-			}
+// Sync replaces the entry for appID, or drops it when the app is not visible.
+// It does nothing before Load.
+func (e *Engine) Sync(ctx context.Context, appID string) error {
+	if e.one == nil || appID == "" {
+		return nil
+	}
+	e.mu.Lock()
+	loaded := e.entries != nil
+	e.mu.Unlock()
+	if !loaded {
+		return nil
+	}
+	entry, ok, err := e.one(ctx, appID)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	next := make([]Entry, 0, len(e.entries)+1)
+	for _, old := range e.entries {
+		if old.ID != appID {
+			next = append(next, old)
 		}
 	}
+	if ok {
+		next = append(next, entry)
+	}
+	e.entries = next
+	return nil
 }
 
 // snapshot returns the loaded selection, loading it first when nothing has.

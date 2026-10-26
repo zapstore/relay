@@ -8,7 +8,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-// liveREQ answers a live read from the listings table: for each selected app, in app-id order, the
+// liveREQ answers a live read from the visible apps: for each app, in app-id order, the
 // kind 32267, then either its kind 30063 and the snapshot's kind 3063 assets
 // in the release's `e` order, or, for `listing:asset`, the one asset with the
 // greatest version_code (the lowest event id on a tie). `#d` names the apps;

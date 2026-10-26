@@ -14,176 +14,146 @@ import (
 	"github.com/zapstore/relay/pkg/relay/store"
 )
 
-// reselectBatch bounds the app ids per snapshot query: each id is bound twice.
-const reselectBatch = 500
+// An app has at most two slots: the catalog key's and one verified
+// developer's. With one slot nothing is hidden. With two, selectApp runs
+// catalog selection for that app and sets events.hidden on the kinds 32267,
+// 30063, and 3063 of the slot that lost, so a REQ sees one slot per app.
 
-// selectSlots drops kinds 32267, 30063, and 3063 not signed by the signer of
-// the app's selected release, so a REQ sees one slot per app as bundles do.
-// An app with no selected release is not filtered. A filter naming the
-// event's author keeps it: publishers read their own listing whichever slot
-// is selected.
-func selectSlots(ctx context.Context, db store.T, filters nostr.Filters, result []nostr.Event) ([]nostr.Event, error) {
-	appIDs := slotAppIDs(result)
-	if len(appIDs) == 0 {
-		return result, nil
-	}
-	args := make([]any, len(appIDs))
-	for i, id := range appIDs {
-		args[i] = id
-	}
-	rows, err := db.DB.QueryContext(ctx, `
-		SELECT l.app_id, e.pubkey FROM listings l JOIN events e ON e.id = l.release_id
-		WHERE l.app_id`+inClause(len(appIDs)), args...)
-	if err != nil {
-		return nil, fmt.Errorf("slot selection: %w", err)
-	}
-	defer rows.Close()
-	signers := map[string]string{}
-	for rows.Next() {
-		var appID, pubkey string
-		if err := rows.Scan(&appID, &pubkey); err != nil {
-			return nil, err
-		}
-		signers[appID] = pubkey
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	kept := result[:0]
-	for _, event := range result {
-		appID, _ := slotAppID(event)
-		signer, ok := signers[appID]
-		if !ok || signer == event.PubKey || namesAuthor(filters, event.PubKey) {
-			kept = append(kept, event)
-		}
-	}
-	return kept, nil
-}
+// batchSize bounds the ids bound in one statement.
+const batchSize = 500
 
-// reselect stores the selected release of every app id with a kind 32267 and
-// no row in listings: the release of the listing catalog selection picks, or
-// NULL when none is complete. It reads and writes in one transaction, so a
-// write that lands in between fails the commit instead of leaving a stale
-// row; the next call fills it.
-func reselect(ctx context.Context, db store.T, catalogKey string) error {
+// appEvents is the subquery of the ids of an app's kinds 32267, 30063, and
+// 3063: d names the app on 32267, i on the others. It binds the app id.
+const appEvents = `SELECT t.event_id FROM tags t JOIN events x ON x.id = t.event_id
+	WHERE t.value = ? AND ((x.kind = 32267 AND t.key = 'd') OR (x.kind IN (30063, 3063) AND t.key = 'i'))`
+
+// selectApp sets hidden on appID's events. With one signer, nothing is
+// hidden. With two, the signer of the release catalog selection picks keeps
+// the app and the other is hidden; when neither listing is complete,
+// nothing is hidden.
+func selectApp(ctx context.Context, db store.T, catalogKey, appID string) error {
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("reselect: %w", err)
+		return fmt.Errorf("select %s: %w", appID, err)
 	}
 	defer tx.Rollback()
-	ids, err := unselectedApps(ctx, tx)
-	if err != nil || len(ids) == 0 {
-		return err
+	var signers int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT e.pubkey) FROM events e WHERE e.id IN (`+appEvents+`)`, appID).Scan(&signers)
+	if err != nil {
+		return fmt.Errorf("select %s: signers: %w", appID, err)
 	}
-	for batch := range slices.Chunk(ids, reselectBatch) {
-		snapshot, err := selectionEvents(ctx, tx, batch)
+	winner := ""
+	if signers > 1 {
+		snapshot, err := selectionEvents(ctx, tx, appID)
 		if err != nil {
 			return err
 		}
-		releases := catalog.SelectedReleases(snapshot, catalogKey, time.Now())
-		for _, id := range batch {
-			var release sql.NullString
-			if event, ok := releases[id]; ok {
-				release = sql.NullString{String: event.ID, Valid: true}
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO listings (app_id, release_id) VALUES (?, ?)`, id, release); err != nil {
-				return fmt.Errorf("reselect %s: %w", id, err)
-			}
+		if release, ok := catalog.SelectedReleases(snapshot, catalogKey, time.Now())[appID]; ok {
+			winner = release.PubKey
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("reselect: %w", err)
+	hide := `(? != '' AND pubkey != ?)`
+	_, err = tx.ExecContext(ctx, `UPDATE events SET hidden = `+hide+`
+		WHERE hidden != `+hide+` AND id IN (`+appEvents+`)`,
+		winner, winner, winner, winner, appID)
+	if err != nil {
+		return fmt.Errorf("select %s: %w", appID, err)
+	}
+	return tx.Commit()
+}
+
+// selectHidden runs selectApp for every app with a hidden event. A deletion
+// calls it: removing the selected slot's events may leave the other slot
+// the only one, or the better one.
+func selectHidden(ctx context.Context, db store.T, catalogKey string) ([]string, error) {
+	ids, err := appIDs(ctx, db.DB, `
+		SELECT DISTINCT t.value FROM events e JOIN tags t ON t.event_id = e.id
+		WHERE e.hidden = 1 AND ((e.kind = ? AND t.key = 'd') OR (e.kind IN (?, ?) AND t.key = 'i'))`,
+		events.KindApp, events.KindRelease, events.KindAsset)
+	if err != nil {
+		return nil, fmt.Errorf("select hidden: %w", err)
+	}
+	for _, id := range ids {
+		if err := selectApp(ctx, db, catalogKey, id); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
+// SelectAll runs selectApp for every app with two signers or a hidden
+// event. It is for a database written without the relay, like launch's.
+func SelectAll(ctx context.Context, db store.T, catalogKey string) error {
+	ids, err := appIDs(ctx, db.DB, `
+		SELECT t.value FROM events e JOIN tags t ON t.event_id = e.id AND t.key = 'd'
+		WHERE e.kind = ? GROUP BY t.value HAVING COUNT(DISTINCT e.pubkey) > 1`, events.KindApp)
+	if err != nil {
+		return fmt.Errorf("select all: %w", err)
+	}
+	for _, id := range ids {
+		if err := selectApp(ctx, db, catalogKey, id); err != nil {
+			return err
+		}
+	}
+	if _, err := selectHidden(ctx, db, catalogKey); err != nil {
+		return err
 	}
 	return nil
 }
 
-// selectedListings returns the listings the listings table holds, in app-id
-// order, as a snapshot carries them. appIDs, when set, limits the apps. limit,
-// when positive, caps them. It reads only each selected release, its assets,
-// and its signer's kind 32267, not the listing history.
-func selectedListings(ctx context.Context, db store.T, catalogKey string, appIDs []string, limit int) ([]catalog.Listing, error) {
-	if err := reselect(ctx, db, catalogKey); err != nil {
-		return nil, err
-	}
+// visibleApps returns the kind 32267 events that are not hidden, one per
+// app id, in app-id order. appIDs, when set, limits the apps. limit, when
+// positive, caps them.
+func visibleApps(ctx context.Context, db store.T, appIDs []string, limit int) ([]nostr.Event, error) {
 	query := `SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
-		FROM listings l JOIN events e ON e.id = l.release_id`
-	var args []any
+		FROM events e JOIN tags t ON t.event_id = e.id AND t.key = 'd'
+		WHERE e.kind = ? AND e.hidden = 0`
+	args := []any{events.KindApp}
 	if len(appIDs) > 0 {
-		query += ` WHERE l.app_id` + inClause(len(appIDs))
+		query += ` AND t.value` + inClause(len(appIDs))
 		for _, id := range appIDs {
 			args = append(args, id)
 		}
 	}
-	query += ` ORDER BY l.app_id`
+	query += ` ORDER BY t.value`
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)
 	}
-	releases, err := loadEvents(ctx, db.DB, query, args...)
+	apps, err := loadEvents(ctx, db.DB, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("selected listings: %w", err)
+		return nil, fmt.Errorf("visible apps: %w", err)
+	}
+	return apps, nil
+}
+
+// selectedListings returns the listings of the visible apps, in app-id
+// order, as a snapshot carries them: each app's release with the greatest
+// version_code and its assets. appIDs and limit are as in visibleApps. An
+// app with no complete listing is left out.
+func selectedListings(ctx context.Context, db store.T, catalogKey string, appIDs []string, limit int) ([]catalog.Listing, error) {
+	apps, err := visibleApps(ctx, db, appIDs, limit)
+	if err != nil {
+		return nil, err
 	}
 	var out []catalog.Listing
-	for batch := range slices.Chunk(releases, reselectBatch) {
-		listings, err := completeListings(ctx, db, catalogKey, batch)
-		if err != nil {
-			return nil, err
+	for batch := range slices.Chunk(apps, batchSize) {
+		args := []any{events.KindRelease, events.KindAsset}
+		for _, app := range batch {
+			appID, _ := events.Find(app.Tags, "d")
+			args = append(args, appID)
 		}
-		out = append(out, listings...)
+		releases, err := loadEvents(ctx, db.DB, `
+			SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events e
+			WHERE e.kind IN (?, ?) AND e.hidden = 0
+			AND e.id IN (SELECT event_id FROM tags WHERE key = 'i' AND value`+inClause(len(batch))+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("selected listings: %w", err)
+		}
+		snapshot := slices.Concat(batch, releases)
+		out = append(out, catalog.ResolveAt(snapshot, catalogKey, time.Now()).Listings...)
 	}
 	return out, nil
-}
-
-// completeListings joins each selected release with its signer's kind 32267
-// and its assets, then lets catalog selection choose the assets a snapshot
-// carries. Releases are in app-id order and so is the result.
-func completeListings(ctx context.Context, db store.T, catalogKey string, releases []nostr.Event) ([]catalog.Listing, error) {
-	var appArgs, assetArgs []any
-	appArgs = append(appArgs, events.KindApp)
-	for _, release := range releases {
-		appID, _ := events.Find(release.Tags, "i")
-		appArgs = append(appArgs, release.PubKey+":"+appID)
-		for _, id := range events.FindAll(release.Tags, "e") {
-			assetArgs = append(assetArgs, id)
-		}
-	}
-	apps, err := loadEvents(ctx, db.DB, `
-		SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events e
-		JOIN tags t ON t.event_id = e.id AND t.key = 'd'
-		WHERE e.kind = ? AND e.pubkey || ':' || t.value`+inClause(len(appArgs)-1), appArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("selected listings: apps: %w", err)
-	}
-	var assets []nostr.Event
-	if len(assetArgs) > 0 {
-		assets, err = loadEvents(ctx, db.DB, `
-			SELECT id, pubkey, created_at, kind, tags, content, sig FROM events
-			WHERE kind = ? AND id`+inClause(len(assetArgs)), append([]any{events.KindAsset}, assetArgs...)...)
-		if err != nil {
-			return nil, fmt.Errorf("selected listings: assets: %w", err)
-		}
-	}
-	snapshot := slices.Concat(apps, releases, assets)
-	return catalog.ResolveAt(snapshot, catalogKey, time.Now()).Listings, nil
-}
-
-func unselectedApps(ctx context.Context, db querier) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT DISTINCT t.value FROM events e JOIN tags t ON t.event_id = e.id AND t.key = 'd'
-		WHERE e.kind = ? AND NOT EXISTS (SELECT 1 FROM listings l WHERE l.app_id = t.value)`, events.KindApp)
-	if err != nil {
-		return nil, fmt.Errorf("reselect: apps: %w", err)
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }
 
 func slotAppID(event nostr.Event) (string, bool) {
@@ -196,52 +166,36 @@ func slotAppID(event nostr.Event) (string, bool) {
 	return "", false
 }
 
-func slotAppIDs(result []nostr.Event) []string {
-	var ids []string
-	for _, event := range result {
-		if appID, ok := slotAppID(event); ok && appID != "" && !slices.Contains(ids, appID) {
-			ids = append(ids, appID)
-		}
-	}
-	return ids
-}
-
-func namesAuthor(filters nostr.Filters, pubkey string) bool {
-	for _, filter := range filters {
-		if slices.Contains(filter.Authors, pubkey) {
-			return true
-		}
-	}
-	return false
-}
-
 type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// selectionEvents loads the listings of appIDs: kinds 32267, 30063, and 3063.
-func selectionEvents(ctx context.Context, db querier, appIDs []string) ([]nostr.Event, error) {
-	args := []any{events.KindApp}
-	for _, id := range appIDs {
-		args = append(args, id)
-	}
-	args = append(args, events.KindRelease, events.KindAsset)
-	for _, id := range appIDs {
-		args = append(args, id)
-	}
-	listings, err := loadEvents(ctx, db, `
+// selectionEvents loads the kinds 32267, 30063, and 3063 of appID.
+func selectionEvents(ctx context.Context, db querier, appID string) ([]nostr.Event, error) {
+	listing, err := loadEvents(ctx, db, `
 		SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events e
-		WHERE e.id IN (
-			SELECT t.event_id FROM tags t JOIN events x ON x.id = t.event_id
-			WHERE x.kind = ? AND t.key = 'd' AND t.value`+inClause(len(appIDs))+`
-			UNION
-			SELECT t.event_id FROM tags t JOIN events x ON x.id = t.event_id
-			WHERE x.kind IN (?, ?) AND t.key = 'i' AND t.value`+inClause(len(appIDs))+`
-		)`, args...)
+		WHERE e.id IN (`+appEvents+`)`, appID)
 	if err != nil {
-		return nil, fmt.Errorf("slot selection: listings: %w", err)
+		return nil, fmt.Errorf("select %s: listing: %w", appID, err)
 	}
-	return listings, nil
+	return listing, nil
+}
+
+func appIDs(ctx context.Context, db querier, query string, args ...any) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func loadEvents(ctx context.Context, db querier, query string, args ...any) ([]nostr.Event, error) {

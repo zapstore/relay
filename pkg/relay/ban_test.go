@@ -23,7 +23,7 @@ func banRelay(t *testing.T) (*T, *policy.Store) {
 func TestBanRefusesTheCatalogKey(t *testing.T) {
 	r, pol := banRelay(t)
 	saveListing(t, r.store, catalogKey, testApp, strings.Repeat("cd", 32), "1", "1")
-	err := ApplyBan(t.Context(), r.store, pol, catalogKey, policy.Publisher{Kind: policy.KindNostr, ID: catalogKey}, "oops")
+	_, err := ApplyBan(t.Context(), r.store, pol, catalogKey, policy.Publisher{Kind: policy.KindNostr, ID: catalogKey}, "oops")
 	if !errors.Is(err, errBanCatalogKey) {
 		t.Fatalf("err = %v", err)
 	}
@@ -43,7 +43,7 @@ func TestDeveloperBanClearsBothSlots(t *testing.T) {
 	saveListing(t, r.store, developer, testApp, cert, "2", "2")
 	saveListing(t, r.store, catalogKey, "com.example.other", cert, "3", "1")
 
-	if err := ApplyBan(t.Context(), r.store, pol, catalogKey, policy.Publisher{Kind: policy.KindNostr, ID: developer}, "malware"); err != nil {
+	if _, err := ApplyBan(t.Context(), r.store, pol, catalogKey, policy.Publisher{Kind: policy.KindNostr, ID: developer}, "malware"); err != nil {
 		t.Fatal(err)
 	}
 	for _, seed := range []string{"1", "2"} {
@@ -70,7 +70,7 @@ func TestBanDropsBufferedEvents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := ApplyBan(t.Context(), r.store, pol, catalogKey, policy.Publisher{Kind: policy.KindNostr, ID: developer}, "spam"); err != nil {
+	if _, err := ApplyBan(t.Context(), r.store, pol, catalogKey, policy.Publisher{Kind: policy.KindNostr, ID: developer}, "spam"); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{app.ID, release.ID, asset.ID} {

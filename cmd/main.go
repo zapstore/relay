@@ -139,8 +139,14 @@ func start(cfg config.Config) (err error) {
 	if err != nil {
 		return err
 	}
+	var rel *relay.T
 	ban := func(ctx context.Context, pub policy.Publisher, reason string) error {
-		return relay.ApplyBan(ctx, relayDB, pol, cfg.Relay.Info.Pubkey, pub, reason)
+		apps, err := relay.ApplyBan(ctx, relayDB, pol, cfg.Relay.Info.Pubkey, pub, reason)
+		if err != nil {
+			return err
+		}
+		rel.SyncSearch(ctx, apps...)
+		return nil
 	}
 	// The gate: the catalog key, a key that already published a kind 32267,
 	// a whitelisted key, or a pubkey above the web of trust threshold may publish.
@@ -168,7 +174,7 @@ func start(cfg config.Config) (err error) {
 		slog.Info("Bunny unset: writing blobs locally", "dir", cfg.Blossom.Dir)
 	}
 
-	rel, err := relay.Setup(
+	rel, err = relay.Setup(
 		cfg.Relay,
 		limiter,
 		pol,
@@ -271,9 +277,13 @@ func start(cfg config.Config) (err error) {
 		return fmt.Errorf("search encoder %s: %w", enrich.ModelDir(dataDir), err)
 	}
 	defer func() { err = errors.Join(err, enc.Close()) }()
-	engine := search.NewEngine(relay.SearchListings(relayDB, cfg.Relay.Info.Pubkey, artifacts.Path(dataDir)), enc.Query, time.Minute, slog.Default())
-	// Loading the selection fills every missing listings row, so the relay
-	// serves neither an empty search nor an empty live read.
+	engine := search.NewEngine(
+		relay.SearchListings(relayDB, artifacts.Path(dataDir)),
+		relay.SearchApp(relayDB, artifacts.Path(dataDir)),
+		enc.Query,
+		slog.Default(),
+	)
+	// Search is loaded before the relay serves, so it never answers empty.
 	if err := engine.Load(ctx); err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
@@ -281,10 +291,6 @@ func start(cfg config.Config) (err error) {
 	mux := routes(bundle.Shared(), rel.Handler())
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		engine.Run(gctx)
-		return nil
-	})
 	if watch {
 		g.Go(func() error {
 			credits.WatchCredits(gctx)
@@ -374,7 +380,6 @@ func pruneLoop(ctx context.Context, every time.Duration, blobs *blossom.T, db *s
 			slog.Info("prune", "blobs", n)
 		}
 	}
-	run()
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
