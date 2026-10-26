@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -582,17 +583,102 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 // queryFailed logs a failed REQ and returns the error the client sees. A
 // canceled ctx means the client closed the subscription or disconnected:
 // rely sends nothing, so it is not logged. A REQ past queryTimeout is logged
-// as slow with its filters. The client never sees the SQL error.
+// as slow with a short summary of the filters. The client never sees the SQL error.
 func queryFailed(ctx context.Context, msg string, err error, filters nostr.Filters, start time.Time) error {
 	switch ctx.Err() {
 	case context.Canceled:
 		return ctx.Err()
 	case context.DeadlineExceeded:
-		slog.Warn("relay: slow query", "step", msg, "elapsed", time.Since(start), "filters", filters)
+		slog.Warn("relay: slow query", "step", msg, "elapsed", time.Since(start), "req", reqSummary(filters))
 	default:
-		slog.Error("relay: "+msg, "error", err, "filters", filters)
+		slog.Error("relay: "+msg, "error", err, "req", reqSummary(filters))
 	}
 	return ErrInternal
+}
+
+// reqSummary describes a REQ without listing every filter value. Tag values,
+// ids, authors, and search text stay out of the log.
+func reqSummary(filters nostr.Filters) string {
+	var kinds []int
+	var tags []string
+	var search, authors, ids, since, until int
+	limitSame := true
+	var limit int
+	limitZero := false
+	for i, f := range filters {
+		for _, kind := range f.Kinds {
+			if !slices.Contains(kinds, kind) {
+				kinds = append(kinds, kind)
+			}
+		}
+		for key := range f.Tags {
+			if !slices.Contains(tags, key) {
+				tags = append(tags, key)
+			}
+		}
+		if f.Search != "" {
+			search++
+		}
+		if len(f.Authors) > 0 {
+			authors++
+		}
+		if len(f.IDs) > 0 {
+			ids++
+		}
+		if f.Since != nil {
+			since++
+		}
+		if f.Until != nil {
+			until++
+		}
+		if i == 0 {
+			limit = f.Limit
+			limitZero = f.LimitZero
+			continue
+		}
+		if f.Limit != limit || f.LimitZero != limitZero {
+			limitSame = false
+		}
+	}
+	slices.Sort(kinds)
+	slices.Sort(tags)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "n=%d", len(filters))
+	if len(kinds) > 0 {
+		parts := make([]string, len(kinds))
+		for i, kind := range kinds {
+			parts[i] = strconv.Itoa(kind)
+		}
+		fmt.Fprintf(&b, " kinds=%s", strings.Join(parts, ","))
+	}
+	if len(tags) > 0 {
+		fmt.Fprintf(&b, " tags=%s", strings.Join(tags, ","))
+	}
+	switch {
+	case !limitSame:
+		b.WriteString(" limit=mixed")
+	case limitZero:
+		b.WriteString(" limit=0")
+	case limit > 0:
+		fmt.Fprintf(&b, " limit=%d", limit)
+	}
+	if search > 0 {
+		fmt.Fprintf(&b, " search=%d", search)
+	}
+	if authors > 0 {
+		fmt.Fprintf(&b, " authors=%d", authors)
+	}
+	if ids > 0 {
+		fmt.Fprintf(&b, " ids=%d", ids)
+	}
+	if since > 0 {
+		fmt.Fprintf(&b, " since=%d", since)
+	}
+	if until > 0 {
+		fmt.Fprintf(&b, " until=%d", until)
+	}
+	return b.String()
 }
 
 func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Request) error {
