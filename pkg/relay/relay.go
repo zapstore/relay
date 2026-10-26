@@ -511,8 +511,12 @@ func cloneTags(tags nostr.TagMap) nostr.TagMap {
 	return out
 }
 
+// queryTimeout bounds one REQ, from the first SQL statement to the last.
+const queryTimeout = 5 * time.Second
+
 func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.Filters) ([]nostr.Event, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
 	var result []nostr.Event
@@ -529,9 +533,8 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 			if errors.Is(err, store.ErrUnsupportedREQ) {
 				return nil, err
 			}
-			if err != nil && !errors.Is(err, context.Canceled) {
-				slog.Error("relay: failed to query events", "error", err, "filters", filters)
-				return nil, err
+			if err != nil {
+				return nil, queryFailed(ctx, "failed to query events", err, filters, start)
 			}
 			if r.analytics != nil {
 				r.analytics.RecordReq(filters)
@@ -546,8 +549,7 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 		}
 		result, err = r.liveREQ(ctx, filters[0], assetOnly, budget)
 		if err != nil {
-			slog.Error("relay: failed live read", "error", err)
-			return nil, ErrInternal
+			return nil, queryFailed(ctx, "failed live read", err, filters, start)
 		}
 	} else if textSearch(filters) {
 		result, err = r.searchREQ(ctx, filters[0])
@@ -555,22 +557,19 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 			return nil, err
 		}
 		if err != nil {
-			slog.Error("relay: failed to search", "error", err)
-			return nil, ErrInternal
+			return nil, queryFailed(ctx, "failed to search", err, filters, start)
 		}
 	} else {
 		result, err = r.store.Query(ctx, filters...)
 		if errors.Is(err, store.ErrUnsupportedREQ) {
 			return nil, err
 		}
-		if err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("relay: failed to query events", "error", err, "filters", filters)
-			return nil, err
+		if err != nil {
+			return nil, queryFailed(ctx, "failed to query events", err, filters, start)
 		}
 		result, err = selectSlots(ctx, r.store, filters, result)
 		if err != nil {
-			slog.Error("relay: failed to select listing slots", "error", err, "filters", filters)
-			return nil, ErrInternal
+			return nil, queryFailed(ctx, "failed to select listing slots", err, filters, start)
 		}
 	}
 
@@ -578,6 +577,22 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 		r.analytics.RecordReq(filters)
 	}
 	return result, nil
+}
+
+// queryFailed logs a failed REQ and returns the error the client sees. A
+// canceled ctx means the client closed the subscription or disconnected:
+// rely sends nothing, so it is not logged. A REQ past queryTimeout is logged
+// as slow with its filters. The client never sees the SQL error.
+func queryFailed(ctx context.Context, msg string, err error, filters nostr.Filters, start time.Time) error {
+	switch ctx.Err() {
+	case context.Canceled:
+		return ctx.Err()
+	case context.DeadlineExceeded:
+		slog.Warn("relay: slow query", "step", msg, "elapsed", time.Since(start), "filters", filters)
+	default:
+		slog.Error("relay: "+msg, "error", err, "filters", filters)
+	}
+	return ErrInternal
 }
 
 func RateConnectionIP(limiter rate.Limiter) func(_ rely.Stats, request *http.Request) error {
