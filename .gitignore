@@ -47,6 +47,9 @@ build/
 dist/
 /relay
 
+# Search model and ONNX Runtime. Downloaded once, reused by tests.
+.tools/
+
 # AI memory and instructions
 .cursor/rules
 /spec/
