@@ -541,8 +541,9 @@ func refuse(format string, args ...any) releaseCheck {
 // the indexer verified it, and an asset without a url waits for its file in
 // Blossom. A developer APK must be signed by the app's
 // certificate or a successor in its lineage, and published by the active C1
-// owner or delegate, counting pending proofs that verify against it. Both
-// slots must pass the version guard.
+// owner or delegate, counting pending proofs whose d tag names it. Signature
+// verification of those proofs is off until relay-c1-check. Both slots must
+// pass the version guard.
 func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.Event, release nostr.Event, pendingAssets map[string]nostr.Event) (releaseCheck, error) {
 	if app == nil {
 		return releaseCheck{}, nil

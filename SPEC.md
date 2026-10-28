@@ -133,7 +133,9 @@ app, else against the buffered APK of the listing it came with. The relay
 reads that certificate from the file itself: from the buffer zone, else
 from Bunny, else from the asset's `url`. Only the newest listed APK with
 that certificate is read. A proof with neither APK is refused. `cert` is
-ignored.
+ignored. Signature verification against that certificate is off until
+`relay-c1-check`: a proof whose `d` names a certificate in the APK is
+promoted.
 
 ## Local client
 

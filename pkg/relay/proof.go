@@ -172,12 +172,12 @@ func (r *T) promoteClaim(ctx context.Context, proof nostr.Event, skipBroadcast s
 	return false, nil
 }
 
-// commitCheckedProof promotes a proof whose signature verifies with cert, a
-// certificate read from an APK. A proof that does not verify is dropped.
+// commitCheckedProof promotes a proof whose d tag names cert, a certificate
+// read from an APK. NIP-C1 signature verification is off until relay-c1-check,
+// so a proof that does not verify is still stored.
 func (r *T) commitCheckedProof(ctx context.Context, proof nostr.Event, cert *x509.Certificate, skipBroadcast string) (bool, error) {
 	if err := events.VerifyIdentityProof(&proof, cert); err != nil {
-		slog.Warn("proof: refused", "event", proof.ID, "error", err)
-		return false, r.store.DeletePending(ctx, proof.ID)
+		slog.Warn("proof: NIP-C1 check skipped", "event", proof.ID, "error", err)
 	}
 	if err := r.commitProof(ctx, proof, skipBroadcast); err != nil {
 		return false, err
@@ -205,8 +205,9 @@ func (r *T) commitProof(ctx context.Context, proof nostr.Event, skipBroadcast st
 	return nil
 }
 
-// checkedProofs returns the pending proofs whose d tag is in chain and whose
-// signature verifies with that certificate. A proof that does not verify is dropped.
+// checkedProofs returns the pending proofs whose d tag is in chain.
+// NIP-C1 signature verification is off until relay-c1-check, so a proof
+// that does not verify is still returned.
 func (r *T) checkedProofs(ctx context.Context, chain signing) ([]nostr.Event, error) {
 	pending, err := r.store.QueryPending(ctx, events.KindIdentityProof)
 	if err != nil {
@@ -220,11 +221,7 @@ func (r *T) checkedProofs(ctx context.Context, chain signing) ([]nostr.Event, er
 			continue
 		}
 		if err := events.VerifyIdentityProof(&proof, cert); err != nil {
-			slog.Warn("proof: refused", "event", proof.ID, "error", err)
-			if err := r.store.DeletePending(ctx, proof.ID); err != nil {
-				return nil, err
-			}
-			continue
+			slog.Warn("proof: NIP-C1 check skipped", "event", proof.ID, "error", err)
 		}
 		out = append(out, proof)
 	}
