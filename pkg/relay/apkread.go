@@ -278,6 +278,13 @@ func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	defer cancel()
 	body, cleanup, err := r.openAPK(ctx, job)
 	if err != nil {
+		// The same bytes will not pass later, so this is a refusal, not a
+		// download to try again.
+		if errors.Is(err, errAPKTooBig) {
+			slog.Warn("apk reader: apk refused", "blob", job.blob, "reason", err.Error())
+			r.apks.remember(job.blob, readAPKResult{readErr: err.Error()})
+			return nil
+		}
 		return err
 	}
 	defer cleanup()
@@ -319,6 +326,15 @@ func (r *T) openAPK(ctx context.Context, job apkJob) (io.ReadSeeker, func(), err
 			return nil, nil, err
 		}
 		if f, ok := body.(io.ReadSeeker); ok {
+			n, err := seekEnd(f)
+			if err != nil {
+				body.Close()
+				return nil, nil, err
+			}
+			if n > maxAPK {
+				body.Close()
+				return nil, nil, errAPKTooBig
+			}
 			return f, func() { body.Close() }, nil
 		}
 		defer body.Close()
@@ -382,6 +398,18 @@ func keepAPK(r io.Reader, dir, blob string) (io.ReadSeeker, func(), error) {
 		return nil, nil, err
 	}
 	return f, func() { f.Close() }, nil
+}
+
+// seekEnd returns the size of a seekable APK and rewinds it for the reader.
+func seekEnd(f io.ReadSeeker) (int64, error) {
+	n, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // cachedAPK opens <APKCacheDir>/<blob>.apk when its sha256 is blob. The

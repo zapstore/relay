@@ -56,7 +56,7 @@ The pruner runs every
 `BLOSSOM_PRUNE_INTERVAL` and deletes every served blob that no current event names,
 including pending events, on Bunny and in `blossom/`. It skips the buffer
 zone. Zero disables it. An APK is at
-most 300 MB and an image at most 500 KB. The limit is the number of bytes
+most 500 MB and an image at most 500 KB. The limit is the number of bytes
 read, not the size hint. Any other media type is refused.
 
 A `GET` for a blob the relay does not serve, or one still in the buffer
@@ -98,6 +98,7 @@ in Blossom. A file downloaded from a `url`
 is kept at `$DATA_DIR/apk-cache/<sha256>.apk`, so the enricher reads it
 there. A file that cannot be fetched is fetched again, after 15 seconds
 and doubling up to 5 minutes, until it is read or nothing pending names it.
+An APK over the size limit is refused and is not fetched again.
 
 An admitted developer release is processed just before it is listed. A
 catalog-key release is stored first; processing still runs, and a refusal

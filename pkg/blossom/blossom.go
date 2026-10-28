@@ -27,7 +27,7 @@ import (
 
 const (
 	apkType             = "application/vnd.android.package-archive"
-	maxAPKBytes   int64 = 300_000_000
+	maxAPKBytes   int64 = 500_000_000
 	maxImageBytes int64 = 500_000
 )
 

@@ -11,7 +11,9 @@ import (
 	"github.com/avast/apkverifier"
 )
 
-const maxAPK = 300_000_000
+// maxAPK is the most bytes an APK read or download may contain.
+// Tests set a smaller limit.
+var maxAPK int64 = 500_000_000
 
 // signing is the certificate chain an APK is signed with: its v3 rotation
 // lineage, oldest first, ending at the signer. It is never empty.
