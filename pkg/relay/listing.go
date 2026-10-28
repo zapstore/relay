@@ -44,9 +44,14 @@ func bufferedKinds() []int {
 	return append(listingKinds(), events.KindIdentityProof)
 }
 
-// holdListing keeps a listing event in the buffer zone until promotion.
-// It does not open the APK: the reader does, off the event path.
+// holdListing keeps a developer listing in the buffer zone until promotion.
+// A catalog-key listing is stored as it arrives: the relay does not read
+// its APK, so holding the event buys nothing. It does not open the APK:
+// the reader does, off the event path.
 func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
+	if event.PubKey == r.config.Info.Pubkey {
+		return r.acceptCatalogListing(ctx, event)
+	}
 	if _, err := r.store.SavePending(ctx, event); err != nil {
 		slog.Error("relay: failed to save pending listing", "event", event.ID, "error", err)
 		return persistResult{msg: ErrInternal.Error()}
@@ -96,6 +101,183 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 		}
 	}
 	return persistResult{ok: true, msg: msgListingPending}
+}
+
+// acceptCatalogListing stores a catalog-key listing in the events table.
+// A release that fails a check is removed. An asset with no certificate
+// hash is refused and not stored. The file stays in the buffer zone until
+// this listing names it and the blob is here.
+func (r *T) acceptCatalogListing(ctx context.Context, event *nostr.Event) persistResult {
+	if event.Kind == events.KindAsset && assetSigner(*event) == "" {
+		return persistResult{msg: "the asset names no apk_certificate_hash"}
+	}
+	if err := r.writeCatalogEvent(ctx, event); err != nil {
+		slog.Error("relay: failed to store catalog listing", "event", event.ID, "error", err)
+		return persistResult{msg: ErrInternal.Error()}
+	}
+	appID, ok := listingAppID(event)
+	if !ok {
+		return persistResult{ok: true, broadcast: true}
+	}
+	refused, err := r.settleCatalog(ctx, appID)
+	if err != nil {
+		slog.Error("relay: failed to settle catalog listing", "event", event.ID, "error", err)
+		return persistResult{msg: ErrInternal.Error()}
+	}
+	kept, err := r.store.Has(ctx, nostr.Filter{IDs: []string{event.ID}})
+	if err != nil {
+		slog.Error("relay: failed to check catalog listing", "event", event.ID, "error", err)
+		return persistResult{msg: ErrInternal.Error()}
+	}
+	if !kept {
+		if reason, ok := refused[event.ID]; ok {
+			return persistResult{msg: reason}
+		}
+		return persistResult{ok: true}
+	}
+	return persistResult{ok: true, broadcast: true}
+}
+
+// writeCatalogEvent stores a catalog-key listing. An app or release replaces
+// the event with the same address. An asset is stored once.
+func (r *T) writeCatalogEvent(ctx context.Context, event *nostr.Event) error {
+	switch event.Kind {
+	case events.KindApp, events.KindRelease:
+		_, err := r.store.Replace(ctx, event)
+		return err
+	default:
+		has, err := r.store.Has(ctx, nostr.Filter{IDs: []string{event.ID}})
+		if err != nil || has {
+			return err
+		}
+		_, err = r.store.Save(ctx, event)
+		return err
+	}
+}
+
+// settleCatalog runs the catalog-key checks on the stored listing and serves
+// its files. A refused release is deleted. Nothing here reads the APK.
+func (r *T) settleCatalog(ctx context.Context, appID string) (map[string]string, error) {
+	pubkey := r.config.Info.Pubkey
+	app, err := r.listingApp(ctx, pubkey, appID, nil)
+	if err != nil || app == nil {
+		return nil, err
+	}
+	releases, err := r.storedReleases(ctx, pubkey, appID)
+	if err != nil {
+		return nil, err
+	}
+	refused := map[string]string{}
+	for _, release := range releases {
+		parsed, err := events.ParseRelease(&release)
+		if err != nil || len(parsed.AssetIDs) == 0 {
+			continue
+		}
+		pendingAssets := map[string]nostr.Event{}
+		complete := true
+		for _, id := range parsed.AssetIDs {
+			asset, found, err := r.lookupAsset(ctx, id, nil)
+			if err != nil {
+				return nil, err
+			}
+			if !found || asset.PubKey != pubkey {
+				complete = false
+				break
+			}
+			pendingAssets[id] = asset
+		}
+		if !complete {
+			continue
+		}
+		check, err := r.checkRelease(ctx, pubkey, appID, app, release, pendingAssets)
+		if err != nil {
+			return nil, err
+		}
+		if check.refused != "" {
+			if err := r.dropCatalogRelease(ctx, app, release, pendingAssets, check.refused, refused); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if check.assets == nil {
+			continue
+		}
+		refusal, done, err := r.processed(ctx, appID, app, release, check.assets)
+		if err != nil {
+			return nil, err
+		}
+		if !done {
+			continue
+		}
+		if refusal != "" {
+			if err := r.dropCatalogRelease(ctx, app, release, pendingAssets, refusal, refused); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		for _, hash := range listingFiles(app, check.assets) {
+			if err := r.blossom.Promote(ctx, hash); err != nil {
+				return nil, fmt.Errorf("promote file %s: %w", hash, err)
+			}
+		}
+		if err := selectApp(ctx, r.store, pubkey, appID); err != nil {
+			return nil, err
+		}
+		r.SyncSearch(ctx, appID)
+	}
+	return refused, nil
+}
+
+// dropCatalogRelease removes a refused catalog release and the assets it
+// names. The app goes with them when no release of that app is left.
+func (r *T) dropCatalogRelease(ctx context.Context, app *nostr.Event, release nostr.Event, assets map[string]nostr.Event, reason string, refused map[string]string) error {
+	slog.Warn("listing refused", "release", release.ID, "pubkey", release.PubKey, "reason", reason)
+	ids := []string{release.ID}
+	for _, id := range events.FindAll(release.Tags, "e") {
+		if _, ok := assets[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	if _, err := r.store.Delete(ctx, nostr.Filter{IDs: ids}); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		refused[id] = reason
+	}
+	left, err := r.storedReleases(ctx, release.PubKey, listingAppIDOrEmpty(&release))
+	if err != nil {
+		return err
+	}
+	if len(left) == 0 && app != nil {
+		if _, err := r.store.Delete(ctx, nostr.Filter{IDs: []string{app.ID}}); err != nil {
+			return err
+		}
+		refused[app.ID] = reason
+	}
+	return nil
+}
+
+// storedReleases returns the stored releases pubkey signed for appID.
+func (r *T) storedReleases(ctx context.Context, pubkey, appID string) ([]nostr.Event, error) {
+	rows, err := r.store.DB.QueryContext(ctx, `
+		SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig
+		FROM events e
+		JOIN tags t ON t.event_id = e.id
+		WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'i' AND t.value = ?
+	`, events.KindRelease, pubkey, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []nostr.Event
+	for rows.Next() {
+		event, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
 }
 
 // supersedePending keeps the newest pending app, release, or proof per pubkey
@@ -445,9 +627,33 @@ func (r *T) admitted(ctx context.Context, release nostr.Event, assets []nostr.Ev
 	return !kept, err
 }
 
-// listedFile reports a file a stored asset already names.
-func (r *T) listedFile(ctx context.Context, x string) (bool, error) {
-	return r.store.Has(ctx, nostr.Filter{Kinds: []int{events.KindAsset}, Tags: nostr.TagMap{"x": []string{x}}})
+// listedByOther reports a stored asset outside except that names x. The
+// assets of the release being judged are excluded, so storing them first
+// does not count as an earlier listing.
+func (r *T) listedByOther(ctx context.Context, x string, except map[string]struct{}) (bool, error) {
+	if x == "" {
+		return false, nil
+	}
+	rows, err := r.store.DB.QueryContext(ctx, `
+		SELECT e.id FROM events e
+		JOIN tags t ON t.event_id = e.id
+		WHERE e.kind = ? AND t.key = 'x' AND t.value = ?
+	`, events.KindAsset, x)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return false, err
+		}
+		if _, ok := except[id]; ok {
+			continue
+		}
+		return true, nil
+	}
+	return false, rows.Err()
 }
 
 // checkDeveloper reads the APK of each pending asset of a developer release

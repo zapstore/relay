@@ -9,15 +9,15 @@ import (
 	"github.com/zapstore/relay/pkg/catalog"
 )
 
-func TestAdmittedListingIsProcessedBeforeItIsListed(t *testing.T) {
+func TestCatalogListingIsStoredBeforeProcessing(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	key := newTestKey(t)
 	r.readAPK = readChains(t, map[string]signing{"apk": {key.cert}})
 	var got []catalog.Listing
 	r.UseProcessor(func(_ context.Context, listing catalog.Listing, _ string) (string, error) {
-		if slotHas(t, r.store, listing.Release.ID) {
-			t.Error("processed after it was listed")
+		if !slotHas(t, r.store, listing.Release.ID) {
+			t.Error("catalog listing was held until processing")
 		}
 		got = append(got, listing)
 		return "", nil
@@ -28,8 +28,8 @@ func TestAdmittedListingIsProcessedBeforeItIsListed(t *testing.T) {
 	r.holdListing(t.Context(), release)
 
 	drainReads(t, r)
-	if slotHas(t, r.store, release.ID) {
-		t.Fatal("listed before it was processed")
+	if !slotHas(t, r.store, release.ID) {
+		t.Fatal("catalog listing was not stored")
 	}
 	drainProcessing(t, r)
 	if !slotHas(t, r.store, release.ID) {

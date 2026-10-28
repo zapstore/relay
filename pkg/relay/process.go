@@ -90,10 +90,14 @@ func (r *T) processed(ctx context.Context, appID string, app *nostr.Event, relea
 	if refusal, ok := r.procs.result(release.ID); ok {
 		return refusal, true, nil
 	}
+	except := map[string]struct{}{}
+	for _, asset := range assets {
+		except[asset.ID] = struct{}{}
+	}
 	listed := true
 	for _, asset := range assets {
 		x, _ := events.Find(asset.Tags, "x")
-		has, err := r.listedFile(ctx, x)
+		has, err := r.listedByOther(ctx, x, except)
 		if err != nil {
 			return "", false, err
 		}
@@ -132,6 +136,12 @@ func (r *T) runProcessor(ctx context.Context) {
 func (r *T) promoteProcessed(ctx context.Context, listing catalog.Listing) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	if listing.Release.PubKey == r.config.Info.Pubkey {
+		if _, err := r.settleCatalog(ctx, listing.AppID); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("processor: promote failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)
+		}
+		return
+	}
 	if _, err := r.promoteListing(ctx, listing.Release.PubKey, listing.AppID, ""); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			slog.Error("processor: promote failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)

@@ -67,10 +67,12 @@ goes when 1.1.3 does.
 
 ## Buffer zone
 
-Listing events, their files, and a new active kind `30509` wait in the
-buffer zone until promotion, as [Catalog](../product/specs/catalog.md#selection)
-defines. An upload lands on local disk and is not served until a promoted
-listing names it. Promotion serves the events and marks the files to move;
+Developer listing events, their files, and a new active kind `30509` wait
+in the buffer zone until promotion, as [Catalog](../product/specs/catalog.md#selection)
+defines. A catalog-key listing is stored when it arrives. It is not held
+for a check the relay does not run on that key. An upload lands on local
+disk and is not served until a stored or promoted listing names it.
+Promotion serves a developer listing and marks the files to move;
 a mover uploads them to Bunny when it is set, then deletes the local copy.
 Without Bunny, promoted files stay in `blossom/`. Anything not promoted
 within `RELAY_REMOVE_PENDING_AFTER` is deleted, events and files.
@@ -90,14 +92,17 @@ a restart reads the file again. Only a pending asset's APK is read: a
 developer listing waits until each of those is read, and a stored asset
 or release was read when it was promoted and is not checked again. The
 catalog key's APK is not read: the indexer verified it, and the relay pins
-the `apk_certificate_hash` its asset names. A catalog key asset without a
-`url` waits until its file is in Blossom. A file downloaded from a `url`
+the `apk_certificate_hash` its asset names. A catalog-key asset is stored
+whether or not its file is here; a file with no `url` is served once it is
+in Blossom. A file downloaded from a `url`
 is kept at `$DATA_DIR/apk-cache/<sha256>.apk`, so the enricher reads it
 there. A file that cannot be fetched is fetched again, after 15 seconds
 and doubling up to 5 minutes, until it is read or nothing pending names it.
 
-An admitted release is processed just before it is listed: the relay's
-`Processor`, one release at a time, off the event path. Today that is the
+An admitted developer release is processed just before it is listed. A
+catalog-key release is stored first; processing still runs, and a refusal
+deletes it. The relay's
+`Processor` runs one release at a time, off the event path. Today that is the
 enricher; security checks will join it. An app the enricher could not
 finish is still listed, without its artifacts, until an operator runs
 `enrich` again. It runs once per release: an error is logged and the

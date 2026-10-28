@@ -214,6 +214,34 @@ func (r *T) promoteWaitingOn(ctx context.Context, blob string) error {
 			}
 		}
 	}
+	// A catalog-key asset is already stored. Serving its file is the part
+	// that waited on this upload.
+	rows, err := r.store.DB.QueryContext(ctx, `
+		SELECT DISTINCT i.value FROM events e
+		JOIN tags x ON x.event_id = e.id AND x.key = 'x' AND x.value = ?
+		JOIN tags i ON i.event_id = e.id AND i.key = 'i'
+		WHERE e.kind = ? AND e.pubkey = ?
+	`, blob, events.KindAsset, r.config.Info.Pubkey)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var apps []string
+	for rows.Next() {
+		var appID string
+		if err := rows.Scan(&appID); err != nil {
+			return err
+		}
+		apps = append(apps, appID)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, appID := range apps {
+		if _, err := r.settleCatalog(ctx, appID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -99,7 +99,7 @@ func TestBufferZone(t *testing.T) {
 		publishSocket(t, socket, event)
 	}
 
-	// The relay reads the APK off the event path, then promotes.
+	// The catalog-key listing is stored as it arrives, and that serves the file.
 	deadline := time.Now().Add(5 * time.Second)
 	for status(t, http.MethodGet, blobURL) != http.StatusOK {
 		if time.Now().After(deadline) {
