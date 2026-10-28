@@ -52,7 +52,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/yalue/onnxruntime_go v1.25.0 // indirect
-	github.com/zapstore/zsp v0.0.0-00010101000000-000000000000 // indirect
+	github.com/zapstore/zsp/v2 v2.0.0 // indirect
 	golang.org/x/arch v0.15.0 // indirect
 	golang.org/x/crypto v0.44.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
