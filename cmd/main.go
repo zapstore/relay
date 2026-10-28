@@ -233,9 +233,11 @@ func start(cfg config.Config) (err error) {
 		}
 		return sealResult(before, epoch), nil
 	}
+	// The Enrich button re-reads one app. A cache hit would keep a failed
+	// clone, so this is steroid --force: the stored row is deleted first.
 	enrichOne := func(ctx context.Context, id string) (string, error) {
 		ctx, text := enrich.WithReport(ctx)
-		err := enrich.IDs(ctx, dataDir, relayDBPath, []string{id})
+		err := enrich.Force(ctx, dataDir, relayDBPath, id)
 		return text(), err
 	}
 
