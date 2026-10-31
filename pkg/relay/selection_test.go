@@ -11,120 +11,74 @@ import (
 	"github.com/zapstore/relay/pkg/relay/store"
 )
 
-func TestSelectSlots(t *testing.T) {
+func TestSelectedListings(t *testing.T) {
 	const appID = "com.example.app"
 	cert := strings.Repeat("cd", 32)
 	catalog := testPubkey(t)
 	developer := testPubkey(t)
 	solo := "com.example.solo"
 
-	setup := func(t *testing.T, catalogCode string) store.T {
-		db := newSlotDB(t)
-		saveListing(t, db, catalog, appID, cert, "1", catalogCode)
-		saveListing(t, db, developer, appID, cert, "2", "2")
-		saveListing(t, db, catalog, solo, cert, "3", "1")
-		return db
-	}
-	everything := nostr.Filters{
-		{Kinds: []int{events.KindApp}, Tags: nostr.TagMap{"d": []string{appID, solo}}, Limit: 100},
-		{Kinds: []int{events.KindRelease, events.KindAsset}, Tags: nostr.TagMap{"i": []string{appID, solo}}, Limit: 100},
-	}
-
 	for name, tc := range map[string]struct {
-		catalogCode string
-		filters     nostr.Filters
-		want        map[string]int
+		catalogCode, developerCode string
+		catalogAt, developerAt     nostr.Timestamp
+		want                       string
 	}{
-		"developer wins a tie":     {"2", everything, map[string]int{developer: 3, catalog: 3}},
-		"higher version_code wins": {"3", everything, map[string]int{catalog: 6}},
-		"authors keep their own listing": {"2", nostr.Filters{
-			{Kinds: []int{events.KindApp, events.KindRelease, events.KindAsset}, Authors: []string{catalog}, Limit: 100},
-		}, map[string]int{catalog: 6}},
+		"higher version_code wins":        {"3", "2", 1, 9, catalog},
+		"the developer can have it":       {"2", "5", 9, 1, developer},
+		"a tie goes to the later release": {"2", "2", 5, 9, developer},
+		"a tie in the other direction":    {"2", "2", 9, 5, catalog},
 	} {
 		t.Run(name, func(t *testing.T) {
-			db := setup(t, tc.catalogCode)
-			for _, app := range []string{appID, solo} {
-				if err := selectApp(context.Background(), db, catalog, app); err != nil {
+			db := newSlotDB(t)
+			saveListing(t, db, catalog, appID, cert, "1", tc.catalogCode)
+			saveListing(t, db, developer, appID, cert, "2", tc.developerCode)
+			saveListing(t, db, catalog, solo, cert, "3", "1")
+			for id, at := range map[string]nostr.Timestamp{strings.Repeat("11", 32): tc.catalogAt, strings.Repeat("21", 32): tc.developerAt} {
+				if _, err := db.DB.Exec(`UPDATE events SET created_at = ? WHERE id = ?`, at, id); err != nil {
 					t.Fatal(err)
 				}
 			}
-			kept := querySlots(t, db, tc.filters)
-			got := map[string]int{}
-			for _, event := range kept {
-				got[event.PubKey]++
-				if app, _ := slotAppID(event); app == solo && event.PubKey != catalog {
-					t.Errorf("solo app event from %s", event.PubKey)
-				}
+			got, err := selectedListings(context.Background(), db, catalog, nil, 0)
+			if err != nil {
+				t.Fatal(err)
 			}
-			total := 0
-			for pubkey, n := range tc.want {
-				total += n
-				if got[pubkey] != n {
-					t.Errorf("%s: %d events, want %d (all %v)", pubkey[:8], got[pubkey], n, got)
-				}
+			if len(got) != 2 || got[0].AppID != appID || got[1].AppID != solo {
+				t.Fatalf("listings %+v, want %s then %s", got, appID, solo)
 			}
-			if len(kept) != total {
-				t.Errorf("kept %d events, want %d", len(kept), total)
+			if got[0].App.PubKey != tc.want || got[0].Release.PubKey != tc.want {
+				t.Fatalf("selected %s, want %s", got[0].App.PubKey[:8], tc.want[:8])
+			}
+			if got[1].App.PubKey != catalog {
+				t.Fatal("a one-listing app lost its listing")
 			}
 		})
 	}
 }
 
-func TestSelectHiddenAfterDelete(t *testing.T) {
-	const appID = "com.example.app"
+func TestSelectedListingsLimitAndFilter(t *testing.T) {
 	cert := strings.Repeat("cd", 32)
 	catalog := testPubkey(t)
-	developer := testPubkey(t)
-	ctx := context.Background()
-	filter := nostr.Filters{{Kinds: []int{events.KindApp}, Tags: nostr.TagMap{"d": []string{appID}}, Limit: 10}}
-	signers := func(t *testing.T, db store.T) []string {
-		t.Helper()
-		var out []string
-		for _, event := range querySlots(t, db, filter) {
-			out = append(out, event.PubKey)
-		}
-		return out
-	}
-
 	db := newSlotDB(t)
-	saveListing(t, db, catalog, appID, cert, "1", "3")
-	if err := selectApp(ctx, db, catalog, appID); err != nil {
-		t.Fatal(err)
+	saveListing(t, db, catalog, "com.example.a", cert, "1", "1")
+	saveListing(t, db, catalog, "com.example.b", cert, "2", "1")
+	saveListing(t, db, catalog, "com.example.c", cert, "3", "1")
+	got, err := selectedListings(context.Background(), db, catalog, nil, 2)
+	if err != nil || len(got) != 2 || got[1].AppID != "com.example.b" {
+		t.Fatalf("limit 2: %v %v", got, err)
 	}
-	if n := hiddenEvents(t, db); n != 0 {
-		t.Fatalf("one slot: %d hidden events, want 0", n)
-	}
-	saveListing(t, db, developer, appID, cert, "2", "2")
-	if err := selectApp(ctx, db, catalog, appID); err != nil {
-		t.Fatal(err)
-	}
-	if n := hiddenEvents(t, db); n != 3 {
-		t.Fatalf("two slots: %d hidden events, want the developer's 3", n)
-	}
-	if got := signers(t, db); len(got) != 1 || got[0] != catalog {
-		t.Fatalf("before: %v, want the catalog key", got)
-	}
-	if _, err := db.Delete(ctx, nostr.Filter{Authors: []string{catalog}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := selectHidden(ctx, db, catalog); err != nil {
-		t.Fatal(err)
-	}
-	if n := hiddenEvents(t, db); n != 0 {
-		t.Fatalf("after deleting the selected slot: %d hidden events, want 0", n)
-	}
-	if got := signers(t, db); len(got) != 1 || got[0] != developer {
-		t.Fatalf("after: %v, want the developer", got)
+	got, err = selectedListings(context.Background(), db, catalog, []string{"com.example.c"}, 0)
+	if err != nil || len(got) != 1 || got[0].AppID != "com.example.c" {
+		t.Fatalf("filter: %v %v", got, err)
 	}
 }
 
-func TestPromotionHidesTheOtherSlot(t *testing.T) {
+func TestPromotionReplacesTheListingAndKeepsOlderReleases(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	key := newTestKey(t)
 	r.readAPK = readChains(t, map[string]signing{"dev-apk": {key.cert}})
 	apps := nostr.Filters{{Kinds: []int{events.KindApp}, Tags: nostr.TagMap{"d": []string{testApp}}, Limit: 10}}
-	visible := func(t *testing.T) []string {
+	served := func(t *testing.T) []string {
 		t.Helper()
 		got, err := r.query(t.Context(), nil, "q", apps)
 		if err != nil {
@@ -136,6 +90,14 @@ func TestPromotionHidesTheOtherSlot(t *testing.T) {
 		}
 		return out
 	}
+	current := func(t *testing.T) (app, release string) {
+		t.Helper()
+		got, err := selectedListings(t.Context(), r.store, catalogKey, []string{testApp}, 0)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("listings %v %v", got, err)
+		}
+		return got[0].App.PubKey, got[0].Release.PubKey
+	}
 
 	catApp, catRelease, catAsset := testTriple("c", catalogKey, blobs.put("cat-apk"), key.hash, 1)
 	for _, event := range []*nostr.Event{catApp, catAsset, catRelease} {
@@ -144,9 +106,6 @@ func TestPromotionHidesTheOtherSlot(t *testing.T) {
 	drainReads(t, r)
 	if !slotHas(t, r.store, catRelease.ID) {
 		t.Fatal("the catalog listing was not promoted")
-	}
-	if n := hiddenEvents(t, r.store); n != 0 {
-		t.Fatalf("one slot: %d hidden events", n)
 	}
 
 	devApp, devRelease, devAsset := testTriple("b", ownerKey, blobs.put("dev-apk"), key.hash, 2)
@@ -160,11 +119,49 @@ func TestPromotionHidesTheOtherSlot(t *testing.T) {
 	if !slotHas(t, r.store, devRelease.ID) {
 		t.Fatal("the developer listing was not promoted")
 	}
-	if got := visible(t); len(got) != 1 || got[0] != ownerKey {
-		t.Fatalf("two slots: apps from %v, want the developer's", got)
+	if got := served(t); len(got) != 1 || got[0] != ownerKey {
+		t.Fatalf("apps from %v, want only the developer's", got)
 	}
-	if n := hiddenEvents(t, r.store); n != 3 {
-		t.Fatalf("two slots: %d hidden events, want the catalog's 3", n)
+	if !slotHas(t, r.store, catRelease.ID) || !slotHas(t, r.store, catAsset.ID) {
+		t.Fatal("the older release was deleted")
+	}
+	if app, release := current(t); app != ownerKey || release != ownerKey {
+		t.Fatalf("current listing from %s and %s", app, release)
+	}
+
+	// A lower release dated after a higher one is a downgrade and is refused,
+	// whoever sends it.
+	lowAsset := testAsset("l", catalogKey, blobs.put("low"), key.hash, 1)
+	lowRelease := testRelease("m", catalogKey, "0.9.0", "main", lowAsset.ID)
+	lowRelease.Tags[0] = nostr.Tag{"a", "32267:" + ownerKey + ":" + testApp}
+	r.holdListing(t.Context(), lowAsset)
+	if res := r.holdListing(t.Context(), lowRelease); res.ok || !strings.Contains(res.msg, "lower than 2") {
+		t.Fatalf("lower release: %+v", res)
+	}
+
+	// The indexer sends only a release, naming the developer's app event.
+	r.readAPK = readChains(t, map[string]signing{"dev-apk": {key.cert}, "cat-apk3": {key.cert}})
+	topAsset := testAsset("e", catalogKey, blobs.put("cat-apk3"), key.hash, 3)
+	topRelease := testRelease("f", catalogKey, "1.0.3", "main", topAsset.ID)
+	topRelease.Tags[0] = nostr.Tag{"a", "32267:" + ownerKey + ":" + testApp}
+	r.holdListing(t.Context(), topAsset)
+	if res := r.holdListing(t.Context(), topRelease); !res.ok {
+		t.Fatalf("release naming the developer's app event: %+v", res)
+	}
+	if !slotHas(t, r.store, topRelease.ID) || !slotHas(t, r.store, devApp.ID) {
+		t.Fatal("the indexer's release was not stored, or the developer's app event went")
+	}
+	if app, release := current(t); app != ownerKey || release != catalogKey {
+		t.Fatalf("current listing from %s and %s, want the developer's app event with the indexer's release", app, release)
+	}
+
+	// A release naming an app event of a key that is not the developer is refused.
+	badAsset := testAsset("g", catalogKey, blobs.put("bad"), key.hash, 4)
+	badRelease := testRelease("h", catalogKey, "1.0.4", "main", badAsset.ID)
+	badRelease.Tags[0] = nostr.Tag{"a", "32267:" + strings.Repeat("9", 64) + ":" + testApp}
+	r.holdListing(t.Context(), badAsset)
+	if res := r.holdListing(t.Context(), badRelease); res.ok || slotHas(t, r.store, badRelease.ID) {
+		t.Fatalf("release naming a stranger's app event: %+v", res)
 	}
 
 	revocation := &nostr.Event{
@@ -174,30 +171,59 @@ func TestPromotionHidesTheOtherSlot(t *testing.T) {
 	if res := r.persist(nil, revocation); !res.ok {
 		t.Fatalf("revocation: %+v", res)
 	}
-	if got := visible(t); len(got) != 1 || got[0] != catalogKey {
-		t.Fatalf("after revocation: apps from %v, want the catalog key's", got)
-	}
-	if n := hiddenEvents(t, r.store); n != 0 {
-		t.Fatalf("after revocation: %d hidden events", n)
+	if !slotHas(t, r.store, devRelease.ID) {
+		t.Fatal("a revocation deleted the developer's listing")
 	}
 }
 
-func hiddenEvents(t *testing.T, db store.T) int {
-	t.Helper()
-	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM events WHERE hidden = 1`).Scan(&n); err != nil {
-		t.Fatal(err)
+func TestLoneAppEditNeedsAReleaseAndTheDeveloper(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	r.readAPK = readChains(t, map[string]signing{"cat-apk": {key.cert}})
+
+	edit := &nostr.Event{
+		ID: strings.Repeat("e", 64), PubKey: ownerKey, Kind: events.KindApp, CreatedAt: 20,
+		Tags: nostr.Tags{{"d", testApp}, {"name", "Edited"}, {"f", "android-arm64-v8a"}},
 	}
-	return n
+	r.holdListing(t.Context(), edit)
+	if slotHas(t, r.store, edit.ID) {
+		t.Fatal("an app event was stored for an app with no release")
+	}
+
+	catApp, catRelease, catAsset := testTriple("c", catalogKey, blobs.put("cat-apk"), key.hash, 1)
+	for _, event := range []*nostr.Event{catApp, catAsset, catRelease} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	if !slotHas(t, r.store, catRelease.ID) {
+		t.Fatal("the catalog listing was not promoted")
+	}
+
+	// Still pending: the signer holds no proof.
+	r.holdListing(t.Context(), edit)
+	if slotHas(t, r.store, edit.ID) {
+		t.Fatal("an app event from a key with no proof was stored")
+	}
+
+	saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
+	if res := r.holdListing(t.Context(), edit); !res.ok || !res.broadcast {
+		t.Fatalf("edit: %+v", res)
+	}
+	if !slotHas(t, r.store, edit.ID) || slotHas(t, r.store, catApp.ID) {
+		t.Fatal("the developer's app event did not replace the catalog's")
+	}
+	if !slotHas(t, r.store, catRelease.ID) {
+		t.Fatal("the release was deleted by an edit of the app event")
+	}
 }
 
-func querySlots(t *testing.T, db store.T, filters nostr.Filters) []nostr.Event {
+// laterRelease makes the release saveListing stored with seed the latest.
+func laterRelease(t *testing.T, db store.T, seed string) {
 	t.Helper()
-	kept, err := db.QueryVisible(context.Background(), filters...)
-	if err != nil {
+	if _, err := db.DB.Exec(`UPDATE events SET created_at = 100 WHERE id = ?`, strings.Repeat(seed+"1", 32)); err != nil {
 		t.Fatal(err)
 	}
-	return kept
 }
 
 // saveListing stores a complete main-channel listing: app, release, and one arm64 asset.
@@ -236,4 +262,127 @@ func saveListing(t *testing.T, db store.T, pubkey, appID, cert, seed, versionCod
 			{"apk_certificate_hash", cert},
 		},
 	})
+}
+
+func TestCatalogKeepsItsOlderReleases(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	r.readAPK = readChains(t, map[string]signing{"cat-apk": {key.cert}, "cat-apk2": {key.cert}})
+
+	app1, release1, asset1 := testTriple("c", catalogKey, blobs.put("cat-apk"), key.hash, 1)
+	for _, event := range []*nostr.Event{app1, asset1, release1} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	app2, release2, asset2 := testTriple("d", catalogKey, blobs.put("cat-apk2"), key.hash, 2)
+	release2.Tags[3] = nostr.Tag{"d", testApp + "@2"}
+	release2.CreatedAt = 20
+	for _, event := range []*nostr.Event{app2, asset2, release2} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	if !slotHas(t, r.store, release2.ID) {
+		t.Fatal("the newer release was not stored")
+	}
+	if !slotHas(t, r.store, release1.ID) || !slotHas(t, r.store, asset1.ID) {
+		t.Fatal("the older release of the catalog key was deleted")
+	}
+}
+
+func TestCatalogDefersToTheDevelopersAppEvent(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	r.readAPK = readChains(t, map[string]signing{"cat-apk": {key.cert}, "dev-apk": {key.cert}, "cat-apk3": {key.cert}})
+
+	catApp, catRelease, catAsset := testTriple("c", catalogKey, blobs.put("cat-apk"), key.hash, 1)
+	catRelease.CreatedAt = 5
+	for _, event := range []*nostr.Event{catApp, catAsset, catRelease} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	devApp, devRelease, devAsset := testTriple("b", ownerKey, blobs.put("dev-apk"), key.hash, 2)
+	for _, event := range []*nostr.Event{devApp, devAsset, devRelease} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	if res := r.persist(nil, key.proof(t, "4", ownerKey, "")); !res.ok {
+		t.Fatalf("proof: %+v", res)
+	}
+	if !slotHas(t, r.store, devRelease.ID) || slotHas(t, r.store, catApp.ID) {
+		t.Fatal("the developer listing was not promoted over the catalog's")
+	}
+
+	// The indexer finds a forge release above the developer's. A whole
+	// listing would replace the developer's kind 32267, so the relay refuses
+	// it and keeps what it holds, including the catalog's assets only when a
+	// release names them.
+	topApp, topRelease, topAsset := testTriple("e", catalogKey, blobs.put("cat-apk3"), key.hash, 3)
+	topRelease.Tags[2] = nostr.Tag{"version", "1.0.3"}
+	topRelease.Tags[3] = nostr.Tag{"d", testApp + "@1.0.3"}
+	topRelease.CreatedAt = 30
+	if res := r.holdListing(t.Context(), topApp); res.ok || !strings.Contains(res.msg, "developer's app event") {
+		t.Fatalf("catalog app event: %+v", res)
+	}
+	r.holdListing(t.Context(), topAsset)
+	if res := r.holdListing(t.Context(), topRelease); res.ok || !strings.Contains(res.msg, "names it in its a tag") {
+		t.Fatalf("catalog release naming its own app event: %+v", res)
+	}
+	for name, id := range map[string]string{"app": topApp.ID, "release": topRelease.ID, "asset": topAsset.ID} {
+		if slotHas(t, r.store, id) {
+			t.Fatalf("the refused catalog %s was stored", name)
+		}
+		if kept, err := pendingHas(t.Context(), r.store, id); err != nil || kept {
+			t.Fatalf("the refused catalog %s is still pending: %v %v", name, kept, err)
+		}
+	}
+	if !slotHas(t, r.store, devApp.ID) || !slotHas(t, r.store, devRelease.ID) {
+		t.Fatal("the developer's listing changed")
+	}
+
+	// A release that names the developer's app event is accepted.
+	nameAsset := testAsset("f", catalogKey, blobs.put("cat-apk3"), key.hash, 3)
+	nameRelease := testRelease("g", catalogKey, "1.0.3", "main", nameAsset.ID)
+	nameRelease.Tags[0] = nostr.Tag{"a", "32267:" + ownerKey + ":" + testApp}
+	nameRelease.CreatedAt = 30
+	r.holdListing(t.Context(), nameAsset)
+	if res := r.holdListing(t.Context(), nameRelease); !res.ok {
+		t.Fatalf("release naming the developer's app event: %+v", res)
+	}
+	if !slotHas(t, r.store, devApp.ID) {
+		t.Fatal("the developer's app event went")
+	}
+	got, err := selectedListings(t.Context(), r.store, catalogKey, []string{testApp}, 0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("listings %v %v", got, err)
+	}
+	if got[0].App.PubKey != ownerKey || got[0].Release.ID != nameRelease.ID {
+		t.Fatalf("current listing from %s, release %s", got[0].App.PubKey, got[0].Release.ID)
+	}
+}
+
+func TestCatalogReplacesAnAppEventThatNoDeveloperHolds(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	r.readAPK = readChains(t, map[string]signing{"cat-apk": {key.cert}})
+
+	// A developer app event with no proof behind it: nobody is the active developer.
+	stale := &nostr.Event{
+		ID: strings.Repeat("d", 63) + "1", PubKey: ownerKey, Kind: events.KindApp, CreatedAt: 3,
+		Tags: nostr.Tags{{"d", testApp}, {"name", "Stale"}, {"f", "android-arm64-v8a"}},
+	}
+	saveSlotEvent(t, r.store, *stale)
+	catApp, catRelease, catAsset := testTriple("c", catalogKey, blobs.put("cat-apk"), key.hash, 1)
+	for _, event := range []*nostr.Event{catApp, catAsset, catRelease} {
+		r.holdListing(t.Context(), event)
+	}
+	drainReads(t, r)
+	if !slotHas(t, r.store, catApp.ID) || !slotHas(t, r.store, catRelease.ID) {
+		t.Fatal("the catalog listing was not stored")
+	}
+	if slotHas(t, r.store, stale.ID) {
+		t.Fatal("the stale app event stays next to the catalog's")
+	}
 }

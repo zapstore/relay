@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/zapstore/relay/pkg/dbcheck"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/repourl"
 )
@@ -53,31 +54,15 @@ type Store struct {
 
 // Open creates the policy tables in an existing catalog database.
 func Open(db *sql.DB) (*Store, error) {
+	for _, column := range []string{"kind", "id"} {
+		if err := dbcheck.RequireColumn(db, "ban_notices", column); err != nil {
+			return nil, fmt.Errorf("policy schema: %w", err)
+		}
+	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("policy schema: %w", err)
 	}
-	if err := migrateNoticePublisher(db); err != nil {
-		return nil, err
-	}
 	return &Store{db: db}, nil
-}
-
-// migrateNoticePublisher adds the publisher a ban line came from, so lifting
-// that ban drops it. A line written before this has an empty publisher.
-func migrateNoticePublisher(db *sql.DB) error {
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('ban_notices') WHERE name = 'kind'`).Scan(&n); err != nil {
-		return fmt.Errorf("policy schema: %w", err)
-	}
-	if n > 0 {
-		return nil
-	}
-	for _, column := range []string{"kind", "id"} {
-		if _, err := db.Exec(`ALTER TABLE ban_notices ADD COLUMN ` + column + ` TEXT NOT NULL DEFAULT ''`); err != nil {
-			return fmt.Errorf("policy schema: ban_notices.%s: %w", column, err)
-		}
-	}
-	return nil
 }
 
 // Normalize checks a publisher id.
@@ -383,7 +368,7 @@ func Affected(pub Publisher, rows []Listing) (eventIDs, hashes, appIDs []string)
 	want := map[string]struct{}{}
 	switch pub.Kind {
 	case KindNostr:
-		// A developer key ban clears both slots for its apps, the indexer's too.
+		// A developer key ban clears every listing of its apps, the indexer's too.
 		apps := map[string]struct{}{}
 		for _, row := range rows {
 			if row.Pubkey != pub.ID {

@@ -137,8 +137,18 @@ func (r *T) promoteProcessed(ctx context.Context, listing catalog.Listing) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if listing.Release.PubKey == r.config.Info.Pubkey {
-		if _, err := r.settleCatalog(ctx, listing.AppID); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("processor: promote failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)
+		// A catalog release is already promoted. A refusal removes it.
+		refusal, _ := r.procs.result(listing.Release.ID)
+		if refusal == "" {
+			return
+		}
+		assets := map[string]nostr.Event{}
+		for _, asset := range listing.Assets {
+			assets[asset.ID] = asset
+		}
+		err := r.dropCatalogRelease(ctx, &listing.App, listing.Release, assets, refusal, map[string]string{})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("processor: drop failed", "release", listing.Release.ID, "app", listing.AppID, "error", err)
 		}
 		return
 	}

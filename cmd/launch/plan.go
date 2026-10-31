@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	// devPrefix apps stay signed by oldKey: it holds their C1 proof and keeps the developer slot.
+	// devPrefix apps stay signed by oldKey: it holds their C1 proof and stays the developer.
 	devPrefix     = "dev.zapstore"
 	relayHint     = "wss://relay.zapstore.dev"
 	platformARM64 = "android-arm64-v8a"

@@ -37,27 +37,26 @@ var (
 	ownerKey   = strings.Repeat("a", 64)
 )
 
-func TestCatalogListingIsStoredAsItArrives(t *testing.T) {
+func TestCatalogListingWaitsForItsEventChecksOnly(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	x := blobs.put("apk")
 	app, release, asset := testTriple("a", catalogKey, x, strings.Repeat("e", 64), 1)
 
-	if res := r.holdListing(t.Context(), app); !res.ok || !res.broadcast || res.msg != "" {
+	// Until the asset arrives the triple is incomplete, so nothing is stored.
+	if res := r.holdListing(t.Context(), app); !res.ok || res.broadcast {
 		t.Fatalf("app: %+v", res)
 	}
-	if !slotHas(t, r.store, app.ID) {
-		t.Fatal("app was not stored")
-	}
-	if kept, err := pendingHas(t.Context(), r.store, app.ID); err != nil || kept {
-		t.Fatalf("app pending: kept %v err %v", kept, err)
-	}
-	if res := r.holdListing(t.Context(), release); !res.ok || !res.broadcast {
+	if res := r.holdListing(t.Context(), release); !res.ok || res.broadcast {
 		t.Fatalf("release: %+v", res)
+	}
+	if slotHas(t, r.store, app.ID) || slotHas(t, r.store, release.ID) {
+		t.Fatal("an incomplete listing was stored")
 	}
 	if len(blobs.promoted) != 0 {
 		t.Fatal("a file was promoted before its asset was stored")
 	}
+	// The last event completes it. No APK read is needed.
 	if res := r.holdListing(t.Context(), asset); !res.ok || !res.broadcast {
 		t.Fatalf("asset: %+v", res)
 	}
@@ -127,6 +126,33 @@ func TestReleaseReadsOnlyItsPendingAssets(t *testing.T) {
 	}
 }
 
+func TestFormerDeveloperDoesNotRaiseTheFloor(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	former := strings.Repeat("d", 64)
+	r.readAPK = readChains(t, map[string]signing{"new": {key.cert}})
+	saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
+	fApp, fRelease, fAsset := testTriple("f", former, blobs.put("old"), key.hash, 99)
+	for _, e := range []*nostr.Event{fApp, fRelease, fAsset} {
+		saveSlotEvent(t, r.store, *e)
+	}
+
+	app, release, asset := testTriple("n", ownerKey, blobs.put("new"), key.hash, 2)
+	for _, e := range []*nostr.Event{app, asset, release} {
+		r.holdListing(t.Context(), e)
+	}
+	drainReads(t, r)
+	if !slotHas(t, r.store, release.ID) {
+		t.Fatal("a retired key's version_code blocked the owner")
+	}
+	for _, e := range []*nostr.Event{fApp, fRelease, fAsset} {
+		if slotHas(t, r.store, e.ID) {
+			t.Errorf("former developer kind %d was not retired", e.Kind)
+		}
+	}
+}
+
 func TestClaimReadsOnlyTheNewestAPK(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
@@ -177,56 +203,6 @@ func TestCatalogAPKIsNotRead(t *testing.T) {
 	}
 	if len(r.apks.jobs) != 0 {
 		t.Fatal("queued a catalog key apk read")
-	}
-}
-
-func TestStoreSignedAPKIsRefused(t *testing.T) {
-	blobs := newFakeBlossom()
-	r := testRelay(t, blobs)
-	key := newTestKey(t)
-	saveSlotEvent(t, r.store, *key.proof(t, "4", ownerKey, ""))
-	r.readAPK = func(io.ReadSeeker) (signing, error) {
-		return nil, &thirdPartyError{label: "fdroid", mark: "certificate subject"}
-	}
-	x := blobs.put("apk")
-	app, release, asset := testTriple("a", ownerKey, x, key.hash, 1)
-	r.holdListing(t.Context(), app)
-	r.holdListing(t.Context(), asset)
-	if res := r.holdListing(t.Context(), release); !res.ok || res.msg != msgListingPending {
-		t.Fatalf("first send: %+v", res)
-	}
-	drainReads(t, r)
-	if slotHas(t, r.store, release.ID) {
-		t.Fatal("promoted a store-signed apk")
-	}
-
-	// A second send of the same file is refused on the spot.
-	app, release, asset = testTriple("b", ownerKey, x, key.hash, 1)
-	r.holdListing(t.Context(), app)
-	r.holdListing(t.Context(), asset)
-	res := r.holdListing(t.Context(), release)
-	if res.ok || !strings.HasPrefix(res.msg, "third-party signer: fdroid") {
-		t.Fatalf("resend: %+v", res)
-	}
-}
-
-func TestPlayDeliveredAPKWithAProofIsListed(t *testing.T) {
-	key := newTestKey(t)
-	delivered := func(io.ReadSeeker) (signing, error) {
-		return signing{key.cert}, &thirdPartyError{label: "google-play", mark: "source stamp", delivery: true}
-	}
-
-	blobs := newFakeBlossom()
-	r := testRelay(t, blobs)
-	r.readAPK = delivered
-	app, release, asset := testTriple("b", ownerKey, blobs.put("apk"), key.hash, 1)
-	r.holdListing(t.Context(), app)
-	r.holdListing(t.Context(), asset)
-	r.holdListing(t.Context(), release)
-	drainReads(t, r)
-	r.persist(nil, key.proof(t, "4", ownerKey, ""))
-	if !slotHas(t, r.store, release.ID) {
-		t.Fatal("a developer who proved the key was refused")
 	}
 }
 
@@ -356,21 +332,18 @@ func TestDeletionMatchingNothingIsRejected(t *testing.T) {
 	}
 }
 
-func TestCatalogListingDoesNotWaitForBlossom(t *testing.T) {
+func TestCatalogListingWaitsForItsBlob(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	app, release, asset := testTriple("a", catalogKey, strings.Repeat("f", 64), strings.Repeat("e", 64), 1)
 	r.holdListing(t.Context(), app)
 	r.holdListing(t.Context(), release)
-	if res := r.holdListing(t.Context(), asset); !res.ok || !res.broadcast || res.msg != "" {
+	if res := r.holdListing(t.Context(), asset); !res.ok || res.broadcast || res.msg != msgBlobPending {
 		t.Fatalf("asset: %+v", res)
 	}
 	for _, id := range []string{app.ID, release.ID, asset.ID} {
-		if !slotHas(t, r.store, id) {
-			t.Fatalf("missing %s", id)
-		}
-		if kept, err := pendingHas(t.Context(), r.store, id); err != nil || kept {
-			t.Fatalf("pending %s: kept %v err %v", id, kept, err)
+		if slotHas(t, r.store, id) {
+			t.Fatalf("stored %s before its blob was uploaded", id)
 		}
 	}
 	if len(blobs.promoted) != 0 {
@@ -386,11 +359,11 @@ func TestUploadPromotesTheListingWaitingOnIt(t *testing.T) {
 	app, release, asset := testTriple("a", catalogKey, x, strings.Repeat("e", 64), 1)
 	r.holdListing(t.Context(), app)
 	r.holdListing(t.Context(), release)
-	if res := r.holdListing(t.Context(), asset); !res.ok || !res.broadcast {
+	if res := r.holdListing(t.Context(), asset); !res.ok || res.broadcast {
 		t.Fatalf("asset: %+v", res)
 	}
-	if !slotHas(t, r.store, release.ID) {
-		t.Fatal("the listing was not stored before the upload")
+	if slotHas(t, r.store, release.ID) {
+		t.Fatal("the listing was stored before the upload")
 	}
 	if len(blobs.promoted) != 0 {
 		t.Fatal("promoted a blob the relay does not have")
@@ -400,6 +373,9 @@ func TestUploadPromotesTheListingWaitingOnIt(t *testing.T) {
 	}
 	if err := r.promoteWaitingOn(t.Context(), x); err != nil {
 		t.Fatal(err)
+	}
+	if !slotHas(t, r.store, release.ID) {
+		t.Fatal("the upload did not promote the listing")
 	}
 	if len(blobs.promoted) != 1 || blobs.promoted[0] != x {
 		t.Fatalf("promoted %v, want the uploaded file", blobs.promoted)
@@ -436,8 +412,8 @@ func TestIndexerPinsCertificateAtPromotion(t *testing.T) {
 	app, release, asset := testTriple("a", catalogKey, blobs.put("apk"), key.hash, 1)
 
 	r.holdListing(t.Context(), asset)
-	if pin := pinned(t, r); pin != key.hash {
-		t.Fatalf("pin %s, want the stored catalog asset", pin)
+	if pin := pinned(t, r); pin != old {
+		t.Fatalf("pin %s, want the stored catalog asset's", pin)
 	}
 	r.holdListing(t.Context(), app)
 	r.holdListing(t.Context(), release)
@@ -502,7 +478,7 @@ func TestDeveloperAPKMustBeSignedByTheAppCertificate(t *testing.T) {
 	}
 }
 
-func TestDeveloperRotationReachesTheSlot(t *testing.T) {
+func TestDeveloperRotationIsPromoted(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	old, next := newTestKey(t), newTestKey(t)
@@ -534,7 +510,7 @@ func TestDeveloperRotationReachesTheSlot(t *testing.T) {
 	}
 }
 
-func TestRetiredCertificateProofDoesNotHoldTheSlot(t *testing.T) {
+func TestRetiredCertificateProofDoesNotAuthorize(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
 	old, next := newTestKey(t), newTestKey(t)
@@ -642,7 +618,7 @@ func TestRevocationIsStoredOnArrival(t *testing.T) {
 	}
 }
 
-func TestRevocationDropsDeveloperListings(t *testing.T) {
+func TestRevocationKeepsListings(t *testing.T) {
 	r := testRelay(t, newFakeBlossom())
 	key := newTestKey(t)
 	proof := key.proof(t, "4", ownerKey, "")
@@ -660,14 +636,9 @@ func TestRevocationDropsDeveloperListings(t *testing.T) {
 	if res := r.persist(nil, revocation); !res.ok {
 		t.Fatalf("res %+v", res)
 	}
-	for _, event := range []*nostr.Event{devApp, devRelease, devAsset} {
-		if slotHas(t, r.store, event.ID) {
-			t.Errorf("developer kind %d kept after revocation", event.Kind)
-		}
-	}
-	for _, event := range []*nostr.Event{catApp, catRelease, catAsset} {
+	for _, event := range []*nostr.Event{devApp, devRelease, devAsset, catApp, catRelease, catAsset} {
 		if !slotHas(t, r.store, event.ID) {
-			t.Errorf("catalog kind %d dropped by revocation", event.Kind)
+			t.Errorf("kind %d dropped by revocation", event.Kind)
 		}
 	}
 }
@@ -705,7 +676,12 @@ func TestCatalogAppReplacesTheStoredOne(t *testing.T) {
 	r := testRelay(t, newFakeBlossom())
 	older := &nostr.Event{ID: strings.Repeat("1", 64), PubKey: catalogKey, Kind: events.KindApp, CreatedAt: 1, Tags: nostr.Tags{{"d", testApp}}}
 	newer := &nostr.Event{ID: strings.Repeat("2", 64), PubKey: catalogKey, Kind: events.KindApp, CreatedAt: 2, Tags: nostr.Tags{{"d", testApp}}}
+	// An app event alone is an edit: it waits until the relay holds a release.
 	r.holdListing(t.Context(), older)
+	if slotHas(t, r.store, older.ID) {
+		t.Fatal("a lone app event was stored before any release")
+	}
+	saveSlotEvent(t, r.store, *testRelease("r", catalogKey, "1.0.0", "main", strings.Repeat("9", 64)))
 	r.holdListing(t.Context(), newer)
 	for _, id := range []string{older.ID, newer.ID} {
 		if kept, err := pendingHas(t.Context(), r.store, id); err != nil || kept {

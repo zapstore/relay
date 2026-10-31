@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -865,6 +864,32 @@ func equalTags(a, b nostr.Tags) bool {
 	return true
 }
 
+// A relay.db without pending_events.app_id is refused with the script's name:
+// the daemon no longer migrates, scripts/add-columns.sh does.
+func TestOldDatabaseIsRefused(t *testing.T) {
+	path := t.TempDir() + "/relay.db"
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`DROP INDEX idx_pending_events_app_id`,
+		`ALTER TABLE pending_events DROP COLUMN app_id`,
+	} {
+		if _, err := s.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	if s, err = New(path); err == nil {
+		s.Close()
+		t.Fatal("New accepted a database without pending_events.app_id")
+	} else if !strings.Contains(err.Error(), "add-columns.sh") {
+		t.Fatalf("error %q does not name the script", err)
+	}
+}
+
 func TestPendingListing(t *testing.T) {
 	path := t.TempDir() + "/relay.db"
 	s, err := New(path)
@@ -877,29 +902,12 @@ func TestPendingListing(t *testing.T) {
 	other := &nostr.Event{ID: "other", Kind: events.KindApp, Tags: nostr.Tags{{"d", "org.other"}}}
 	proof := &nostr.Event{ID: "proof", Kind: events.KindIdentityProof, Tags: nostr.Tags{{"d", "com.example"}}}
 
-	// An older table has no app_id: drop it, save raw rows, and reopen.
-	for _, q := range []string{
-		`DROP INDEX idx_pending_events_app_id`,
-		`ALTER TABLE pending_events DROP COLUMN app_id`,
-	} {
-		if _, err := s.DB.Exec(q); err != nil {
+	for _, e := range []*nostr.Event{app, release, asset, other, proof} {
+		if _, err := s.SavePending(ctx, e); err != nil {
 			t.Fatal(err)
 		}
-	}
-	for _, e := range []*nostr.Event{app, release, other, proof} {
-		raw, _ := json.Marshal(e)
-		if _, err := s.DB.Exec(`INSERT INTO pending_events (id, kind, raw, received_at) VALUES (?, ?, ?, 0)`, e.ID, e.Kind, string(raw)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s.Close()
-	if s, err = New(path); err != nil {
-		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.SavePending(ctx, asset); err != nil {
-		t.Fatal(err)
-	}
 
 	got, err := s.PendingListing(ctx, "com.example")
 	if err != nil {

@@ -83,7 +83,7 @@ func (g *Gate) Admit(ctx context.Context, pubkey string) error {
 }
 
 // AdmitListing is Admit for one listing event. An app id that already has a
-// kind 32267 skips web of trust and the whitelist. The developer slot is
+// kind 32267 skips web of trust and the whitelist. Who may publish as the developer is
 // decided later, from the C1 proof. An empty appID is a new or untagged
 // listing and still goes through Admit.
 func (g *Gate) AdmitListing(ctx context.Context, pubkey, appID string) error {

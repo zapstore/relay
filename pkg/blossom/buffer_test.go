@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,26 +100,26 @@ func TestExpireAndPruneSplitTheBufferZone(t *testing.T) {
 	}
 }
 
-func TestOldBlobsAreServed(t *testing.T) {
+// An older blossom.db has no blobs.state. The store refuses it and names the
+// script; scripts/add-columns.sh does the migration, and its test lives in pkg/relay.
+func TestOldBlossomDatabaseIsRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "blossom.db")
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE blobs (hash TEXT PRIMARY KEY, type TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL, auth_pubkey TEXT);
-		INSERT INTO blobs VALUES ('` + blossom.ComputeHash([]byte("old")).Hex() + `', 'image/png', 3, 1, NULL);`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE blobs (hash TEXT PRIMARY KEY, type TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL, auth_pubkey TEXT)`); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
 
 	s, err := store.New(path)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		s.Close()
+		t.Fatal("store.New accepted a database without blobs.state")
 	}
-	defer s.Close()
-	meta, err := s.Query(t.Context(), blossom.ComputeHash([]byte("old")))
-	if err != nil || meta.State != store.Served {
-		t.Fatalf("meta %+v err %v", meta, err)
+	if !strings.Contains(err.Error(), "add-columns.sh") {
+		t.Fatalf("error %q does not name the script", err)
 	}
 }
 

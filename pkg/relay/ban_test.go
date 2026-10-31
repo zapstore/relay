@@ -35,7 +35,7 @@ func TestBanRefusesTheCatalogKey(t *testing.T) {
 	}
 }
 
-func TestDeveloperBanClearsBothSlots(t *testing.T) {
+func TestDeveloperBanClearsEveryListing(t *testing.T) {
 	r, pol := banRelay(t)
 	cert := strings.Repeat("cd", 32)
 	developer := strings.Repeat("d", 64)

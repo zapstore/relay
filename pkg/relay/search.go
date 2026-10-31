@@ -14,20 +14,20 @@ import (
 	"github.com/zapstore/steroid/artifacts"
 )
 
-// SearchListings loads the visible kind 32267 of every app, with the vector
+// SearchListings loads the selected kind 32267 of every app, with the vector
 // and security file from artifactsPath. A missing artifacts.db ranks every
 // app by text alone.
-func SearchListings(db store.T, artifactsPath string) search.Loader {
+func SearchListings(db store.T, catalogKey, artifactsPath string) search.Loader {
 	return func(ctx context.Context) ([]search.Entry, error) {
-		return searchEntries(ctx, db, artifactsPath, nil)
+		return searchEntries(ctx, db, catalogKey, artifactsPath, nil)
 	}
 }
 
-// SearchApp loads one visible app, as SearchListings loads it. ok is false
-// when the app is hidden or has no name.
-func SearchApp(db store.T, artifactsPath string) search.AppLoader {
+// SearchApp loads one app, as SearchListings loads it. ok is false when
+// the app has no listing or no name.
+func SearchApp(db store.T, catalogKey, artifactsPath string) search.AppLoader {
 	return func(ctx context.Context, appID string) (search.Entry, bool, error) {
-		entries, err := searchEntries(ctx, db, artifactsPath, []string{appID})
+		entries, err := searchEntries(ctx, db, catalogKey, artifactsPath, []string{appID})
 		if err != nil || len(entries) == 0 {
 			return search.Entry{}, false, err
 		}
@@ -35,8 +35,8 @@ func SearchApp(db store.T, artifactsPath string) search.AppLoader {
 	}
 }
 
-func searchEntries(ctx context.Context, db store.T, artifactsPath string, appIDs []string) ([]search.Entry, error) {
-	apps, err := visibleApps(ctx, db, appIDs, 0)
+func searchEntries(ctx context.Context, db store.T, catalogKey, artifactsPath string, appIDs []string) ([]search.Entry, error) {
+	listings, err := selectedListings(ctx, db, catalogKey, appIDs, 0)
 	if err != nil {
 		return nil, fmt.Errorf("search: load apps: %w", err)
 	}
@@ -52,8 +52,9 @@ func searchEntries(ctx context.Context, db store.T, artifactsPath string, appIDs
 		defer arts.Close()
 	}
 
-	entries := make([]search.Entry, 0, len(apps))
-	for _, event := range apps {
+	entries := make([]search.Entry, 0, len(listings))
+	for _, listing := range listings {
+		event := listing.App
 		appID, _ := events.Find(event.Tags, "d")
 		name, _ := events.Find(event.Tags, "name")
 		if name == "" {
@@ -86,7 +87,7 @@ func searchEntries(ctx context.Context, db store.T, artifactsPath string, appIDs
 func (r *T) UseSearch(engine *search.Engine) { r.search = engine }
 
 // SyncSearch replaces each app's search entry from the database. An app that
-// is hidden or gone is dropped. A nil engine does nothing.
+// is gone is dropped. A nil engine does nothing.
 func (r *T) SyncSearch(ctx context.Context, appIDs ...string) {
 	if r.search == nil {
 		return

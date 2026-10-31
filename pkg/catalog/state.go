@@ -128,8 +128,8 @@ func resolveAt(snapshot []nostr.Event, stackPubkey, catalogKey string, at time.T
 		}
 	}
 
-	// Releases grouped by signer and app id. Production listings join on `i`;
-	// `a` is optional and checked in selectListing when present.
+	// Releases grouped by app id. A release joins an app event by `i`, then by
+	// `a` when present: see joinsApp.
 	releases := map[string][]nostr.Event{}
 	proofs := make([]Proof, 0, len(current))
 	stacks := make([]Stack, 0)
@@ -146,8 +146,7 @@ func resolveAt(snapshot []nostr.Event, stackPubkey, catalogKey string, at time.T
 			apps = append(apps, event)
 		case events.KindRelease:
 			if appID, ok := events.Find(event.Tags, "i"); ok {
-				key := ownerKey(event.PubKey, appID)
-				releases[key] = append(releases[key], event)
+				releases[appID] = append(releases[appID], event)
 			}
 		case events.KindIdentityProof:
 			d, _ := events.Find(event.Tags, "d")
@@ -170,10 +169,21 @@ func resolveAt(snapshot []nostr.Event, stackPubkey, catalogKey string, at time.T
 		}
 	}
 
+	coordinates := make(map[string]struct{}, len(apps))
+	for _, app := range apps {
+		appID, _ := events.Find(app.Tags, "d")
+		coordinates[fmt.Sprintf("%d:%s:%s", events.KindApp, app.PubKey, appID)] = struct{}{}
+	}
 	candidates := map[string][]Listing{}
 	for _, app := range apps {
 		appID, _ := events.Find(app.Tags, "d")
-		listing, ok := selectListing(appID, app, releases[ownerKey(app.PubKey, appID)], assets)
+		var joined []nostr.Event
+		for _, release := range releases[appID] {
+			if joinsApp(app, release, appID, coordinates) {
+				joined = append(joined, release)
+			}
+		}
+		listing, ok := selectListing(appID, app, joined, assets)
 		if !ok {
 			continue
 		}
@@ -221,6 +231,7 @@ func publisherProfiles(profiles []Profile, catalogKey string, listings []Listing
 	keep := map[string]struct{}{catalogKey: {}}
 	for _, l := range listings {
 		keep[l.App.PubKey] = struct{}{}
+		keep[l.Release.PubKey] = struct{}{}
 	}
 	for _, p := range proofs {
 		keep[p.Pubkey] = struct{}{}
@@ -232,18 +243,6 @@ func publisherProfiles(profiles []Profile, catalogKey string, listings []Listing
 		_, ok := keep[p.Pubkey]
 		return !ok
 	})
-}
-
-// SelectedReleases maps each app id to the kind 30063 of the listing
-// selection picks, as bundles do. snapshot holds the apps' kinds 32267,
-// 30063, and 3063. An app with no complete listing is absent.
-func SelectedReleases(snapshot []nostr.Event, catalogKey string, at time.Time) map[string]nostr.Event {
-	state := resolveAt(snapshot, catalogKey, catalogKey, at)
-	out := make(map[string]nostr.Event, len(state.Listings))
-	for _, listing := range state.Listings {
-		out[listing.AppID] = listing.Release
-	}
-	return out
 }
 
 // ProfilePicture is the picture URL of a kind 0 profile, or "".
@@ -265,8 +264,27 @@ type listingCandidate struct {
 	versionCode int64
 }
 
-func ownerKey(pubkey, appID string) string {
-	return pubkey + "\x00" + appID
+// joinsApp reports whether release belongs to app. Without an `a` tag the
+// release belongs to its own signer's app event. With one, it belongs to the
+// app event the coordinate names, which another key may have signed: the
+// catalog key's release can carry the developer's app event. A coordinate
+// that names no app event in the snapshot is stale, as when the developer's
+// app event was replaced by another key's, and joins any app event with the
+// same app id.
+func joinsApp(app, release nostr.Event, appID string, coordinates map[string]struct{}) bool {
+	a := release.Tags.GetFirst([]string{"a"})
+	if a == nil || len(*a) < 2 {
+		return release.PubKey == app.PubKey
+	}
+	ref, err := events.ParseAppIdentifier((*a)[1])
+	if err != nil || ref.AppID != appID {
+		return false
+	}
+	if ref.Pubkey == app.PubKey {
+		return true
+	}
+	_, named := coordinates[fmt.Sprintf("%d:%s:%s", events.KindApp, ref.Pubkey, ref.AppID)]
+	return !named
 }
 
 const (
@@ -284,7 +302,8 @@ func isAndroidAPK(asset events.Asset) bool {
 }
 
 // selectListing picks the best main-channel android-arm64-v8a release among releases,
-// which must all be signed by app.PubKey and name appID in their `i` tag.
+// which must all join app (see joinsApp) and name appID in their `i` tag. A
+// release's assets are signed by the release's signer.
 func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets map[string]nostr.Event) (Listing, bool) {
 	var chosen *listingCandidate
 	for _, releaseEvent := range releases {
@@ -296,12 +315,6 @@ func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets
 			release.D != release.I+"@"+release.Version || len(release.AssetIDs) == 0 {
 			continue
 		}
-		if a := releaseEvent.Tags.GetFirst([]string{"a"}); a != nil && len(*a) > 1 {
-			ref, err := events.ParseAppIdentifier((*a)[1])
-			if err != nil || ref.AppID != appID || ref.Pubkey != app.PubKey {
-				continue
-			}
-		}
 		type androidAsset struct {
 			event nostr.Event
 			code  int64
@@ -310,7 +323,7 @@ func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets
 		var maxCode int64 = -1
 		for _, assetID := range release.AssetIDs {
 			assetEvent, ok := assets[assetID]
-			if !ok || assetEvent.PubKey != app.PubKey {
+			if !ok || assetEvent.PubKey != releaseEvent.PubKey {
 				continue
 			}
 			asset, err := events.ParseAsset(&assetEvent)
@@ -362,9 +375,9 @@ func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets
 }
 
 // chooseListing picks one listing per app id: the greatest version_code,
-// then a listing not signed by the catalog key, then the better app event.
-// Promotion already admits only the catalog key and one verified developer,
-// and a revocation removes that developer's listing, so proofs are not read.
+// then the later release event. Every pubkey the relay admits has the same
+// standing, so no signer is preferred. Proofs are not read: they were
+// checked at promotion.
 // When the catalog key lists the app, its signer is the app's certificate,
 // and a developer listing whose asset neither is signed by it nor names it
 // as an ancestor is not selected: the certificate may have moved since.
@@ -375,7 +388,7 @@ func chooseListing(group []Listing, catalogKey string) (Listing, bool) {
 	}
 	chosen := group[0]
 	for _, listing := range group[1:] {
-		if betterListing(listing, chosen, catalogKey) {
+		if betterListing(listing, chosen) {
 			chosen = listing
 		}
 	}
@@ -388,7 +401,7 @@ func onAppCertificate(group []Listing, catalogKey string) []Listing {
 	}
 	var cert string
 	for _, listing := range group {
-		if listing.App.PubKey == catalogKey {
+		if listing.Release.PubKey == catalogKey {
 			cert, _, _ = listingChain(listing)
 			break
 		}
@@ -397,7 +410,7 @@ func onAppCertificate(group []Listing, catalogKey string) []Listing {
 		return group
 	}
 	return slices.DeleteFunc(slices.Clone(group), func(listing Listing) bool {
-		if listing.App.PubKey == catalogKey {
+		if listing.Release.PubKey == catalogKey {
 			return false
 		}
 		signer, ancestors, ok := listingChain(listing)
@@ -405,16 +418,14 @@ func onAppCertificate(group []Listing, catalogKey string) []Listing {
 	})
 }
 
-func betterListing(next, current Listing, catalogKey string) bool {
+func betterListing(next, current Listing) bool {
 	nv := listingVersionCode(next)
 	cv := listingVersionCode(current)
 	if nv != cv {
 		return nv > cv
 	}
-	nextDev := next.App.PubKey != catalogKey
-	currentDev := current.App.PubKey != catalogKey
-	if nextDev != currentDev {
-		return nextDev
+	if next.Release.ID != current.Release.ID {
+		return betterEvent(next.Release, current.Release)
 	}
 	return betterEvent(next.App, current.App)
 }

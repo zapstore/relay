@@ -214,34 +214,6 @@ func (r *T) promoteWaitingOn(ctx context.Context, blob string) error {
 			}
 		}
 	}
-	// A catalog-key asset is already stored. Serving its file is the part
-	// that waited on this upload.
-	rows, err := r.store.DB.QueryContext(ctx, `
-		SELECT DISTINCT i.value FROM events e
-		JOIN tags x ON x.event_id = e.id AND x.key = 'x' AND x.value = ?
-		JOIN tags i ON i.event_id = e.id AND i.key = 'i'
-		WHERE e.kind = ? AND e.pubkey = ?
-	`, blob, events.KindAsset, r.config.Info.Pubkey)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var apps []string
-	for rows.Next() {
-		var appID string
-		if err := rows.Scan(&appID); err != nil {
-			return err
-		}
-		apps = append(apps, appID)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, appID := range apps {
-		if _, err := r.settleCatalog(ctx, appID); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -269,10 +241,9 @@ func storedAssetCerts(ctx context.Context, db store.T, blob string) ([]string, e
 }
 
 // readAPKJob reads one APK and remembers its certificates until the process
-// exits. A file that is not a verifiable APK, or whose key a store holds, is
-// remembered with the refusal, since the same bytes will not pass later. A
-// store's delivery mark is not refused: a developer's C1 proof shows they
-// hold the key. An APK that could not be fetched returns an error.
+// exits. A file that is not a verifiable APK is remembered with the refusal,
+// since the same bytes will not pass later. An APK that could not be fetched
+// returns an error.
 func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
@@ -289,17 +260,8 @@ func (r *T) readAPKJob(ctx context.Context, job apkJob) error {
 	}
 	defer cleanup()
 	chain, readErr := r.readAPK(body)
-	var store *thirdPartyError
-	if errors.As(readErr, &store) && store.delivery && len(chain) > 0 {
-		slog.Info("apk reader: read apk", "blob", job.blob, "signer", chain.signer(), "delivered_by", store.label)
-		r.apks.remember(job.blob, readAPKResult{chain: chain})
-		return nil
-	}
 	if readErr != nil {
 		reason := "the APK could not be verified: " + readErr.Error()
-		if store != nil {
-			reason = store.Error()
-		}
 		slog.Warn("apk reader: apk refused", "blob", job.blob, "reason", reason)
 		r.apks.remember(job.blob, readAPKResult{readErr: reason})
 		return nil

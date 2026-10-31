@@ -280,8 +280,8 @@ func start(cfg config.Config) (err error) {
 	}
 	defer func() { err = errors.Join(err, enc.Close()) }()
 	engine := search.NewEngine(
-		relay.SearchListings(relayDB, artifacts.Path(dataDir)),
-		relay.SearchApp(relayDB, artifacts.Path(dataDir)),
+		relay.SearchListings(relayDB, cfg.Relay.Info.Pubkey, artifacts.Path(dataDir)),
+		relay.SearchApp(relayDB, cfg.Relay.Info.Pubkey, artifacts.Path(dataDir)),
 		enc.Query,
 		slog.Default(),
 	)

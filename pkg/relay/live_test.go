@@ -17,6 +17,7 @@ func TestLiveRead(t *testing.T) {
 	developer := testPubkey(t)
 	saveListing(t, r.store, catalogKey, "com.example.app", cert, "1", "2")
 	saveListing(t, r.store, developer, "com.example.app", cert, "2", "2")
+	laterRelease(t, r.store, "2")
 	saveListing(t, r.store, catalogKey, "com.example.solo", cert, "3", "1")
 
 	// Two assets with the same version_code; the release names the higher id first.
@@ -37,9 +38,6 @@ func TestLiveRead(t *testing.T) {
 				{"version_code", "5"}, {"apk_certificate_hash", cert},
 			},
 		})
-	}
-	if err := SelectAll(t.Context(), r.store, catalogKey); err != nil {
-		t.Fatal(err)
 	}
 
 	read := func(t *testing.T, filter nostr.Filter) []nostr.Event {
@@ -94,7 +92,7 @@ func TestLiveRead(t *testing.T) {
 		}
 	})
 	t.Run("query text makes it a search", func(t *testing.T) {
-		loader := SearchListings(r.store, filepath.Join(t.TempDir(), "artifacts.db"))
+		loader := SearchListings(r.store, catalogKey, filepath.Join(t.TempDir(), "artifacts.db"))
 		r.UseSearch(search.NewEngine(loader, nil, nil, slog.Default()))
 		defer r.UseSearch(nil)
 		got := read(t, nostr.Filter{Search: "pair listing:all", Limit: 10})

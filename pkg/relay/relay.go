@@ -109,13 +109,6 @@ func Setup(
 	analytics *analytics.Engine,
 	readOnly bool,
 ) (*T, error) {
-	// Once, on the database that just gained events.hidden: before any read.
-	if store.HiddenAdded {
-		if err := SelectAll(context.Background(), store, config.Info.Pubkey); err != nil {
-			return nil, fmt.Errorf("select slots: %w", err)
-		}
-	}
-
 	server := rely.NewRelay(
 		rely.WithAuthURL(config.Hostname),
 		rely.WithInfo(nip11Doc(config.Info, readOnly)),
@@ -147,7 +140,7 @@ func Setup(
 		NotAnchored(store, config.Info.Pubkey),
 		NotAllowed(pol),
 		NotAdmitted(gate),
-		ListingSlots(store, config.Info.Pubkey),
+		ListingCertificate(store, config.Info.Pubkey),
 		catalogKeyOnSocket(config.Info.Pubkey),
 	)
 
@@ -367,17 +360,6 @@ func (r *T) reconcile(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// selectHidden reselects the apps with a hidden slot, after a write that may
-// have deleted listing events, and updates search for each of them.
-func (r *T) selectHidden(ctx context.Context) {
-	ids, err := selectHidden(ctx, r.store, r.config.Info.Pubkey)
-	if err != nil {
-		slog.Error("relay: failed to select slots", "error", err)
-		return
-	}
-	r.SyncSearch(ctx, ids...)
-}
-
 func (r *T) save(c rely.Client, event *nostr.Event) rely.EventResult {
 	return r.persist(c, event).result()
 }
@@ -402,20 +384,9 @@ func (p persistResult) result() rely.EventResult {
 	return res
 }
 
-// deletesListings reports whether persisting an event of this kind can
-// delete a listing event: a deletion, or a proof that revokes or replaces a
-// developer slot. Promotion selects the app it stores.
-func deletesListings(kind int) bool {
-	return kind == nostr.KindDeletion || kind == events.KindIdentityProof
-}
-
 func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if deletesListings(event.Kind) {
-		defer r.selectHidden(ctx)
-	}
-
 	if r.analytics != nil {
 		r.analytics.RecordEvent()
 	}
@@ -541,7 +512,7 @@ func appsOf(ctx context.Context, db store.T, event *nostr.Event) []string {
 	if len(refs) == 0 {
 		return ids
 	}
-	found, err := appIDs(ctx, db.DB, `
+	found, err := appIDsOf(ctx, db.DB, `
 		SELECT DISTINCT t.value FROM events e JOIN tags t ON t.event_id = e.id
 		WHERE e.id`+inClause(len(refs))+` AND ((e.kind = ? AND t.key = 'd') OR (e.kind IN (?, ?) AND t.key = 'i'))`,
 		append(anySlice(refs), events.KindApp, events.KindRelease, events.KindAsset)...)
@@ -581,7 +552,7 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 	if len(filters) == 1 {
 		if hash, ok := store.FileHashSearch(filters[0]); ok {
 			// The phone already has the file. Return the event that names its
-			// hash, including one from a slot that is not selected.
+			// hash.
 			f := filters[0]
 			f.Search = ""
 			f.Tags = cloneTags(f.Tags)
@@ -617,7 +588,7 @@ func (r *T) query(ctx context.Context, c rely.Client, id string, filters nostr.F
 			return nil, queryFailed(ctx, "failed to search", err, filters, start)
 		}
 	} else {
-		result, err = r.store.QueryVisible(ctx, filters...)
+		result, err = r.store.Query(ctx, filters...)
 		if errors.Is(err, store.ErrUnsupportedREQ) {
 			return nil, err
 		}
@@ -1126,7 +1097,7 @@ func proofOwner(ctx context.Context, db store.T, catalogKey, appID string) (stri
 // NotAdmitted runs the publisher gate for listing events. The catalog key,
 // a pubkey that already published a kind 32267, a whitelisted pubkey, or a
 // pubkey above the web-of-trust threshold may publish. An app id that
-// already has a kind 32267 skips the gate; the C1 check still decides the slot.
+// already has a kind 32267 skips the gate; the C1 check still decides who may publish.
 // Other kinds pass. See the publisher policy.
 func NotAdmitted(gate *policy.Gate) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {

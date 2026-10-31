@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,10 +18,10 @@ import (
 
 var errCertificate = errors.New("asset certificate does not match this app")
 
-// ListingSlots rejects an asset that names none of the app's certificate.
-// Which pubkey holds a slot is decided at promotion, once the APK has been
+// ListingCertificate rejects an asset that names none of the app's certificate.
+// Whether a pubkey may publish is decided at promotion, once the APK has been
 // read: a new developer's proof arrives after its listing.
-func ListingSlots(db store.T, catalogKey string) func(rely.Client, *nostr.Event) error {
+func ListingCertificate(db store.T, catalogKey string) func(rely.Client, *nostr.Event) error {
 	return func(_ rely.Client, event *nostr.Event) error {
 		if event.Kind != events.KindAsset || event.PubKey == catalogKey {
 			return nil
@@ -42,9 +43,9 @@ func ListingSlots(db store.T, catalogKey string) func(rely.Client, *nostr.Event)
 	}
 }
 
-// holdsDeveloperSlot reports whether pubkey is the active C1 owner or delegate
+// isActiveDeveloper reports whether pubkey is the active C1 owner or delegate
 // for the app's certificate.
-func holdsDeveloperSlot(ctx context.Context, db store.T, catalogKey, appID, pubkey string) (bool, error) {
+func isActiveDeveloper(ctx context.Context, db store.T, catalogKey, appID, pubkey string) (bool, error) {
 	cert, ok, err := appCertificate(ctx, db, catalogKey, appID)
 	if err != nil || !ok {
 		return false, err
@@ -75,7 +76,7 @@ func appCertificate(ctx context.Context, db store.T, catalogKey, appID string) (
 		return "", false, nil
 	}
 	if err != nil {
-		slog.Error("listing slot: read certificate", "err", err, "app_id", appID)
+		slog.Error("listing: read certificate", "err", err, "app_id", appID)
 		return "", false, ErrInternal
 	}
 	return strings.ToLower(hash), true, nil
@@ -102,7 +103,7 @@ func activeDeveloper(ctx context.Context, db store.T, certs []string, extra []no
 		WHERE e.kind = ? AND t.key = 'd' AND lower(t.value) IN (`+strings.Join(marks, ",")+`)
 	`, args...)
 	if err != nil {
-		slog.Error("listing slot: read proofs", "err", err)
+		slog.Error("listing: read proofs", "err", err)
 		return "", "", false, ErrInternal
 	}
 	defer rows.Close()
@@ -158,28 +159,136 @@ func newerProof(next, current nostr.Event) bool {
 	return next.ID < current.ID
 }
 
-// replaceOtherDeveloper deletes the listings of every other developer pubkey
-// for the app once event's signer has a complete listing. It is idempotent.
-func (r *T) replaceOtherDeveloper(ctx context.Context, event *nostr.Event) error {
-	if event.PubKey == r.config.Info.Pubkey {
+// activeDevelopers is the active C1 owner and delegate for the app's
+// certificate. Both are empty when the app has no certificate or no active
+// proof.
+func (r *T) activeDevelopers(ctx context.Context, appID string) (owner, delegate string, err error) {
+	cert, ok, err := appCertificate(ctx, r.store, r.config.Info.Pubkey, appID)
+	if err != nil || !ok {
+		return "", "", err
+	}
+	owner, delegate, _, err = activeDeveloper(ctx, r.store, []string{cert}, nil)
+	return owner, delegate, err
+}
+
+// storedRelease is a stored kind 30063 with the version_code of its assets.
+type storedRelease struct {
+	id, pubkey, d, channel string
+	code                   int64
+	at                     int64 // created_at
+	assets                 []string
+}
+
+// storedReleaseCodes reads every stored release of appID, whoever signed it,
+// with the greatest version_code among the assets it names.
+func (r *T) storedReleaseCodes(ctx context.Context, appID string) ([]storedRelease, error) {
+	rows, err := r.store.DB.QueryContext(ctx, `
+		SELECT r.id, r.pubkey, r.created_at, r.tags, a.id, a.tags FROM events r
+		JOIN tags ti ON ti.event_id = r.id AND ti.key = 'i' AND ti.value = ?
+		JOIN tags te ON te.event_id = r.id AND te.key = 'e'
+		JOIN events a ON a.id = te.value AND a.kind = ?
+		WHERE r.kind = ?
+	`, appID, events.KindAsset, events.KindRelease)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []storedRelease
+	index := map[string]int{}
+	for rows.Next() {
+		var id, pub, rawRelease, assetID, rawAsset string
+		var at64 int64
+		if err := rows.Scan(&id, &pub, &at64, &rawRelease, &assetID, &rawAsset); err != nil {
+			return nil, err
+		}
+		at, seen := index[id]
+		if !seen {
+			var tags nostr.Tags
+			if err := tags.Scan(rawRelease); err != nil {
+				continue
+			}
+			channel, _ := events.Find(tags, "c")
+			d, _ := events.Find(tags, "d")
+			index[id] = len(out)
+			at = len(out)
+			out = append(out, storedRelease{id: id, pubkey: pub, d: d, channel: channel, at: at64})
+		}
+		var assetTags nostr.Tags
+		if err := assetTags.Scan(rawAsset); err != nil {
+			continue
+		}
+		out[at].code = max(out[at].code, maxVersionCode([]nostr.Event{{Tags: assetTags}}))
+		out[at].assets = append(out[at].assets, assetID)
+	}
+	return out, rows.Err()
+}
+
+// supersede keeps the app's current listing whole once release is promoted.
+// It does nothing unless release is the current one: no release of the
+// catalog key, the owner, or the delegate has a greater version_code.
+// Otherwise:
+//   - keepApp, when set, is the signer of the kind 32267 the release belongs
+//     to, and every other signer's kind 32267 for the app is deleted;
+//   - the releases of any other pubkey whose version_code is not lower, and
+//     the assets they name, are deleted: a former owner's key may have leaked,
+//     and its release must not outrank the current one.
+//
+// Older releases stay. It is idempotent.
+func (r *T) supersede(ctx context.Context, release *nostr.Event, keepApp string) error {
+	if release == nil {
 		return nil
 	}
-	appID, ok := listingAppID(event)
+	appID, ok := listingAppID(release)
 	if !ok {
 		return nil
 	}
-	complete, err := developerListingComplete(ctx, r.store, event.PubKey, appID)
-	if err != nil || !complete {
+	owner, delegate, err := r.activeDevelopers(ctx, appID)
+	if err != nil {
 		return err
 	}
-	ids, err := otherDeveloperEvents(ctx, r.store, r.config.Info.Pubkey, event.PubKey, appID)
-	if err != nil || len(ids) == 0 {
+	// The signer was authorized when this release was promoted. A rotation can
+	// move the app's certificate past the proof it used.
+	authorized := []string{r.config.Info.Pubkey, owner, delegate, release.PubKey}
+	stored, err := r.storedReleaseCodes(ctx, appID)
+	if err != nil {
 		return err
+	}
+	channel, _ := events.Find(release.Tags, "c")
+	var code, floor int64
+	for _, other := range stored {
+		if other.id == release.ID {
+			code = other.code
+		}
+		if other.channel == channel && slices.Contains(authorized, other.pubkey) {
+			floor = max(floor, other.code)
+		}
+	}
+	if code < floor {
+		return nil
+	}
+	var ids []string
+	if keepApp != "" {
+		apps, err := appIDsOf(ctx, r.store.DB, `
+			SELECT e.id FROM events e JOIN tags t ON t.event_id = e.id AND t.key = 'd' AND t.value = ?
+			WHERE e.kind = ? AND e.pubkey != ?`, appID, events.KindApp, keepApp)
+		if err != nil {
+			return err
+		}
+		ids = append(ids, apps...)
+	}
+	for _, other := range stored {
+		if other.channel == channel && !slices.Contains(authorized, other.pubkey) && other.code >= code {
+			ids = append(ids, other.id)
+			ids = append(ids, other.assets...)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 	if _, err := r.store.Delete(ctx, nostr.Filter{IDs: ids}); err != nil {
-		return fmt.Errorf("replace developer listing for %s: %w", appID, err)
+		return fmt.Errorf("supersede listing of %s: %w", appID, err)
 	}
-	slog.Info("listing slot: replaced developer listing", "app_id", appID, "pubkey", event.PubKey)
+	slog.Info("listing: superseded", "app_id", appID, "release", release.ID, "events", len(ids))
 	return nil
 }
 
@@ -190,104 +299,6 @@ func listingAppID(event *nostr.Event) (string, bool) {
 	}
 	id, ok := events.Find(event.Tags, key)
 	return id, ok && id != ""
-}
-
-func developerListingComplete(ctx context.Context, db store.T, pubkey, appID string) (bool, error) {
-	var one int
-	err := db.DB.QueryRowContext(ctx, `
-		SELECT 1 FROM events e
-		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ?
-		LIMIT 1
-	`, events.KindApp, pubkey, appID).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	rows, err := db.DB.QueryContext(ctx, `
-		SELECT e.tags FROM events e
-		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'i' AND t.value = ?
-	`, events.KindRelease, pubkey, appID)
-	if err != nil {
-		return false, err
-	}
-	var raws []string
-	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
-			rows.Close()
-			return false, err
-		}
-		raws = append(raws, raw)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return false, err
-	}
-	rows.Close()
-	for _, raw := range raws {
-		var tags nostr.Tags
-		if err := tags.Scan(raw); err != nil {
-			continue
-		}
-		release, err := events.ParseRelease(&nostr.Event{Kind: events.KindRelease, Tags: tags})
-		if err != nil || len(release.AssetIDs) == 0 {
-			continue
-		}
-		ready := true
-		for _, id := range release.AssetIDs {
-			var n int
-			err := db.DB.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? AND kind = ? AND pubkey = ?`, id, events.KindAsset, pubkey).Scan(&n)
-			if err != nil {
-				ready = false
-				break
-			}
-		}
-		if ready {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func otherDeveloperEvents(ctx context.Context, db store.T, catalogKey, pubkey, appID string) ([]string, error) {
-	rows, err := db.DB.QueryContext(ctx, `
-		SELECT e.pubkey FROM events e
-		JOIN tags t ON t.event_id = e.id
-		WHERE e.kind = ? AND t.key = 'd' AND t.value = ?
-	`, events.KindApp, appID)
-	if err != nil {
-		return nil, err
-	}
-	var pubs []string
-	for rows.Next() {
-		var pub string
-		if err := rows.Scan(&pub); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if pub == catalogKey || pub == pubkey {
-			continue
-		}
-		pubs = append(pubs, pub)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-	var ids []string
-	for _, pub := range pubs {
-		found, err := eventsByApp(ctx, db, pub, appID)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, found...)
-	}
-	return ids, nil
 }
 
 func eventsByApp(ctx context.Context, db store.T, pubkey, appID string) ([]string, error) {
@@ -329,7 +340,7 @@ func (r *T) isDeveloperRemoval(ctx context.Context, event *nostr.Event) bool {
 	if err != nil {
 		return false
 	}
-	holds, err := holdsDeveloperSlot(ctx, r.store, r.config.Info.Pubkey, appID, event.PubKey)
+	holds, err := isActiveDeveloper(ctx, r.store, r.config.Info.Pubkey, appID, event.PubKey)
 	return err == nil && holds
 }
 

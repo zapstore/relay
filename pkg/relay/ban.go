@@ -16,9 +16,8 @@ import (
 var errBanCatalogKey = errors.New("the catalog key is never banned")
 
 // ApplyBan stores the publisher, removes that publisher's listings, stored
-// and in the buffer zone, and selects the apps that still have a hidden slot.
-// It returns every app id whose search entry changed. A banned Nostr key also
-// loses every other event waiting in the buffer zone.
+// and in the buffer zone. It returns every app id whose search entry changed.
+// A banned Nostr key also loses every other event waiting in the buffer zone.
 func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey string, pub policy.Publisher, reason string) ([]string, error) {
 	pub, err := policy.Normalize(pub.Kind, pub.ID)
 	if err != nil {
@@ -71,11 +70,7 @@ func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey str
 			return nil, fmt.Errorf("delete banned listings: %w", err)
 		}
 	}
-	hidden, err := selectHidden(ctx, db, catalogKey)
-	if err != nil {
-		return nil, err
-	}
-	return append(apps, hidden...), nil
+	return apps, nil
 }
 
 // loadListings reads every stored app, release, and asset so a forge or

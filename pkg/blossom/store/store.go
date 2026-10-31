@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/pippellia-btc/blossom"
+	"github.com/zapstore/relay/pkg/dbcheck"
 )
 
 //go:embed schema.sql
@@ -53,11 +54,12 @@ func New(path string) (*T, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to sqlite3 at %s: %w", path, err)
 	}
+	if err := dbcheck.RequireColumn(db, "blobs", "state"); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("failed to apply base schema: %w", err)
-	}
-	if err := addState(db); err != nil {
-		return nil, err
 	}
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
@@ -72,25 +74,6 @@ func New(path string) (*T, error) {
 		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
 	return &T{DB: db}, nil
-}
-
-// addState adds the state column to a database written before the buffer
-// zone. Every blob it already holds is served.
-func addState(db *sql.DB) error {
-	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('blobs') WHERE name = 'state'`).Scan(&n)
-	if err != nil {
-		return fmt.Errorf("failed to read the blobs table: %w", err)
-	}
-	if n == 0 {
-		if _, err := db.Exec(`ALTER TABLE blobs ADD COLUMN state TEXT NOT NULL DEFAULT 'served'`); err != nil {
-			return fmt.Errorf("failed to add the state column: %w", err)
-		}
-	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_blobs_state ON blobs(state)`); err != nil {
-		return fmt.Errorf("failed to index the state column: %w", err)
-	}
-	return nil
 }
 
 func (s *T) Close() error {

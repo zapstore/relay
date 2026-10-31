@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	sqlite "github.com/vertex-lab/nostr-sqlite"
+	"github.com/zapstore/relay/pkg/dbcheck"
 	"github.com/zapstore/relay/pkg/events"
 )
 
@@ -25,9 +27,6 @@ var schema string
 
 type T struct {
 	*sqlite.Store
-	// HiddenAdded is true when New added events.hidden, so no app has its
-	// slots selected yet.
-	HiddenAdded bool
 }
 
 const (
@@ -52,6 +51,9 @@ func dsn(path string) string {
 }
 
 func New(path string) (T, error) {
+	if err := requireMigrated(path); err != nil {
+		return T{}, err
+	}
 	store, err := sqlite.New(
 		dsn(path),
 		sqlite.WithAdditionalSchema(schema),
@@ -70,66 +72,18 @@ func New(path string) (T, error) {
 	// Idle connections stay open so their page cache survives between queries.
 	store.DB.SetMaxOpenConns(maxConns)
 	store.DB.SetMaxIdleConns(maxConns)
-	s := T{Store: store}
-	if err := s.migratePendingAppID(); err != nil {
-		store.Close()
-		return T{}, err
-	}
-	if s.HiddenAdded, err = s.addHidden(); err != nil {
-		store.Close()
-		return T{}, err
-	}
-	return s, nil
+	return T{Store: store}, nil
 }
 
-// addHidden adds events.hidden. It reports whether the column was added.
-// hidden is 1 on the kinds 32267, 30063, and 3063 of the slot that was not
-// selected, when an app has two slots. Every other event has 0.
-func (s T) addHidden() (bool, error) {
-	var n int
-	err := s.DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'hidden'`).Scan(&n)
+// requireMigrated refuses a database that predates pending_events.app_id. It
+// runs before the schema, whose index on that column would fail on the old table.
+func requireMigrated(path string) error {
+	db, err := sql.Open("sqlite3", dsn(path))
 	if err != nil {
-		return false, fmt.Errorf("failed to check events: %w", err)
+		return fmt.Errorf("open %s: %w", path, err)
 	}
-	if n == 0 {
-		if _, err := s.DB.Exec(`ALTER TABLE events ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`); err != nil {
-			return false, fmt.Errorf("failed to add events.hidden: %w", err)
-		}
-	}
-	if _, err := s.DB.Exec(`CREATE INDEX IF NOT EXISTS events_hidden_idx ON events(id) WHERE hidden = 1`); err != nil {
-		return false, fmt.Errorf("failed to index events.hidden: %w", err)
-	}
-	return n == 0, nil
-}
-
-// migratePendingAppID adds pending_events.app_id, fills it from raw, and indexes it.
-func (s T) migratePendingAppID() error {
-	var n int
-	err := s.DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('pending_events') WHERE name = 'app_id'`).Scan(&n)
-	if err != nil {
-		return fmt.Errorf("failed to check pending_events: %w", err)
-	}
-	if n == 0 {
-		if _, err := s.DB.Exec(`ALTER TABLE pending_events ADD COLUMN app_id TEXT NOT NULL DEFAULT ''`); err != nil {
-			return fmt.Errorf("failed to add pending_events.app_id: %w", err)
-		}
-		// The first d on an app, the first i on a release or asset, as pendingAppID.
-		if _, err := s.DB.Exec(`
-			UPDATE pending_events SET app_id = coalesce((
-				SELECT json_extract(value, '$[1]') FROM json_each(json_extract(raw, '$.tags'))
-				WHERE json_extract(value, '$[0]') = CASE kind WHEN ? THEN 'd' ELSE 'i' END
-				LIMIT 1
-			), '')
-			WHERE kind IN (?, ?, ?)`,
-			events.KindApp, events.KindApp, events.KindRelease, events.KindAsset,
-		); err != nil {
-			return fmt.Errorf("failed to fill pending_events.app_id: %w", err)
-		}
-	}
-	if _, err := s.DB.Exec(`CREATE INDEX IF NOT EXISTS idx_pending_events_app_id ON pending_events(app_id)`); err != nil {
-		return fmt.Errorf("failed to index pending_events.app_id: %w", err)
-	}
-	return nil
+	defer db.Close()
+	return dbcheck.RequireColumn(db, "pending_events", "app_id")
 }
 
 // pendingAppID is the app id of a listing event: d on an app, i on a release
@@ -378,44 +332,12 @@ func Validate(filters ...nostr.Filter) error {
 }
 
 // queryBuilder rejects a search. Otherwise it builds the same queries as
-// [sqlite.DefaultQueryBuilder], except for the tags in [existsTags]. Hidden
-// events match: the relay's own reads need every slot.
+// [sqlite.DefaultQueryBuilder], except for the tags in [existsTags].
 func queryBuilder(filters ...nostr.Filter) ([]sqlite.Query, error) {
-	return buildQueries(filters, false)
+	return buildQueries(filters)
 }
 
-// QueryVisible is [sqlite.Store.Query] for a REQ: a filter that names no
-// author skips hidden events, so a client sees one slot per app. A filter
-// naming authors keeps them: publishers read their own listing either way.
-func (s T) QueryVisible(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error) {
-	queries, err := buildQueries(filters, true)
-	if err != nil {
-		return nil, err
-	}
-	var out []nostr.Event
-	for _, q := range queries {
-		rows, err := s.DB.QueryContext(ctx, q.SQL, q.Args...)
-		if err != nil {
-			return out, fmt.Errorf("failed to fetch events: %w", err)
-		}
-		for rows.Next() {
-			var e nostr.Event
-			if err := rows.Scan(&e.ID, &e.PubKey, &e.CreatedAt, &e.Kind, &e.Tags, &e.Content, &e.Sig); err != nil {
-				rows.Close()
-				return out, fmt.Errorf("failed to scan event row: %w", err)
-			}
-			out = append(out, e)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return out, fmt.Errorf("failed to scan event rows: %w", err)
-		}
-	}
-	return out, nil
-}
-
-func buildQueries(filters nostr.Filters, visible bool) ([]sqlite.Query, error) {
+func buildQueries(filters nostr.Filters) ([]sqlite.Query, error) {
 	if err := Validate(filters...); err != nil {
 		return nil, err
 	}
@@ -425,9 +347,6 @@ func buildQueries(filters nostr.Filters, visible bool) ([]sqlite.Query, error) {
 	queries := make([]sqlite.Query, 0, len(filters))
 	for _, filter := range filters {
 		conds, args := filterSQL(filter)
-		if visible && len(filter.Authors) == 0 {
-			conds = append(conds, "e.hidden = 0")
-		}
 		query := "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig FROM events AS e"
 		if len(conds) > 0 {
 			query += " WHERE " + strings.Join(conds, " AND ")

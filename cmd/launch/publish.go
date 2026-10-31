@@ -10,7 +10,6 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/zapstore/relay/pkg/events"
 	"github.com/zapstore/relay/pkg/policy"
-	"github.com/zapstore/relay/pkg/relay"
 	"github.com/zapstore/relay/pkg/relay/store"
 )
 
@@ -69,9 +68,6 @@ func storeAll(ctx context.Context, t term, relayData, catalogKey string, evs []n
 		if (i+1)%500 == 0 {
 			t.say("  %d of %d", i+1, len(evs))
 		}
-	}
-	if err := relay.SelectAll(ctx, db, catalogKey); err != nil {
-		return rep, err
 	}
 	return rep, nil
 }

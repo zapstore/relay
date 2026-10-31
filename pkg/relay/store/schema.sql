@@ -11,18 +11,19 @@ DROP TRIGGER IF EXISTS app_fts_ad;
 -- Pending events are the buffer zone: received but not yet promoted to the
 -- main event table. A listing (kind 32267, 30063, and 3063) and a new active
 -- kind 30509 stay here until promotion. Pending events are not served.
--- The app_id column and its index are added in Go: an older table lacks app_id.
 CREATE TABLE IF NOT EXISTS pending_events (
     id          TEXT    PRIMARY KEY,    -- event id (sha256)
     kind        INTEGER NOT NULL,       -- event kind, for efficient filtering during promotion
     raw         TEXT    NOT NULL,       -- full event JSON
-    received_at INTEGER NOT NULL        -- unix timestamp of when we received the event
+    received_at INTEGER NOT NULL,       -- unix timestamp of when we received the event
+    app_id      TEXT    NOT NULL DEFAULT '' -- the app a listing event names: d on an app, i on a release or asset
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_events_kind        ON pending_events(kind);
 CREATE INDEX IF NOT EXISTS idx_pending_events_received_at ON pending_events(received_at);
+CREATE INDEX IF NOT EXISTS idx_pending_events_app_id      ON pending_events(app_id);
 
--- Slot selection is events.hidden now, added in Go.
+-- Older builds hid the losing slot in events.hidden. A one-off script dropped it before the release-chain deploy.
 DROP TRIGGER IF EXISTS listings_ai;
 DROP TRIGGER IF EXISTS listings_ad;
 DROP TABLE IF EXISTS listings;

@@ -27,7 +27,7 @@ This process runs it after the blacklist, on listing events (kind `32267`,
 `30063`, `3063`) and on Blossom uploads. `RELAY_PUBKEY` is the catalog key.
 A key on the whitelist, or one that has already published a kind `32267`,
 is not sent to Vertex. A listing event for an app id that already has a
-kind `32267` skips the gate; the C1 check still decides the developer slot.
+kind `32267` skips the gate; the C1 check still decides who may publish as the developer.
 An upload from the active C1 owner or delegate of a certificate on such an
 app is accepted, because the upload names no app id. The operator adds a key with `allow` on `relay.sock`
 or from the webapp's `/admin`, which sends it there. `disallow` removes it. `allowed` lists the keys.
@@ -68,9 +68,10 @@ goes when 1.1.3 does.
 ## Buffer zone
 
 Developer listing events, their files, and a new active kind `30509` wait
-in the buffer zone until promotion, as [Catalog](../product/specs/catalog.md#selection)
-defines. A catalog-key listing is stored when it arrives. It is not held
-for a check the relay does not run on that key. An upload lands on local
+in the buffer zone until promotion, as [Catalog](../product/specs/catalog.md#the-release-chain)
+defines. A catalog-key listing waits there for its event checks only and is
+promoted the moment they pass; a failing event is dropped. Nothing reads its
+APK before promotion, and processing runs after. An upload lands on local
 disk and is not served until a stored or promoted listing names it.
 Promotion serves a developer listing and marks the files to move;
 a mover uploads them to Bunny when it is set, then deletes the local copy.
@@ -111,14 +112,11 @@ release is listed. A refusal drops the release with its reason. A
 release whose every file is already listed, by the same test, is not
 processed again. Results are kept in memory by release id.
 
-No store may hold the signing key of a developer APK.
-`pkg/relay/signers.txt` lists what shows one: F-Droid's build-key subject
-and store certificates, which are refused, and the marks Play adds on
-delivery, its source stamp and frosting, which are not: a developer listing
-has a C1 proof signed with the certificate key, which shows the developer
-holds it. The refusal is `third-party signer: <store>, by its <mark>`. Since the read is remembered, sending the release again is
-refused at once. `cmd/signers` reports which stored or local APKs the
-rules match.
+The relay does not check who holds an APK's signing key. A developer
+listing is promoted only with a C1 proof signed by the certificate key, so a
+key a store holds, like F-Droid's per-app build keys, cannot be promoted: no
+developer can sign that proof. The relay does not read the catalog key's
+APKs; the indexer decides what it publishes for them.
 
 The indexer writes each APK it verified to `apk-cache` before publishing
 it; the relay adds the ones it downloads from a `url`. Nothing prunes it
@@ -148,7 +146,7 @@ first byte is the control channel.
 
 ## Search
 
-The relay ranks its selected listings, as [Search](../product/specs/search.md#relay)
+The relay ranks its listings, as [Search](../product/specs/search.md#relay)
 defines, for a NIP-50 REQ on kind `32267`. Vectors and facts come from `artifacts.db`.
 The query encoder is the enricher's, loaded at start from `LEAF_MODEL_DIR`
 with `ONNXRUNTIME_LIB`; the relay does not start without it. Before it
@@ -160,25 +158,15 @@ is ranked within a minute, without waiting for a snapshot. Queries are not logge
 
 ## Queries
 
-A REQ reads the promoted event table, then applies [selection](../product/specs/catalog.md#selection)
-to kinds `32267`, `30063`, and `3063`: for an app id, it returns only events
-signed by the selected listing's pubkey. Only an app with listings from
-two pubkeys needs the choice. A filter whose `authors` names the signer keeps that signer's
-events, so a publisher can read its own listing. Bundles and search use the
-selected catalog only.
-
-Selection is stored on write, not decided per REQ. Table `listings` holds
-one row per app id with a kind `32267`: the selected kind `30063`, or NULL
-when no listing is complete. Its signer holds the slot. Triggers on `events`
-clear an app's row when any of its three kinds is inserted or deleted, by
-any writer. The relay fills every app with no row after each event, after
-each promotion, on each sweep, after a ban, and at start, reading and writing in one
-transaction, so a write that lands in between fails the fill rather than
-leaving a stale row. A REQ drops the events of other signers; an app with
-no selected release is not filtered. The webapp reads the same table.
+A REQ reads the promoted event table and returns every stored event that
+matches, from every pubkey. Several pubkeys may add to one app id: the
+catalog key, the active C1 owner, and its delegate. The relay does not
+choose among them on a REQ. The [release chain](../product/specs/catalog.md#the-release-chain)
+is read for bundles, live reads, and search: the head is the release with the
+greatest `version_code`, and on a tie the later release, with the `32267` it names.
 
 `listing:all` and `listing:asset` in `search` are a [live read](../product/specs/catalog.md#live-read):
-snapshot events for each selected app, and no ranking. `listing:asset` sends
+snapshot events for each app, and no ranking. `listing:asset` sends
 the kind `32267` and the one latest kind `3063`. The vague-filter check runs
 on the filter as it arrived, so either token alone is specific enough. A
 query that still has text is a search, and both tokens do nothing.
@@ -218,7 +206,7 @@ written.
 
 ## Deletion
 
-A kind `5` that deletes the current developer-slot listing,
+A kind `5` that deletes a listing of the active owner or delegate,
 `32267:<that-pubkey>:<app-id>`, removes every listing for that app id.
 The kind `5` stays, and the indexer reads it. The signer is the owner or
 delegate who published that listing. A proof
@@ -247,7 +235,7 @@ The relay, on `CATALOG_BUNDLE_INTERVAL` (default five minutes):
 
 1. Loads listing events, kind `30509`, kind `0`, the catalog key's kind
    `30267`, and the catalog key's kind `10067`.
-2. Applies [selection](../product/specs/catalog.md#selection).
+2. Applies the [release chain](../product/specs/catalog.md#the-release-chain).
 3. Compares it with the previous snapshot. An unchanged catalog writes nothing.
 4. Otherwise writes snapshot `N` and the signed bundle `(N-1)-N`.
 

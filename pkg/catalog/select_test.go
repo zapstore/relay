@@ -52,9 +52,10 @@ func TestDeveloperListingNeedsTheAppCertificate(t *testing.T) {
 		tags := nostr.Tags{{"version_code", code}}
 		tags = append(tags, certTags...)
 		return Listing{
-			AppID:  "com.example.app",
-			App:    nostr.Event{ID: pub, PubKey: pub},
-			Assets: []nostr.Event{{Kind: events.KindAsset, Tags: tags}},
+			AppID:   "com.example.app",
+			App:     nostr.Event{ID: pub, PubKey: pub},
+			Release: nostr.Event{ID: pub, PubKey: pub, CreatedAt: nostr.Timestamp(len(code))},
+			Assets:  []nostr.Event{{Kind: events.KindAsset, Tags: tags}},
 		}
 	}
 	indexer := listing(catalogKey, "5", nostr.Tag{"apk_certificate_hash", newCert})
@@ -70,8 +71,9 @@ func TestDeveloperListingNeedsTheAppCertificate(t *testing.T) {
 		t.Fatal("a developer listing whose lineage names the app certificate was dropped")
 	}
 	same := listing(developer, "5", nostr.Tag{"apk_certificate_hash", newCert})
+	same.Release.CreatedAt = indexer.Release.CreatedAt + 1
 	if got, _ := chooseListing([]Listing{indexer, same}, catalogKey); got.App.PubKey != developer {
-		t.Fatal("the developer slot loses a tie")
+		t.Fatal("the later release loses a tie")
 	}
 	if got, ok := chooseListing([]Listing{stale}, catalogKey); !ok || got.App.PubKey != developer {
 		t.Fatal("a developer-only app pins its own certificate")

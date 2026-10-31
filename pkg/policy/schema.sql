@@ -11,9 +11,13 @@ CREATE TABLE IF NOT EXISTS banned_hashes (
     reason TEXT NOT NULL
 );
 
+-- kind and id are the publisher a notice came from, so lifting that ban drops
+-- it. A notice written before them has an empty publisher.
 CREATE TABLE IF NOT EXISTS ban_notices (
     app_id TEXT PRIMARY KEY,
-    reason TEXT NOT NULL
+    reason TEXT NOT NULL,
+    kind   TEXT NOT NULL DEFAULT '',
+    id     TEXT NOT NULL DEFAULT ''
 );
 
 -- Nostr keys that may publish without a web of trust score.

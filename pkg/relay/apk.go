@@ -20,37 +20,14 @@ var maxAPK int64 = 500_000_000
 type signing []*x509.Certificate
 
 // readSigning verifies an APK and returns its chain. An APK with more than one
-// current signer is refused, and so is one a store signed or delivered: the
-// error is then a [thirdPartyError]. For a delivery mark the chain is
-// returned with the error.
+// current signer is refused. Who holds the key is not checked here: a developer
+// listing is promoted only with a C1 proof signed by the certificate key.
 func readSigning(r io.ReadSeeker) (signing, error) {
 	res, err := apkverifier.VerifyReader(r, nil)
 	if err != nil {
 		return nil, fmt.Errorf("apk: %w", err)
 	}
-	chain, err := signingChain(res)
-	if err != nil {
-		return nil, err
-	}
-	if err := storeSigner(storeSigners, chain, res.SigningBlockResult); err != nil {
-		var store *thirdPartyError
-		if errors.As(err, &store) && store.delivery {
-			return chain, err
-		}
-		return nil, err
-	}
-	return chain, nil
-}
-
-// StoreSigner reads an APK and returns the store that signed or delivered
-// it, with the refusal promotion gives, or "" when none did.
-func StoreSigner(r io.ReadSeeker) (label, reason string, err error) {
-	_, err = readSigning(r)
-	var store *thirdPartyError
-	if errors.As(err, &store) {
-		return store.label, store.Error(), nil
-	}
-	return "", "", err
+	return signingChain(res)
 }
 
 func signingChain(res apkverifier.Result) (signing, error) {

@@ -9,3 +9,4 @@ CREATE TABLE IF NOT EXISTS blobs (
 
 CREATE INDEX IF NOT EXISTS idx_blobs_auth_pubkey ON blobs(auth_pubkey);
 CREATE INDEX IF NOT EXISTS idx_blobs_type        ON blobs(type);
+CREATE INDEX IF NOT EXISTS idx_blobs_state       ON blobs(state);
