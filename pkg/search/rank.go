@@ -24,7 +24,7 @@ const (
 	FactScore       = 18_000
 	HardFactScore   = 54_000
 	MinSearchLength = 2
-	Limit           = 12
+	Limit           = 20
 )
 
 // Fact bits. 1<<3 was accountless, 1<<4 tracking, 1<<5 decentralized,
@@ -157,8 +157,10 @@ func Parse(raw string) Parsed {
 }
 
 // Rank orders apps for query, the residual text. Hard bits must all be set
-// and exclude bits clear; a hard filter keeps apps under the vector cutoff,
-// since it already chose the set.
+// and exclude bits clear. A hard filter narrows the text's results and never
+// widens them: with residual text, an app still needs a text hit or a vector
+// over the cutoff. Only a query that is nothing but fact phrases (an empty
+// residual) lets the filter choose the set.
 func Rank(apps []App, query string, vector []int8, boost, limit, penalty int, admitAll bool, hard, exclude int) []App {
 	if limit == 0 {
 		return nil
@@ -166,7 +168,7 @@ func Rank(apps []App, query string, vector []int8, boost, limit, penalty int, ad
 	if len(vector) != VectorDims {
 		vector = nil
 	}
-	keepAll := admitAll || hard != 0 || query == ""
+	keepAll := admitAll || query == ""
 	type scored struct {
 		app   App
 		score int
