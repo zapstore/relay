@@ -46,6 +46,21 @@ func TestListingCertificate(t *testing.T) {
 	if err := hook(nil, slotAsset(catalog, appID, successor)); err != nil {
 		t.Fatalf("the indexer moves the pin at promotion: %v", err)
 	}
+
+	known := "fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c"
+	err := hook(nil, slotAsset(owner, "com.example.new", known))
+	var refusal knownKeyError
+	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "debug.keystore") {
+		t.Fatalf("known key: %v", err)
+	}
+	if err := hook(nil, slotAsset(catalog, "com.example.new", known)); err != nil {
+		t.Fatalf("the indexer may list a known key: %v", err)
+	}
+	away := slotAsset(owner, "com.example.new", successor)
+	away.Tags = append(away.Tags, nostr.Tag{"apk_certificate_ancestor", known})
+	if err := hook(nil, away); err != nil {
+		t.Fatalf("a rotation away from a known key: %v", err)
+	}
 }
 
 func TestSupersedeKeepsTheCurrentListingWholeAndOlderReleases(t *testing.T) {

@@ -567,9 +567,125 @@ func TestClaimIsCheckedAgainstThePromotedAPK(t *testing.T) {
 	if !slotHas(t, r.store, proof.ID) {
 		t.Fatal("the claim was not promoted")
 	}
-	// NIP-C1 signature verification is off until relay-c1-check.
-	if !slotHas(t, r.store, forged.ID) {
-		t.Fatal("a proof naming the apk certificate was not promoted")
+	if slotHas(t, r.store, forged.ID) {
+		t.Fatal("a proof the certificate did not sign was promoted")
+	}
+	if kept, _ := pendingHas(t.Context(), r.store, forged.ID); kept {
+		t.Fatal("a proof the certificate did not sign is still pending")
+	}
+
+	// The APK is read now, so a forged proof is refused in its reply.
+	again := stranger.proof(t, "6", strings.Repeat("d", 64), "")
+	again.Tags[0] = nostr.Tag{"d", key.hash}
+	if res := r.persist(nil, again); res.ok || !strings.HasPrefix(res.msg, "kind 30509: certificate signature") {
+		t.Fatalf("forged after the read: %+v", res)
+	}
+}
+
+func TestProofForAKnownKeyIsRefused(t *testing.T) {
+	r := testRelay(t, newFakeBlossom())
+	proof := newTestKey(t).proof(t, "4", ownerKey, "")
+	proof.Tags[0] = nostr.Tag{"d", "fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c"}
+	res := r.persist(nil, proof)
+	if res.ok || !strings.Contains(res.msg, "publicly known") || !strings.Contains(res.msg, "debug.keystore") {
+		t.Fatalf("res %+v", res)
+	}
+	if kept, _ := pendingHas(t.Context(), r.store, proof.ID); kept {
+		t.Fatal("a proof for a known key is pending")
+	}
+}
+
+func TestExemptDeveloperPublishesWithoutAProof(t *testing.T) {
+	blobs := newFakeBlossom()
+	r := testRelay(t, blobs)
+	key := newTestKey(t)
+	r.readAPK = readChains(t, map[string]signing{"old": {key.cert}, "new": {key.cert}})
+	app, release, old := testTriple("o", ownerKey, blobs.put("old"), key.hash, 1)
+	for _, e := range []*nostr.Event{app, release, old} {
+		saveSlotEvent(t, r.store, *e)
+	}
+
+	stranger := strings.Repeat("b", 64)
+	for _, pub := range []string{stranger, ownerKey} {
+		asset := testAsset(pub[:1], pub, blobs.put("new"), key.hash, 2)
+		next := testRelease(pub[:1], pub, "1.1.0", "main", asset.ID)
+		next.CreatedAt = 20
+		r.holdListing(t.Context(), asset)
+		reply := r.holdListing(t.Context(), next)
+		drainReads(t, r)
+		if got, want := slotHas(t, r.store, next.ID), pub == ownerKey; got != want {
+			t.Fatalf("%s: promoted %v, want %v", pub[:1], got, want)
+		}
+		// Only the exempt key is warned that the exemption will end.
+		warned := strings.Contains(reply.msg, "warning: no NIP-C1 proof names this key for certificate "+key.hash)
+		if warned != (pub == ownerKey) || !reply.ok || !strings.HasPrefix(reply.msg, msgListingPending) {
+			t.Fatalf("%s: reply %+v, warned %v", pub[:1], reply, warned)
+		}
+	}
+
+	// An active proof from another key ends the exemption for this app.
+	saveSlotEvent(t, r.store, *key.proof(t, "4", stranger, ""))
+	asset := testAsset("p", ownerKey, blobs.put("new"), key.hash, 3)
+	next := testRelease("p", ownerKey, "1.2.0", "main", asset.ID)
+	next.CreatedAt = 30
+	r.holdListing(t.Context(), asset)
+	r.holdListing(t.Context(), next)
+	drainReads(t, r)
+	if slotHas(t, r.store, next.ID) {
+		t.Fatal("the exempt key published past another key's active proof")
+	}
+}
+
+func TestExemptDeveloperEndsWithAProofForTheCertificate(t *testing.T) {
+	r := testRelay(t, newFakeBlossom())
+	cert := strings.Repeat("e", 64)
+	other := strings.Repeat("f", 64)
+	dev, delegate, fresh := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("d", 64)
+	appEvent := func(n, pub, appID string) {
+		saveSlotEvent(t, r.store, nostr.Event{ID: strings.Repeat(n, 64), PubKey: pub, Kind: events.KindApp, Tags: nostr.Tags{{"d", appID}}})
+	}
+	proof := func(n, pub, d string, extra ...nostr.Tag) {
+		saveSlotEvent(t, r.store, nostr.Event{
+			ID: strings.Repeat(n, 64), PubKey: pub, Kind: events.KindIdentityProof,
+			Tags: append(nostr.Tags{{"d", d}, {"revoked"}}, extra...),
+		})
+	}
+	exempt := func(pub, appID string) bool {
+		got, err := exemptDeveloper(t.Context(), r.store, catalogKey, appID, cert)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got == pub
+	}
+
+	appEvent("1", dev, testApp)
+	appEvent("2", catalogKey, "com.example.catalog")
+	appEvent("3", delegate, "com.example.delegated")
+	appEvent("4", fresh, "com.example.fresh")
+	if !exempt(dev, testApp) {
+		t.Fatal("a key listed with no proof is not exempt")
+	}
+	if exempt(catalogKey, "com.example.catalog") {
+		t.Fatal("the catalog key is exempt")
+	}
+
+	// A proof for another certificate does not end it for this app.
+	proof("5", dev, other)
+	if !exempt(dev, testApp) {
+		t.Fatal("a proof for another certificate ended the exemption")
+	}
+	// A revoked proof for this certificate does.
+	proof("6", dev, cert)
+	if exempt(dev, testApp) {
+		t.Fatal("a key that revoked its proof is exempt")
+	}
+	// So does being named as the delegate of one.
+	proof("7", strings.Repeat("c", 63)+"9", cert, nostr.Tag{"delegation", delegate})
+	if exempt(delegate, "com.example.delegated") {
+		t.Fatal("a delegate of a lapsed proof is exempt")
+	}
+	if got, _ := exemptDeveloper(t.Context(), r.store, catalogKey, "com.example.missing", cert); got != "" {
+		t.Fatalf("an app with no kind 32267 has exempt key %s", got)
 	}
 }
 

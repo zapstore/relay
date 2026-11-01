@@ -12,8 +12,6 @@ import (
 	"github.com/zapstore/relay/pkg/events"
 )
 
-const mainChannel = "main"
-
 // State is the canonical catalog at one snapshot.
 type State struct {
 	Listings []Listing
@@ -311,7 +309,7 @@ func selectListing(appID string, app nostr.Event, releases []nostr.Event, assets
 		if err != nil {
 			continue
 		}
-		if release.I != appID || release.Channel != mainChannel || release.Version == "" ||
+		if release.I != appID || events.ReleaseChannel(releaseEvent.Tags) != events.MainChannel || release.Version == "" ||
 			release.D != release.I+"@"+release.Version || len(release.AssetIDs) == 0 {
 			continue
 		}

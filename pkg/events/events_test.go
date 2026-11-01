@@ -484,3 +484,29 @@ func TestParseCommunityCreation_MalformedRefsDropped(t *testing.T) {
 		t.Errorf("expected no badges, got %v", c.Sections[0].Badges)
 	}
 }
+
+func TestReleaseChannelDefaultsToMain(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tags nostr.Tags
+		want string
+	}{
+		"no tag":  {nostr.Tags{{"i", "a"}}, MainChannel},
+		"empty":   {nostr.Tags{{"c", ""}}, MainChannel},
+		"main":    {nostr.Tags{{"c", "main"}}, MainChannel},
+		"nightly": {nostr.Tags{{"c", "nightly"}}, "nightly"},
+	} {
+		if got := ReleaseChannel(tc.tags); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestReleaseWithoutChannelIsValid(t *testing.T) {
+	asset := strings.Repeat("a", 64)
+	event := &nostr.Event{Kind: KindRelease, Tags: nostr.Tags{
+		{"i", "com.example.app"}, {"version", "1.0.0"}, {"d", "com.example.app@1.0.0"}, {"e", asset},
+	}}
+	if err := ValidateRelease(event); err != nil {
+		t.Fatalf("a release with no c tag: %v", err)
+	}
+}

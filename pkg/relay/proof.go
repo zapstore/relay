@@ -20,6 +20,10 @@ const msgProofPending = "the proof will be saved when it is checked against an A
 // checked against an APK: the promoted APK of an app listed with its
 // certificate, else the buffered APK of the listing it came with.
 func (r *T) holdProof(ctx context.Context, event *nostr.Event) persistResult {
+	cert, _ := events.Find(event.Tags, "d")
+	if err := proofKnownKey(cert); err != nil {
+		return persistResult{msg: err.Error()}
+	}
 	found, err := r.proofHasAPK(ctx, event)
 	if err != nil {
 		slog.Error("relay: failed to look up the proof's apk", "event", event.ID, "error", err)
@@ -37,9 +41,13 @@ func (r *T) holdProof(ctx context.Context, event *nostr.Event) persistResult {
 		return persistResult{msg: ErrInternal.Error()}
 	}
 
-	if _, err := r.promoteClaim(ctx, *event, event.ID); err != nil {
+	refusal, err := r.promoteClaim(ctx, *event, event.ID)
+	if err != nil {
 		slog.Error("relay: failed to promote proof", "event", event.ID, "error", err)
 		return persistResult{msg: ErrInternal.Error()}
+	}
+	if refusal != "" {
+		return persistResult{msg: refusal}
 	}
 	if err := r.promoteListingsBy(ctx, proofPublishers(*event), event.ID); err != nil {
 		slog.Error("relay: failed to promote listing with proof", "event", event.ID, "error", err)
@@ -96,36 +104,44 @@ func (r *T) proofHasAPK(ctx context.Context, proof *nostr.Event) (bool, error) {
 }
 
 // promoteClaim checks a pending proof against the newest APK listed with its
-// certificate. It reports whether the proof was promoted. An APK not read
-// yet is queued for the reader.
-func (r *T) promoteClaim(ctx context.Context, proof nostr.Event, skipBroadcast string) (bool, error) {
+// certificate. A proof that the certificate did not sign is dropped, and
+// refusal is the reason. An APK not read yet is queued for the reader.
+func (r *T) promoteClaim(ctx context.Context, proof nostr.Event, skipBroadcast string) (refusal string, err error) {
 	cert, _ := events.Find(proof.Tags, "d")
 	assets, err := r.listedAssets(ctx, cert, 1)
 	if err != nil || len(assets) == 0 {
-		return false, err
+		return "", err
 	}
 	x, _ := events.Find(assets[0].Tags, "x")
 	chain, readErr, ok := r.apkSigning(x, r.assetURL(assets[0].Tags))
 	if !ok || readErr != "" {
-		return false, nil
+		return "", nil
 	}
 	if c := chain.cert(strings.ToLower(cert)); c != nil {
 		return r.commitCheckedProof(ctx, proof, c, skipBroadcast)
 	}
-	return false, nil
+	return "", nil
 }
 
 // commitCheckedProof promotes a proof whose d tag names cert, a certificate
-// read from an APK. NIP-C1 signature verification is off until relay-c1-check,
-// so a proof that does not verify is still stored.
-func (r *T) commitCheckedProof(ctx context.Context, proof nostr.Event, cert *x509.Certificate, skipBroadcast string) (bool, error) {
-	if err := events.VerifyIdentityProof(&proof, cert); err != nil {
-		slog.Warn("proof: NIP-C1 check skipped", "event", proof.ID, "error", err)
+// read from an APK, once cert's key is shown to have signed it.
+func (r *T) commitCheckedProof(ctx context.Context, proof nostr.Event, cert *x509.Certificate, skipBroadcast string) (refusal string, err error) {
+	if reason, err := r.refuseUnsignedProof(ctx, proof, cert); err != nil || reason != "" {
+		return reason, err
 	}
-	if err := r.commitProof(ctx, proof, skipBroadcast); err != nil {
-		return false, err
+	return "", r.commitProof(ctx, proof, skipBroadcast)
+}
+
+// refuseUnsignedProof drops a pending proof that cert's key did not sign and
+// returns the reason. It returns "" for a proof that verifies.
+func (r *T) refuseUnsignedProof(ctx context.Context, proof nostr.Event, cert *x509.Certificate) (string, error) {
+	verifyErr := events.VerifyIdentityProof(&proof, cert)
+	if verifyErr == nil {
+		return "", nil
 	}
-	return true, nil
+	reason := "kind 30509: " + verifyErr.Error()
+	slog.Warn("proof refused", "event", proof.ID, "pubkey", proof.PubKey, "reason", reason)
+	return reason, r.store.DeletePending(ctx, proof.ID)
 }
 
 func (r *T) commitProof(ctx context.Context, proof nostr.Event, skipBroadcast string) error {
@@ -148,9 +164,8 @@ func (r *T) commitProof(ctx context.Context, proof nostr.Event, skipBroadcast st
 	return nil
 }
 
-// checkedProofs returns the pending proofs whose d tag is in chain.
-// NIP-C1 signature verification is off until relay-c1-check, so a proof
-// that does not verify is still returned.
+// checkedProofs returns the pending proofs whose d tag is in chain and whose
+// certificate signed them. A proof that does not verify is dropped.
 func (r *T) checkedProofs(ctx context.Context, chain signing) ([]nostr.Event, error) {
 	pending, err := r.store.QueryPending(ctx, events.KindIdentityProof)
 	if err != nil {
@@ -163,8 +178,12 @@ func (r *T) checkedProofs(ctx context.Context, chain signing) ([]nostr.Event, er
 		if cert == nil {
 			continue
 		}
-		if err := events.VerifyIdentityProof(&proof, cert); err != nil {
-			slog.Warn("proof: NIP-C1 check skipped", "event", proof.ID, "error", err)
+		reason, err := r.refuseUnsignedProof(ctx, proof, cert)
+		if err != nil {
+			return nil, err
+		}
+		if reason != "" {
+			continue
 		}
 		out = append(out, proof)
 	}

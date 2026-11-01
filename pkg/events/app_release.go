@@ -8,6 +8,19 @@ import (
 
 const KindRelease = 30063
 
+// MainChannel is the only release channel the catalog relay accepts. A
+// release with no c tag is on it.
+const MainChannel = "main"
+
+// ReleaseChannel is the channel a kind 30063 names: its c tag, or MainChannel
+// when it has none or an empty one.
+func ReleaseChannel(tags nostr.Tags) string {
+	if channel, ok := Find(tags, "c"); ok && channel != "" {
+		return channel
+	}
+	return MainChannel
+}
+
 // Release represents a parsed Software Release event (kind 30063).
 // Learn more here: https://github.com/franzaps/nips/blob/applications/82.md
 type Release struct {
@@ -15,7 +28,7 @@ type Release struct {
 	I        string   // App identifier (must match 'd' tag from application)
 	Version  string   // Release version (e.g., "1.2.3", "v0.1.2-rc1")
 	D        string   // Identifier@version
-	Channel  string   // Channel ID
+	Channel  string   // Channel ID; empty when the event has no c tag, which means MainChannel
 	AssetIDs []string // Asset event IDs (at least one required)
 
 	// Content
@@ -32,9 +45,6 @@ func (r Release) Validate() error {
 	}
 	if r.D == "" {
 		return fmt.Errorf("missing or empty 'd' tag")
-	}
-	if r.Channel == "" {
-		return fmt.Errorf("missing or empty 'c' tag (channel ID)")
 	}
 	if len(r.AssetIDs) == 0 {
 		return fmt.Errorf("missing 'e' tag (asset ID)")

@@ -7,7 +7,8 @@ and bundles, serves `GET /v1/bundle`, answers search, and deletes old APKs.
 An app, release, asset, or stack is stored only when it includes
 `android-arm64-v8a`. Other `f` tags may be present. An event with no
 `android-arm64-v8a` tag is rejected. A kind `30063` on a channel other than
-`main` is rejected ([Catalog](../product/specs/catalog.md#listing)).
+`main` is rejected in the `OK` reply ([Catalog](../product/specs/catalog.md#listing)).
+A release with no `c` tag is on `main`.
 
 Device-private events need NIP-13 proof of work at difficulty 20, counted
 on the event id: every kind `30078`, and a kind `30267` with content. A
@@ -115,7 +116,8 @@ processed again. Results are kept in memory by release id.
 The relay does not check who holds an APK's signing key. A developer
 listing is promoted only with a C1 proof signed by the certificate key, so a
 key a store holds, like F-Droid's per-app build keys, cannot be promoted: no
-developer can sign that proof. The relay does not read the catalog key's
+developer can sign that proof. Until C1 is required, an app's exempt key (below)
+is the one exception. The relay does not read the catalog key's
 APKs; the indexer decides what it publishes for them.
 
 The indexer writes each APK it verified to `apk-cache` before publishing
@@ -131,9 +133,29 @@ app, else against the buffered APK of the listing it came with. The relay
 reads that certificate from the file itself: from the buffer zone, else
 from Bunny, else from the asset's `url`. Only the newest listed APK with
 that certificate is read. A proof with neither APK is refused. `cert` is
-ignored. Signature verification against that certificate is off until
-`relay-c1-check`: a proof whose `d` names a certificate in the APK is
-promoted.
+ignored. The certificate's key must have signed the proof. A proof it did not
+sign is dropped, and the reply, or the reply to the next send, says why.
+
+A certificate whose private key is public cannot name a developer. Those
+hashes are in `pkg/relay/known_keys.txt`: the debug keystore of the React
+Native and Expo templates, the AOSP test keys, and the platform keys Google's
+APVI report named in 2022. Each has where the key is published. The relay refuses a kind `30509` whose `d` is one, and a
+developer asset whose `apk_certificate_hash` is one, in the `OK` reply. The
+indexer's listings for them are not touched.
+
+Until C1 is required of every developer, a key that signed an app's kind
+`32267` (other than the catalog key) is that app's exempt key when no kind
+`30509` for the app's certificate names it as owner or delegate, active,
+expired, or revoked. With no active proof for the app's certificate, the
+exempt key publishes as the developer, with no delegate. Any active proof ends
+the exemption for that app, and a proof the key sends is checked like any
+other. A new developer cannot become exempt: its kind `32267` is stored only
+once it is the developer. This is a query in `exemptDeveloper`, not stored
+state; removing it requires C1 of everyone.
+
+Each listing event the exempt key sends is answered `OK` true with a message
+ending `warning: no NIP-C1 proof names this key for certificate <hash>`, after
+`pending:` when the listing waits. No other signer gets it.
 
 ## Local client
 

@@ -43,6 +43,40 @@ func TestSelectListingKeepsVariantAsset(t *testing.T) {
 	}
 }
 
+func TestSelectListingSkipsOtherChannels(t *testing.T) {
+	const (
+		appID   = "com.example.app"
+		pubkey  = "aa9047325603dacd4f8142093567973566de3b1e20a89557b728c3be4c6a844b"
+		assetID = "fe6469842079b0fc4f5ea0d30518c720f239324235a81a1359e2969dd2ac0546"
+	)
+	app := nostr.Event{Kind: events.KindApp, PubKey: pubkey, Tags: nostr.Tags{{"d", appID}}}
+	asset := nostr.Event{ID: assetID, Kind: events.KindAsset, PubKey: pubkey, Tags: nostr.Tags{
+		{"i", appID}, {"x", strings.Repeat("ab", 32)}, {"version", "1.0.0"}, {"f", "android-arm64-v8a"},
+		{"version_code", "1"}, {"apk_certificate_hash", strings.Repeat("cd", 32)},
+	}}
+	release := func(channel ...string) nostr.Event {
+		tags := nostr.Tags{{"i", appID}, {"version", "1.0.0"}, {"d", appID + "@1.0.0"}, {"e", assetID}}
+		for _, c := range channel {
+			tags = append(tags, nostr.Tag{"c", c})
+		}
+		return nostr.Event{Kind: events.KindRelease, PubKey: pubkey, Tags: tags}
+	}
+	for name, want := range map[string]struct {
+		release nostr.Event
+		listed  bool
+	}{
+		"main":        {release("main"), true},
+		"no c tag":    {release(), true},
+		"empty c tag": {release(""), true},
+		"beta":        {release("beta"), false},
+	} {
+		_, ok := selectListing(appID, app, []nostr.Event{want.release}, map[string]nostr.Event{assetID: asset})
+		if ok != want.listed {
+			t.Errorf("%s: listed %v, want %v", name, ok, want.listed)
+		}
+	}
+}
+
 func TestDeveloperListingNeedsTheAppCertificate(t *testing.T) {
 	catalogKey := strings.Repeat("11", 32)
 	developer := strings.Repeat("22", 32)

@@ -78,8 +78,9 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 		slog.Error("relay: failed to check promoted listing", "event", event.ID, "error", err)
 		return persistResult{msg: ErrInternal.Error()}
 	}
+	warning := r.c1Warning(ctx, event, appID)
 	if stored {
-		return persistResult{ok: true, broadcast: true}
+		return persistResult{ok: true, broadcast: true, msg: warning}
 	}
 	kept, err := pendingHas(ctx, r.store, event.ID)
 	if err != nil {
@@ -90,7 +91,7 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 		if reason, ok := refused[event.ID]; ok {
 			return persistResult{msg: reason}
 		}
-		return persistResult{ok: true}
+		return persistResult{ok: true, msg: warning}
 	}
 	if event.Kind == events.KindAsset && r.assetURL(event.Tags) == "" {
 		ready, err := r.assetInBlossom(ctx, event)
@@ -99,10 +100,57 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 			return persistResult{msg: ErrInternal.Error()}
 		}
 		if !ready {
-			return persistResult{ok: true, msg: msgBlobPending}
+			return persistResult{ok: true, msg: joinReply(msgBlobPending, warning)}
 		}
 	}
-	return persistResult{ok: true, msg: msgListingPending}
+	return persistResult{ok: true, msg: joinReply(msgListingPending, warning)}
+}
+
+func joinReply(msg, warning string) string {
+	if warning == "" {
+		return msg
+	}
+	return msg + ". " + warning
+}
+
+// c1Warning is the reply to the app's exempt developer, who publishes with no
+// NIP-C1 proof for the app's certificate. The exemption is temporary, so the
+// relay says so while it still accepts the listing. Any other signer gets "".
+// The warning is best effort: a failed lookup sends none.
+func (r *T) c1Warning(ctx context.Context, event *nostr.Event, appID string) string {
+	if event.PubKey == r.config.Info.Pubkey {
+		return ""
+	}
+	cert, found, err := appCertificate(ctx, r.store, r.config.Info.Pubkey, appID)
+	if err == nil && !found {
+		cert = r.pendingCertificate(ctx, event.PubKey, appID)
+	}
+	if err != nil || cert == "" {
+		return ""
+	}
+	owner, err := exemptDeveloper(ctx, r.store, r.config.Info.Pubkey, appID, cert)
+	if err != nil || owner != event.PubKey {
+		return ""
+	}
+	return "warning: no NIP-C1 proof names this key for certificate " + cert +
+		". The relay accepts the listing for now and will soon require one: create it with zsp"
+}
+
+// pendingCertificate is the certificate that pubkey's pending asset for appID
+// claims, or "".
+func (r *T) pendingCertificate(ctx context.Context, pubkey, appID string) string {
+	pending, err := r.store.PendingListing(ctx, appID)
+	if err != nil {
+		return ""
+	}
+	for _, event := range pending {
+		if event.PubKey == pubkey && event.Kind == events.KindAsset {
+			if cert := assetSigner(event); cert != "" {
+				return cert
+			}
+		}
+	}
+	return ""
 }
 
 // msgNamesAppEvent starts every refusal of a catalog release over the app
@@ -580,9 +628,9 @@ func refuse(format string, args ...any) releaseCheck {
 // the indexer verified it, and an asset without a url waits for its file in
 // Blossom. A developer APK must be signed by the app's
 // certificate or a successor in its lineage, and published by the active C1
-// owner or delegate, counting pending proofs whose d tag names it. Signature
-// verification of those proofs is off until relay-c1-check. Every release
-// must pass the version guard.
+// owner or delegate, counting pending proofs whose d tag names it and whose
+// certificate signed them. With no active proof, the app's exempt key may
+// publish. Every release must pass the version guard.
 func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.Event, release nostr.Event, pendingAssets map[string]nostr.Event) (releaseCheck, error) {
 	if app == nil {
 		return releaseCheck{}, nil
@@ -752,6 +800,12 @@ func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []n
 	if err != nil {
 		return releaseCheck{}, err
 	}
+	if !ok {
+		if owner, err = exemptDeveloper(ctx, r.store, r.config.Info.Pubkey, appID, appCert); err != nil {
+			return releaseCheck{}, err
+		}
+		ok = owner != ""
+	}
 	if !ok || (pubkey != owner && pubkey != delegate) {
 		return releaseCheck{}, nil
 	}
@@ -766,7 +820,7 @@ func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []n
 // link of the chain, not a downgrade, so judging it again never removes it.
 func (r *T) versionGuard(ctx context.Context, pubkey, appID string, release nostr.Event, assets []nostr.Event, authorized []string) (code, floor int64, err error) {
 	code = maxVersionCode(assets)
-	channel, _ := events.Find(release.Tags, "c")
+	channel := events.ReleaseChannel(release.Tags)
 	d, _ := events.Find(release.Tags, "d")
 	stored, err := r.storedReleaseCodes(ctx, appID)
 	if err != nil {

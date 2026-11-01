@@ -135,6 +135,7 @@ func Setup(
 		InvalidStructure,
 		NoZapTag,
 		NotARM64,
+		NotMainChannel,
 		TooLittleWork,
 		NotABugReport(config.Info.Pubkey),
 		NotAnchored(store, config.Info.Pubkey),
@@ -840,6 +841,18 @@ func NotARM64(_ rely.Client, e *nostr.Event) error {
 		}
 	}
 	return fmt.Errorf("platform must include %s", platformARM64)
+}
+
+// NotMainChannel rejects a kind 30063 on a channel other than main. A release
+// with no c tag is on main. Other kinds pass.
+func NotMainChannel(_ rely.Client, e *nostr.Event) error {
+	if e.Kind != events.KindRelease {
+		return nil
+	}
+	if channel := events.ReleaseChannel(e.Tags); channel != events.MainChannel {
+		return fmt.Errorf("channel %q is not accepted: the catalog relay lists only the %s channel", channel, events.MainChannel)
+	}
+	return nil
 }
 
 const devicePoW = 20

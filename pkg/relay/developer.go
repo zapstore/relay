@@ -18,13 +18,17 @@ import (
 
 var errCertificate = errors.New("asset certificate does not match this app")
 
-// ListingCertificate rejects an asset that names none of the app's certificate.
-// Whether a pubkey may publish is decided at promotion, once the APK has been
-// read: a new developer's proof arrives after its listing.
+// ListingCertificate rejects an asset that names none of the app's
+// certificate, or whose signer has a publicly known private key. Whether a
+// pubkey may publish is decided at promotion, once the APK has been read: a
+// new developer's proof arrives after its listing.
 func ListingCertificate(db store.T, catalogKey string) func(rely.Client, *nostr.Event) error {
 	return func(_ rely.Client, event *nostr.Event) error {
 		if event.Kind != events.KindAsset || event.PubKey == catalogKey {
 			return nil
+		}
+		if err := assetKnownKey(assetSigner(*event)); err != nil {
+			return err
 		}
 		appID, ok := events.Find(event.Tags, "i")
 		if !ok || appID == "" {
@@ -43,18 +47,64 @@ func ListingCertificate(db store.T, catalogKey string) func(rely.Client, *nostr.
 	}
 }
 
-// isActiveDeveloper reports whether pubkey is the active C1 owner or delegate
-// for the app's certificate.
+// isActiveDeveloper reports whether pubkey is the app's developer: the active
+// C1 owner or delegate for its certificate, else its exempt key.
 func isActiveDeveloper(ctx context.Context, db store.T, catalogKey, appID, pubkey string) (bool, error) {
-	cert, ok, err := appCertificate(ctx, db, catalogKey, appID)
-	if err != nil || !ok {
-		return false, err
-	}
-	owner, delegate, ok, err := activeDeveloper(ctx, db, []string{cert}, nil)
-	if err != nil || !ok {
+	owner, delegate, err := appDevelopers(ctx, db, catalogKey, appID)
+	if err != nil || owner == "" {
 		return false, err
 	}
 	return pubkey == owner || (delegate != "" && pubkey == delegate), nil
+}
+
+// appDevelopers is the active C1 owner and delegate for the app's
+// certificate. With no active proof the owner is the app's exempt key, with
+// no delegate. Both are empty when the app has no certificate or neither.
+func appDevelopers(ctx context.Context, db store.T, catalogKey, appID string) (owner, delegate string, err error) {
+	cert, ok, err := appCertificate(ctx, db, catalogKey, appID)
+	if err != nil || !ok {
+		return "", "", err
+	}
+	owner, delegate, ok, err = activeDeveloper(ctx, db, []string{cert}, nil)
+	if err != nil || ok {
+		return owner, delegate, err
+	}
+	owner, err = exemptDeveloper(ctx, db, catalogKey, appID, cert)
+	return owner, "", err
+}
+
+// exemptDeveloper is the signer of appID's kind 32267, other than the catalog
+// key, when no kind 30509 for cert names that signer as owner or delegate.
+// Such a key was listed before the relay asked for a proof. A proof for cert
+// that has lapsed or been revoked still counts as one, so the key is not
+// exempt after losing it. A key that publishes without a proof cannot become
+// exempt: its kind 32267 is stored only once it is the developer. Returns ""
+// when there is none. Delete this and its callers to require C1 of everyone.
+func exemptDeveloper(ctx context.Context, db store.T, catalogKey, appID, cert string) (string, error) {
+	if appID == "" || cert == "" {
+		return "", nil
+	}
+	var pubkey string
+	err := db.DB.QueryRowContext(ctx, `
+		SELECT e.pubkey FROM events e
+		JOIN tags t ON t.event_id = e.id AND t.key = 'd' AND t.value = ?
+		WHERE e.kind = ? AND e.pubkey != ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM events p
+		    JOIN tags pd ON pd.event_id = p.id AND pd.key = 'd' AND lower(pd.value) = ?
+		    WHERE p.kind = ?
+		      AND (p.pubkey = e.pubkey OR EXISTS (
+		        SELECT 1 FROM json_each(p.tags) j
+		        WHERE json_extract(j.value, '$[0]') = 'delegation'
+		          AND lower(json_extract(j.value, '$[1]')) = e.pubkey))
+		  )
+		ORDER BY e.created_at DESC, e.id ASC
+		LIMIT 1
+	`, appID, events.KindApp, catalogKey, strings.ToLower(cert), events.KindIdentityProof).Scan(&pubkey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return pubkey, err
 }
 
 // appCertificate is the current signer: the first apk_certificate_hash on
@@ -159,16 +209,9 @@ func newerProof(next, current nostr.Event) bool {
 	return next.ID < current.ID
 }
 
-// activeDevelopers is the active C1 owner and delegate for the app's
-// certificate. Both are empty when the app has no certificate or no active
-// proof.
+// activeDevelopers is appDevelopers for this relay's catalog key.
 func (r *T) activeDevelopers(ctx context.Context, appID string) (owner, delegate string, err error) {
-	cert, ok, err := appCertificate(ctx, r.store, r.config.Info.Pubkey, appID)
-	if err != nil || !ok {
-		return "", "", err
-	}
-	owner, delegate, _, err = activeDeveloper(ctx, r.store, []string{cert}, nil)
-	return owner, delegate, err
+	return appDevelopers(ctx, r.store, r.config.Info.Pubkey, appID)
 }
 
 // storedRelease is a stored kind 30063 with the version_code of its assets.
@@ -207,7 +250,7 @@ func (r *T) storedReleaseCodes(ctx context.Context, appID string) ([]storedRelea
 			if err := tags.Scan(rawRelease); err != nil {
 				continue
 			}
-			channel, _ := events.Find(tags, "c")
+			channel := events.ReleaseChannel(tags)
 			d, _ := events.Find(tags, "d")
 			index[id] = len(out)
 			at = len(out)
@@ -253,7 +296,7 @@ func (r *T) supersede(ctx context.Context, release *nostr.Event, keepApp string)
 	if err != nil {
 		return err
 	}
-	channel, _ := events.Find(release.Tags, "c")
+	channel := events.ReleaseChannel(release.Tags)
 	var code, floor int64
 	for _, other := range stored {
 		if other.id == release.ID {

@@ -38,3 +38,26 @@ func TestNotARM64(t *testing.T) {
 		t.Fatal("error does not name the platform")
 	}
 }
+
+func TestNotMainChannel(t *testing.T) {
+	release := func(tags ...nostr.Tag) *nostr.Event {
+		return &nostr.Event{Kind: events.KindRelease, Tags: tags}
+	}
+	for name, event := range map[string]*nostr.Event{
+		"main":         release(nostr.Tag{"c", "main"}),
+		"no c tag":     release(),
+		"empty c tag":  release(nostr.Tag{"c", ""}),
+		"another kind": {Kind: events.KindAsset, Tags: nostr.Tags{{"c", "beta"}}},
+		"app with a c": {Kind: events.KindApp, Tags: nostr.Tags{{"c", "nightly"}}},
+	} {
+		if err := NotMainChannel(nil, event); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for _, channel := range []string{"beta", "nightly", "Main", "main "} {
+		err := NotMainChannel(nil, release(nostr.Tag{"c", channel}))
+		if err == nil || !strings.Contains(err.Error(), channel) || !strings.Contains(err.Error(), "main") {
+			t.Errorf("channel %q: %v", channel, err)
+		}
+	}
+}
