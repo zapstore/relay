@@ -15,7 +15,7 @@ func TestCatalogListingIsStoredBeforeProcessing(t *testing.T) {
 	key := newTestKey(t)
 	r.readAPK = readChains(t, map[string]signing{"apk": {key.cert}})
 	var got []catalog.Listing
-	r.UseProcessor(func(_ context.Context, listing catalog.Listing, _ string) (string, error) {
+	r.UseProcessor(func(_ context.Context, listing catalog.Listing, _, _ string) (string, error) {
 		if !slotHas(t, r.store, listing.Release.ID) {
 			t.Error("catalog listing was held until processing")
 		}
@@ -45,7 +45,7 @@ func TestProcessorRefusalDropsTheRelease(t *testing.T) {
 	r := testRelay(t, blobs)
 	key := newTestKey(t)
 	r.readAPK = readChains(t, map[string]signing{"apk": {key.cert}})
-	r.UseProcessor(func(context.Context, catalog.Listing, string) (string, error) {
+	r.UseProcessor(func(context.Context, catalog.Listing, string, string) (string, error) {
 		return "the APK fails a security check", nil
 	})
 	app, release, asset := testTriple("a", catalogKey, blobs.put("apk"), key.hash, 1)
@@ -67,7 +67,7 @@ func TestProcessorErrorStillLists(t *testing.T) {
 	r := testRelay(t, blobs)
 	key := newTestKey(t)
 	r.readAPK = readChains(t, map[string]signing{"apk": {key.cert}})
-	r.UseProcessor(func(context.Context, catalog.Listing, string) (string, error) {
+	r.UseProcessor(func(context.Context, catalog.Listing, string, string) (string, error) {
 		return "", errors.New("model unavailable")
 	})
 	app, release, asset := testTriple("a", catalogKey, blobs.put("apk"), key.hash, 1)
@@ -84,7 +84,7 @@ func TestProcessorErrorStillLists(t *testing.T) {
 func TestListedFileIsNotProcessedAgain(t *testing.T) {
 	blobs := newFakeBlossom()
 	r := testRelay(t, blobs)
-	r.UseProcessor(func(context.Context, catalog.Listing, string) (string, error) {
+	r.UseProcessor(func(context.Context, catalog.Listing, string, string) (string, error) {
 		t.Error("an already listed file was processed")
 		return "", nil
 	})
@@ -104,9 +104,9 @@ func TestListedFileIsNotProcessedAgain(t *testing.T) {
 func drainProcessing(t *testing.T, r *T) {
 	t.Helper()
 	for len(r.procs.jobs) > 0 {
-		listing := <-r.procs.jobs
-		refusal, _ := r.processJob(t.Context(), listing)
-		r.procs.finish(listing.Release.ID, refusal)
-		r.promoteProcessed(t.Context(), listing)
+		req := <-r.procs.jobs
+		refusal, _ := r.processJob(t.Context(), req.listing, req.signer)
+		r.procs.finish(req.listing.Release.ID, refusal)
+		r.promoteProcessed(t.Context(), req.listing)
 	}
 }

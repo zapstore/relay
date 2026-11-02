@@ -15,8 +15,9 @@ import (
 // Processor runs on a release that passed admission, just before it is
 // listed: steroid's enrichment, and later security checks. It runs once per
 // release. A refusal drops the release with that reason. An error is logged
-// and the release is listed anyway.
-type Processor func(ctx context.Context, listing catalog.Listing, picture string) (refusal string, err error)
+// and the release is listed anyway. signer is the active C1 proof's pubkey,
+// or empty when the app has none.
+type Processor func(ctx context.Context, listing catalog.Listing, picture, signer string) (refusal string, err error)
 
 const (
 	processTimeout   = 15 * time.Minute
@@ -25,8 +26,13 @@ const (
 
 // processQueue runs the Processor one release at a time, off the event path.
 // Results are kept by release id until the process exits.
+type processRequest struct {
+	listing catalog.Listing
+	signer  string
+}
+
 type processQueue struct {
-	jobs chan catalog.Listing
+	jobs chan processRequest
 
 	mu     sync.Mutex
 	queued map[string]struct{}
@@ -35,7 +41,7 @@ type processQueue struct {
 
 func newProcessQueue() *processQueue {
 	return &processQueue{
-		jobs:   make(chan catalog.Listing, processQueueSize),
+		jobs:   make(chan processRequest, processQueueSize),
 		queued: map[string]struct{}{},
 		done:   map[string]string{},
 	}
@@ -48,8 +54,9 @@ func (q *processQueue) result(release string) (refusal string, ok bool) {
 	return refusal, ok
 }
 
-// request queues a listing unless it is queued.
-func (q *processQueue) request(listing catalog.Listing) {
+// request queues a listing unless it is queued. signer is the active C1
+// proof's pubkey, or empty when the app has none.
+func (q *processQueue) request(listing catalog.Listing, signer string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	id := listing.Release.ID
@@ -57,7 +64,7 @@ func (q *processQueue) request(listing catalog.Listing) {
 		return
 	}
 	select {
-	case q.jobs <- listing:
+	case q.jobs <- processRequest{listing: listing, signer: signer}:
 		q.queued[id] = struct{}{}
 	default:
 		slog.Warn("process queue is full", "release", id)
@@ -83,7 +90,7 @@ func (r *T) UseProcessor(p Processor) {
 // processed reports whether an admitted release went through the Processor,
 // queueing it when it has not. A release whose every APK is already listed
 // was processed when it was first listed, so a key rotation is not queued.
-func (r *T) processed(ctx context.Context, appID string, app *nostr.Event, release nostr.Event, assets []nostr.Event) (refusal string, ok bool, err error) {
+func (r *T) processed(ctx context.Context, appID string, app *nostr.Event, release nostr.Event, assets []nostr.Event, signer string) (refusal string, ok bool, err error) {
 	if r.process == nil {
 		return "", true, nil
 	}
@@ -109,7 +116,7 @@ func (r *T) processed(ctx context.Context, appID string, app *nostr.Event, relea
 	if listed {
 		return "", true, nil
 	}
-	r.procs.request(catalog.Listing{AppID: appID, App: *app, Release: release, Assets: assets})
+	r.procs.request(catalog.Listing{AppID: appID, App: *app, Release: release, Assets: assets}, signer)
 	return "", false, nil
 }
 
@@ -118,16 +125,16 @@ func (r *T) runProcessor(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case listing := <-r.procs.jobs:
-			refusal, err := r.processJob(ctx, listing)
+		case req := <-r.procs.jobs:
+			refusal, err := r.processJob(ctx, req.listing, req.signer)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
 				}
-				slog.Warn("processor: failed, listing without its artifacts", "release", listing.Release.ID, "app", listing.AppID, "error", err)
+				slog.Warn("processor: failed, listing without its artifacts", "release", req.listing.Release.ID, "app", req.listing.AppID, "error", err)
 			}
-			r.procs.finish(listing.Release.ID, refusal)
-			r.promoteProcessed(ctx, listing)
+			r.procs.finish(req.listing.Release.ID, refusal)
+			r.promoteProcessed(ctx, req.listing)
 		}
 	}
 }
@@ -159,7 +166,7 @@ func (r *T) promoteProcessed(ctx context.Context, listing catalog.Listing) {
 	}
 }
 
-func (r *T) processJob(ctx context.Context, listing catalog.Listing) (string, error) {
+func (r *T) processJob(ctx context.Context, listing catalog.Listing, signer string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, processTimeout)
 	defer cancel()
 	profile, _, err := loadEvent(ctx, r.store, `
@@ -169,5 +176,5 @@ func (r *T) processJob(ctx context.Context, listing catalog.Listing) (string, er
 	if err != nil {
 		return "", err
 	}
-	return r.process(ctx, listing, catalog.ProfilePicture(profile))
+	return r.process(ctx, listing, catalog.ProfilePicture(profile), signer)
 }

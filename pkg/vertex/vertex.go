@@ -66,6 +66,39 @@ type Leak struct {
 	DetectedAt int64  `json:"detected_at,omitempty"`
 }
 
+// verifyReputation sends one kind 5312 request. profiles[0] is always
+// target, carrying its rank, follows, followers, and leak status; any
+// further entries are its top followers, ranked by sort, descending.
+func (c Client) verifyReputation(ctx context.Context, target string, sort Sort, source string, limit int) ([]ProfileResponse, error) {
+	payload := nostr.Event{
+		Kind:      KindVerifyReputation,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"param", "target", target},
+			{"param", "sort", string(sort)},
+			{"param", "source", source},
+			{"param", "limit", strconv.Itoa(limit)},
+		},
+	}
+
+	response, err := c.DVM(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var profiles []ProfileResponse
+	if err := json.Unmarshal([]byte(response.Content), &profiles); err != nil {
+		return nil, fmt.Errorf("vertex: failed to unmarshal the response event content: %w", err)
+	}
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("vertex: received an empty response")
+	}
+	if profiles[0].Pubkey != target {
+		return nil, fmt.Errorf("vertex: received a response for a different pubkey: expected %s, got %s", target, profiles[0].Pubkey)
+	}
+	return profiles, nil
+}
+
 // Allow reports whether the pubkey's rank meets the configured threshold,
 // and returns that rank. A leaked key has rank -1 and is never allowed.
 // It returns an error if the request to Vertex fails.
@@ -78,35 +111,13 @@ func (c Client) Allow(ctx context.Context, pubkey string) (bool, float64, error)
 		return rank >= c.config.Algorithm.Threshold, rank, nil
 	}
 
-	payload := nostr.Event{
-		Kind:      KindVerifyReputation,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"param", "target", pubkey},
-			{"param", "sort", string(c.config.Algorithm.Sort)},
-			{"param", "source", c.config.Algorithm.Source},
-			{"param", "limit", "0"}, // don't need top followers
-		},
-	}
-
-	response, err := c.DVM(ctx, payload)
+	// don't need top followers here
+	profiles, err := c.verifyReputation(ctx, pubkey, c.config.Algorithm.Sort, c.config.Algorithm.Source, 0)
 	if err != nil {
 		return false, 0, fmt.Errorf("vertex.Client.Allow: %w", err)
 	}
 
-	var profiles []ProfileResponse
-	if err := json.Unmarshal([]byte(response.Content), &profiles); err != nil {
-		return false, 0, fmt.Errorf("vertex: failed to unmarshal the response event content: %w", err)
-	}
-
-	if len(profiles) == 0 {
-		return false, 0, fmt.Errorf("vertex: received an empty response")
-	}
-
 	target := profiles[0]
-	if target.Pubkey != pubkey {
-		return false, 0, fmt.Errorf("vertex: received a response for a different pubkey: expected %s, got %s", pubkey, target.Pubkey)
-	}
 	if target.Leak != nil {
 		// a leaked key is by definition not trustworthy. We cache it to avoid repeated lookups.
 		c.cache.Add(target.Pubkey, -1)
@@ -115,6 +126,25 @@ func (c Client) Allow(ctx context.Context, pubkey string) (bool, float64, error)
 
 	c.cache.Add(target.Pubkey, target.Rank)
 	return target.Rank >= c.config.Algorithm.Threshold, target.Rank, nil
+}
+
+// Followers asks Vertex who follows target, ranked by global PageRank.
+// personalizedPagerank needs a source pubkey that follows people, and the
+// catalog key follows no one, so global is the only algorithm that applies
+// here. ok is false when target's own key is a known leak: its follower
+// list is not a meaningful trust signal then, and is not returned.
+func (c Client) Followers(ctx context.Context, target string, limit int) (followers []ProfileResponse, ok bool, err error) {
+	if limit < 1 {
+		limit = 5
+	}
+	profiles, err := c.verifyReputation(ctx, target, SortGlobal, "", limit)
+	if err != nil {
+		return nil, false, fmt.Errorf("vertex.Client.Followers: %w", err)
+	}
+	if profiles[0].Leak != nil {
+		return nil, false, nil
+	}
+	return profiles[1:], true, nil
 }
 
 // WatchCredits is a blocking operation that polls the Vertex API for credits at the configured interval,

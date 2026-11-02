@@ -434,7 +434,7 @@ func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast str
 			continue
 		}
 		if !catalogKey {
-			refusal, done, err := r.processed(ctx, appID, releaseApp, release, check.assets)
+			refusal, done, err := r.processed(ctx, appID, releaseApp, release, check.assets, check.c1)
 			if err != nil {
 				return nil, err
 			}
@@ -497,7 +497,11 @@ func namesApp(release nostr.Event, pubkey, appID string) bool {
 // processCatalog queues the processing of a promoted catalog release, which
 // can no longer hold it back. A refusal removes the release and its assets.
 func (r *T) processCatalog(ctx context.Context, appID string, app *nostr.Event, release nostr.Event, assets []nostr.Event, refused map[string]string) error {
-	refusal, _, err := r.processed(ctx, appID, app, release, assets)
+	signer, err := r.c1Signer(ctx, appID)
+	if err != nil {
+		return err
+	}
+	refusal, _, err := r.processed(ctx, appID, app, release, assets, signer)
 	if err != nil || refusal == "" {
 		return err
 	}
@@ -614,7 +618,8 @@ type releaseCheck struct {
 	proofs []nostr.Event // checked pending proofs promoted with the listing
 	cert   string        // the app certificate, pinned at promotion
 	// owner and delegate are the active C1 pubkeys for cert, for a developer release.
-	owner, delegate string
+	// c1 is the proof signer only. An exempt key and the catalog key leave it empty.
+	owner, delegate, c1 string
 	refused         string
 }
 
@@ -800,16 +805,18 @@ func (r *T) checkDeveloper(ctx context.Context, pubkey, appID string, assets []n
 	if err != nil {
 		return releaseCheck{}, err
 	}
-	if !ok {
-		if owner, err = exemptDeveloper(ctx, r.store, r.config.Info.Pubkey, appID, appCert); err != nil {
-			return releaseCheck{}, err
-		}
+	c1 := ""
+	if ok {
+		c1 = owner
+	} else if owner, err = exemptDeveloper(ctx, r.store, r.config.Info.Pubkey, appID, appCert); err != nil {
+		return releaseCheck{}, err
+	} else {
 		ok = owner != ""
 	}
 	if !ok || (pubkey != owner && pubkey != delegate) {
 		return releaseCheck{}, nil
 	}
-	return releaseCheck{assets: assets, proofs: proofs, cert: appCert, owner: owner, delegate: delegate}, nil
+	return releaseCheck{assets: assets, proofs: proofs, cert: appCert, owner: owner, delegate: delegate, c1: c1}, nil
 }
 
 // versionGuard returns the release's version_code and the floor: the greatest

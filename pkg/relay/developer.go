@@ -209,6 +209,20 @@ func newerProof(next, current nostr.Event) bool {
 	return next.ID < current.ID
 }
 
+// c1Signer is the active kind 30509 pubkey for the app's certificate.
+// An exempt key and the catalog key are not signers: both return empty.
+func (r *T) c1Signer(ctx context.Context, appID string) (string, error) {
+	cert, ok, err := appCertificate(ctx, r.store, r.config.Info.Pubkey, appID)
+	if err != nil || !ok {
+		return "", err
+	}
+	owner, _, ok, err := activeDeveloper(ctx, r.store, []string{cert}, nil)
+	if err != nil || !ok {
+		return "", err
+	}
+	return owner, nil
+}
+
 // activeDevelopers is appDevelopers for this relay's catalog key.
 func (r *T) activeDevelopers(ctx context.Context, appID string) (owner, delegate string, err error) {
 	return appDevelopers(ctx, r.store, r.config.Info.Pubkey, appID)

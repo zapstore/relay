@@ -34,6 +34,8 @@ func artifactMember(ctx context.Context, db *artifacts.DB, appID, name string) (
 		return app.Vector, nil
 	case "icon.webp":
 		return app.Icon, nil
+	case "trust":
+		return []byte(app.Trust), nil
 	default:
 		return nil, nil
 	}

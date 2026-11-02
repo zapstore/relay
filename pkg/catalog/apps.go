@@ -3,14 +3,17 @@ package catalog
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 // Apps reads the live relay database and returns resolved listings whose app id contains id.
 // pictures maps each author's pubkey to the kind 0 picture URL.
-func Apps(ctx context.Context, dbPath, id string) ([]Listing, map[string]string, error) {
+// signers maps an app id to the pubkey of its active C1 proof. An app with no
+// active proof, including one whose listing the catalog key signed, is absent.
+func Apps(ctx context.Context, dbPath, id string) ([]Listing, map[string]string, map[string]string, error) {
 	raw, err := LoadEvents(ctx, dbPath, "", "")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	state := Resolve(raw, "")
 	var listings []Listing
@@ -30,5 +33,12 @@ func Apps(ctx context.Context, dbPath, id string) ([]Listing, map[string]string,
 			pictures[profile.Pubkey] = profile.Picture
 		}
 	}
-	return listings, pictures, nil
+	now := time.Now()
+	signers := map[string]string{}
+	for _, listing := range listings {
+		if signer := C1Signer(listing, state.Proofs, now); signer != "" {
+			signers[listing.AppID] = signer
+		}
+	}
+	return listings, pictures, signers, nil
 }

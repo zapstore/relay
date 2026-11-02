@@ -250,6 +250,9 @@ func TestBundleShipsEveryArtifactForAChangedApp(t *testing.T) {
 		if err := db.SetIcon(t.Context(), id, []byte("ico")); err != nil {
 			t.Fatal(err)
 		}
+		if err := db.SetTrust(t.Context(), id, "1700000000,Alice,npub1alice"); err != nil {
+			t.Fatal(err)
+		}
 	})
 	files := tarFiles(t, mustBundle(t, data, signer, Diff{Apps: []string{id}}))
 	for _, name := range artifactFiles {

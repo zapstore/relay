@@ -10,7 +10,7 @@ import (
 )
 
 // artifactFiles are the per-app bundle members, in member order.
-var artifactFiles = []string{"about", "icon.webp", "security", "vector"}
+var artifactFiles = []string{"about", "icon.webp", "security", "trust", "vector"}
 
 func apkOf(listing Listing) (url, hash string) {
 	var fallback events.Asset

@@ -96,6 +96,38 @@ func TestAllow(t *testing.T) {
 	}
 }
 
+func TestFollowersOfLeakedKeyIsNotOK(t *testing.T) {
+	requireVertex(t)
+	client := NewClient(config)
+	followers, ok, err := client.Followers(context.Background(), leakedMickey, 5)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if ok || followers != nil {
+		t.Fatalf("expected ok=false and nil followers for a leaked key, got ok=%v followers=%v", ok, followers)
+	}
+}
+
+func TestFollowersOfKnownPubkey(t *testing.T) {
+	requireVertex(t)
+	client := NewClient(config)
+	followers, ok, err := client.Followers(context.Background(), fran, 3)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if len(followers) > 3 {
+		t.Fatalf("expected at most 3 followers, got %d", len(followers))
+	}
+	for _, f := range followers {
+		if f.Pubkey == fran {
+			t.Fatal("target should not be in its own follower list")
+		}
+	}
+}
+
 func TestCheckCredits(t *testing.T) {
 	requireVertex(t)
 	client := NewClient(config)

@@ -203,8 +203,8 @@ func start(cfg config.Config) (err error) {
 
 	// Every admitted release is enriched just before it is listed. A seal only
 	// enriches when an operator names a filter.
-	rel.UseProcessor(func(ctx context.Context, listing catalog.Listing, picture string) (string, error) {
-		return "", enrich.Listing(ctx, dataDir, listing, picture)
+	rel.UseProcessor(func(ctx context.Context, listing catalog.Listing, picture, signer string) (string, error) {
+		return "", enrich.Listing(ctx, dataDir, listing, picture, signer)
 	})
 	seal := func(ctx context.Context, req control.SealRequest) (string, error) {
 		if req.HasFrom {
