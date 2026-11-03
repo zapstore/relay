@@ -8,34 +8,70 @@ import (
 	"github.com/zapstore/relay/pkg/events"
 )
 
-func TestNotARM64(t *testing.T) {
+func TestUnsupportedPlatform(t *testing.T) {
+	const arm64 = "android-arm64-v8a"
+	check := UnsupportedPlatform(DefaultPlatforms)
 	ok := &nostr.Event{
 		Kind: events.KindApp,
-		Tags: nostr.Tags{{"f", platformARM64}, {"f", "android-armeabi"}},
+		Tags: nostr.Tags{{"f", arm64}, {"f", "android-armeabi"}},
 	}
-	if err := NotARM64(nil, ok); err != nil {
+	if err := check(nil, ok); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []int{events.KindApp, events.KindRelease, events.KindAsset, events.KindStack} {
 		for _, platform := range []string{"android-armeabi-v7a", "android-x86_64", "linux-x86_64", "web"} {
 			event := &nostr.Event{Kind: kind, Tags: nostr.Tags{{"f", platform}}}
-			if err := NotARM64(nil, event); err == nil {
+			if err := check(nil, event); err == nil {
 				t.Fatalf("kind %d accepted %s", kind, platform)
 			}
 		}
-		mixed := &nostr.Event{Kind: kind, Tags: nostr.Tags{{"f", platformARM64}, {"f", "android-armeabi-v7a"}, {"f", "android-x86_64"}}}
-		if err := NotARM64(nil, mixed); err != nil {
+		mixed := &nostr.Event{Kind: kind, Tags: nostr.Tags{{"f", arm64}, {"f", "android-armeabi-v7a"}, {"f", "android-x86_64"}}}
+		if err := check(nil, mixed); err != nil {
 			t.Fatalf("kind %d rejected a universal build: %v", kind, err)
 		}
-		if err := NotARM64(nil, &nostr.Event{Kind: kind}); err == nil {
+		if err := check(nil, &nostr.Event{Kind: kind}); err == nil {
 			t.Fatalf("kind %d accepted no platform", kind)
 		}
 	}
-	if err := NotARM64(nil, &nostr.Event{Kind: events.KindProfile, Tags: nostr.Tags{{"f", "web"}}}); err != nil {
+	if err := check(nil, &nostr.Event{Kind: events.KindProfile, Tags: nostr.Tags{{"f", "web"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(NotARM64(nil, &nostr.Event{Kind: events.KindAsset, Tags: nostr.Tags{{"f", "web"}}}).Error(), platformARM64) {
-		t.Fatal("error does not name the platform")
+	err := check(nil, &nostr.Event{Kind: events.KindAsset, Tags: nostr.Tags{{"f", "web"}}})
+	if err == nil || err.Error() != "platform must include "+arm64 {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestUnsupportedPlatformList(t *testing.T) {
+	check := UnsupportedPlatform([]string{"android-arm64-v8a", "linux-x86_64"})
+	for _, platform := range []string{"android-arm64-v8a", "linux-x86_64"} {
+		event := &nostr.Event{Kind: events.KindAsset, Tags: nostr.Tags{{"f", platform}}}
+		if err := check(nil, event); err != nil {
+			t.Fatalf("%s rejected: %v", platform, err)
+		}
+	}
+	err := check(nil, &nostr.Event{Kind: events.KindAsset, Tags: nostr.Tags{{"f", "web"}}})
+	if err == nil || err.Error() != "platform must include android-arm64-v8a or linux-x86_64" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestConfigPlatforms(t *testing.T) {
+	cfg := NewConfig()
+	if len(cfg.Platforms) != 1 || cfg.Platforms[0] != "android-arm64-v8a" {
+		t.Fatalf("default platforms = %v", cfg.Platforms)
+	}
+	cfg.Platforms[0] = "changed"
+	if DefaultPlatforms[0] != "android-arm64-v8a" {
+		t.Fatal("the config shares the default list")
+	}
+	for _, bad := range [][]string{nil, {}, {""}, {" web"}} {
+		cfg := NewConfig()
+		cfg.Hostname = "relay.example.com"
+		cfg.Platforms = bad
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("platforms %q validated", bad)
+		}
 	}
 }
 

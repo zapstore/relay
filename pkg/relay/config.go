@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,6 +53,10 @@ type Config struct {
 	// Default is all kinds.
 	AllowedKinds []int `env:"RELAY_ALLOWED_EVENT_KINDS"`
 
+	// Platforms are the f tag values the relay lists. An app, release, asset, or
+	// stack with none of them is rejected. Default is android-arm64-v8a.
+	Platforms []string `env:"RELAY_PLATFORMS" envSeparator:","`
+
 	// RemovePendingAfter is the duration after which pending events are removed from the relay.
 	// Default is 5 hours.
 	RemovePendingAfter time.Duration `env:"RELAY_REMOVE_PENDING_AFTER"`
@@ -93,6 +98,7 @@ func NewConfig() Config {
 			// NIP-C1 identity proof kind
 			events.KindIdentityProof,
 		},
+		Platforms:          slices.Clone(DefaultPlatforms),
 		RemovePendingAfter: 5 * time.Hour,
 		ProfileRelays:      []string{"wss://relay.vertexlab.io"},
 	}
@@ -151,6 +157,14 @@ func (c Config) Validate() error {
 	}
 	if len(c.AllowedKinds) == 0 {
 		slog.Warn("relay allowed kinds is empty. No events will be accepted.")
+	}
+	if len(c.Platforms) == 0 {
+		return errors.New("platforms must name at least one platform")
+	}
+	for _, platform := range c.Platforms {
+		if strings.TrimSpace(platform) == "" || platform != strings.TrimSpace(platform) {
+			return fmt.Errorf("invalid platform %q", platform)
+		}
 	}
 	for _, relayURL := range c.ProfileRelays {
 		parsed, err := url.Parse(relayURL)
@@ -228,8 +242,9 @@ func (c Config) String() string {
 		"\tMax REQ Filters: %d\n"+
 		"\tResponse Limit: %d\n"+
 		"\tAllowed Kinds: %v\n"+
+		"\tPlatforms: %v\n"+
 		"\tProfile Relays: %v\n"+
 		c.Info.String(),
-		c.Hostname, c.Address, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.AllowedKinds, c.ProfileRelays,
+		c.Hostname, c.Address, c.QueueCapacity, c.MaxMessageBytes, c.MaxReqFilters, c.ResponseLimit, c.AllowedKinds, c.Platforms, c.ProfileRelays,
 	)
 }

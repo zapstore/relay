@@ -78,6 +78,15 @@ type T struct {
 	readAPK     func(io.ReadSeeker) (signing, error)
 	fetch       *http.Client
 
+	// promoting serializes promoteListing.
+	promoting sync.Mutex
+
+	// rejected remembers assets refused at the door until their release is resolved.
+	// rejections carries each one to the reconcile loop, which promotes the
+	// listing that may have been waiting for it.
+	rejected   *rejectedAssets
+	rejections chan nostr.Event
+
 	search *search.Engine
 }
 
@@ -123,6 +132,10 @@ func Setup(
 		rely.RegistrationFailWithin(3*time.Second),
 	)
 
+	rejected := newRejectedAssets(config.RemovePendingAfter)
+	unsupportedPlatform := UnsupportedPlatform(config.Platforms)
+	var relay *T
+
 	server.Reject.Event.Clear()
 	if readOnly {
 		server.Reject.Event.Append(readOnlyEvent)
@@ -134,7 +147,13 @@ func Setup(
 		rely.InvalidSignature,
 		InvalidStructure,
 		NoZapTag,
-		NotARM64,
+		func(c rely.Client, e *nostr.Event) error {
+			err := unsupportedPlatform(c, e)
+			if err != nil && e.Kind == events.KindAsset {
+				relay.assetRejected(e, err)
+			}
+			return err
+		},
 		NotMainChannel,
 		TooLittleWork,
 		NotABugReport(config.Info.Pubkey),
@@ -153,9 +172,11 @@ func Setup(
 		VagueFilters(3),
 	)
 
-	relay := &T{
-		server: server,
-		config: config,
+	relay = &T{
+		server:     server,
+		config:     config,
+		rejected:   rejected,
+		rejections: make(chan nostr.Event, 100),
 
 		limiter:   limiter,
 		store:     store,
@@ -294,6 +315,9 @@ func (r *T) runReconcile(ctx context.Context) {
 
 		case <-ticker.C:
 			sweep()
+
+		case asset := <-r.rejections:
+			r.promoteRejected(ctx, asset)
 
 		case u := <-r.uploads:
 			if u.mime == "application/vnd.android.package-archive" {
@@ -825,22 +849,27 @@ func InvalidStructure(_ rely.Client, e *nostr.Event) error {
 	return events.Validate(e)
 }
 
-const platformARM64 = "android-arm64-v8a"
+// DefaultPlatforms are the platforms the relay lists: the f tag values an
+// app, release, asset, or stack may carry. RELAY_PLATFORMS replaces them.
+var DefaultPlatforms = []string{"android-arm64-v8a"}
 
-// NotARM64 rejects an app, release, asset, or stack that does not include android-arm64-v8a.
-// Other f tags may be present. Other kinds pass.
-func NotARM64(_ rely.Client, e *nostr.Event) error {
-	switch e.Kind {
-	case events.KindApp, events.KindRelease, events.KindAsset, events.KindStack:
-	default:
-		return nil
-	}
-	for _, tag := range e.Tags {
-		if len(tag) >= 2 && tag[0] == "f" && tag[1] == platformARM64 {
+// UnsupportedPlatform rejects an app, release, asset, or stack with no f tag
+// in platforms. Other f tags may be present, so a build for several platforms
+// passes when one of them is supported. Other kinds pass.
+func UnsupportedPlatform(platforms []string) func(rely.Client, *nostr.Event) error {
+	return func(_ rely.Client, e *nostr.Event) error {
+		switch e.Kind {
+		case events.KindApp, events.KindRelease, events.KindAsset, events.KindStack:
+		default:
 			return nil
 		}
+		for _, tag := range e.Tags {
+			if len(tag) >= 2 && tag[0] == "f" && slices.Contains(platforms, tag[1]) {
+				return nil
+			}
+		}
+		return fmt.Errorf("platform must include %s", strings.Join(platforms, " or "))
 	}
-	return fmt.Errorf("platform must include %s", platformARM64)
 }
 
 // NotMainChannel rejects a kind 30063 on a channel other than main. A release

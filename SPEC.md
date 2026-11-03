@@ -4,9 +4,9 @@ The catalog relay is a Nostr relay, a Blossom file host, and HTTP. The
 relay and HTTP are `relay.zapstore.dev`. Blossom is `cdn.zapstore.dev`. It
 stores listings, keeps the publisher blacklist, writes snapshots
 and bundles, serves `GET /v1/bundle`, answers search, and deletes old APKs.
-An app, release, asset, or stack is stored only when it includes
-`android-arm64-v8a`. Other `f` tags may be present. An event with no
-`android-arm64-v8a` tag is rejected. A kind `30063` on a channel other than
+An app, release, asset, or stack is stored only when it includes a supported
+platform: an `f` tag in `RELAY_PLATFORMS`, `android-arm64-v8a` by default.
+Other `f` tags may be present. An event with none is rejected. A kind `30063` on a channel other than
 `main` is rejected in the `OK` reply ([Catalog](../product/specs/catalog.md#listing)).
 A release with no `c` tag is on `main`.
 
@@ -78,6 +78,17 @@ Promotion serves a developer listing and marks the files to move;
 a mover uploads them to Bunny when it is set, then deletes the local copy.
 Without Bunny, promoted files stay in `blossom/`. Anything not promoted
 within `RELAY_REMOVE_PENDING_AFTER` is deleted, events and files.
+
+A release does not wait for an asset the relay rejected. The relay remembers
+the id of each kind `3063` it refused for its platform, in memory. A release
+that names such an id is judged with its other assets, and the rejection
+promotes a release that arrived first. A release whose every asset was
+rejected is refused. The entry goes when a release that names it is promoted
+or refused; one that no release names goes after `RELAY_REMOVE_PENDING_AFTER`. The release is the last event of a publish, so
+its `OK` reply is the state of the listing: a warning when assets were
+skipped (`warning: 7 of 8 assets were rejected and are not listed (...)`), or
+`waiting for N of M assets` after `pending:`. A restart forgets the memory; the
+publisher's next attempt records the rejections again.
 
 Promotion runs when what a listing waits on arrives: its event, the upload
 of its APK, the read of its APK, or its processing. An upload or a read

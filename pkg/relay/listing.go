@@ -67,6 +67,9 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 	if !ok {
 		return persistResult{ok: true}
 	}
+	// Promotion forgets the rejected assets a release was judged without, so
+	// the reply reads them first.
+	skipped := r.skippedAssets(event)
 	refused, err := r.promoteListing(ctx, event.PubKey, appID, event.ID)
 	if err != nil {
 		slog.Error("relay: failed to promote listing", "event", event.ID, "error", err)
@@ -80,7 +83,7 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 	}
 	warning := r.c1Warning(ctx, event, appID)
 	if stored {
-		return persistResult{ok: true, broadcast: true, msg: warning}
+		return persistResult{ok: true, broadcast: true, msg: joinNotes(warning, skipped)}
 	}
 	kept, err := pendingHas(ctx, r.store, event.ID)
 	if err != nil {
@@ -103,7 +106,8 @@ func (r *T) holdListing(ctx context.Context, event *nostr.Event) persistResult {
 			return persistResult{ok: true, msg: joinReply(msgBlobPending, warning)}
 		}
 	}
-	return persistResult{ok: true, msg: joinReply(msgListingPending, warning)}
+	waiting := r.waitingAssets(ctx, event, appID)
+	return persistResult{ok: true, msg: joinReply(msgListingPending, joinNotes(waiting, warning, skipped))}
 }
 
 func joinReply(msg, warning string) string {
@@ -111,6 +115,77 @@ func joinReply(msg, warning string) string {
 		return msg
 	}
 	return msg + ". " + warning
+}
+
+// joinNotes joins the non-empty notes of one reply.
+func joinNotes(notes ...string) string {
+	var kept []string
+	for _, note := range notes {
+		if note != "" {
+			kept = append(kept, note)
+		}
+	}
+	return strings.Join(kept, ". ")
+}
+
+// skippedAssets is the warning for a release that names assets this relay
+// rejected: they are not listed. Other kinds get "".
+func (r *T) skippedAssets(event *nostr.Event) string {
+	if event.Kind != events.KindRelease {
+		return ""
+	}
+	var named, rejected int
+	var reason string
+	for _, id := range events.FindAll(event.Tags, "e") {
+		named++
+		if rej, ok := r.rejected.get(id); ok && rej.pubkey == event.PubKey {
+			rejected++
+			reason = rej.reason
+		}
+	}
+	if rejected == 0 {
+		return ""
+	}
+	return fmt.Sprintf("warning: %d of %d assets were rejected and are not listed (%s)", rejected, named, reason)
+}
+
+// waitingAssets says how many assets a pending release still needs, for the
+// reply to the release: the last event of a publish, so its reply is the
+// listing's state. Assets this relay rejected are not waited for. Other kinds
+// get "".
+func (r *T) waitingAssets(ctx context.Context, event *nostr.Event, appID string) string {
+	if event.Kind != events.KindRelease {
+		return ""
+	}
+	pending, err := r.store.PendingListing(ctx, appID)
+	if err != nil {
+		return ""
+	}
+	pendingAssets := map[string]nostr.Event{}
+	for _, ev := range pending {
+		if ev.Kind == events.KindAsset {
+			pendingAssets[ev.ID] = ev
+		}
+	}
+	var named, missing int
+	for _, id := range events.FindAll(event.Tags, "e") {
+		named++
+		_, found, err := r.lookupAsset(ctx, id, pendingAssets)
+		if err != nil {
+			return ""
+		}
+		if found {
+			continue
+		}
+		if rej, ok := r.rejected.get(id); ok && rej.pubkey == event.PubKey {
+			continue
+		}
+		missing++
+	}
+	if missing == 0 {
+		return ""
+	}
+	return fmt.Sprintf("waiting for %d of %d assets", missing, named)
 }
 
 // c1Warning is the reply to the app's exempt developer, who publishes with no
@@ -337,6 +412,11 @@ func (r *T) promoteListingsBy(ctx context.Context, pubkeys []string, skipBroadca
 // itself. A release that can never be promoted is dropped; refused maps its
 // event ids to the reason.
 func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast string) (refused map[string]string, err error) {
+	// Events, uploads, APK reads, processing, and rejected assets each promote
+	// from their own goroutine. Two promotions of one listing read before they
+	// write and fail with "database is locked", so they run one at a time.
+	r.promoting.Lock()
+	defer r.promoting.Unlock()
 	pending, err := r.store.PendingListing(ctx, appID)
 	if err != nil {
 		return nil, err
@@ -452,6 +532,7 @@ func (r *T) promoteListing(ctx context.Context, pubkey, appID, skipBroadcast str
 		if err := r.commitListing(ctx, releaseApp, &release, check, pendingAssets, skipBroadcast); err != nil {
 			return nil, err
 		}
+		r.rejected.forget(release)
 		if catalogKey {
 			// Processing may refuse a catalog release later, and then it
 			// is removed. A refusal already known is applied now.
@@ -620,7 +701,7 @@ type releaseCheck struct {
 	// owner and delegate are the active C1 pubkeys for cert, for a developer release.
 	// c1 is the proof signer only. An exempt key and the catalog key leave it empty.
 	owner, delegate, c1 string
-	refused         string
+	refused             string
 }
 
 func refuse(format string, args ...any) releaseCheck {
@@ -635,7 +716,9 @@ func refuse(format string, args ...any) releaseCheck {
 // certificate or a successor in its lineage, and published by the active C1
 // owner or delegate, counting pending proofs whose d tag names it and whose
 // certificate signed them. With no active proof, the app's exempt key may
-// publish. Every release must pass the version guard.
+// publish. Every release must pass the version guard. An asset the relay
+// rejected recently (see rejectedAssets) is not waited for; the release is
+// judged with the others, and refused when none was accepted.
 func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.Event, release nostr.Event, pendingAssets map[string]nostr.Event) (releaseCheck, error) {
 	if app == nil {
 		return releaseCheck{}, nil
@@ -653,18 +736,31 @@ func (r *T) checkRelease(ctx context.Context, pubkey, appID string, app *nostr.E
 		return releaseCheck{}, nil
 	}
 	var assets []nostr.Event
+	var rejectedReason string
 	for _, id := range parsed.AssetIDs {
 		asset, found, err := r.lookupAsset(ctx, id, pendingAssets)
 		if err != nil {
 			return releaseCheck{}, err
 		}
-		if !found || asset.PubKey != pubkey || asset.Kind != events.KindAsset {
+		if !found {
+			// An asset this relay rejected will never arrive, so the release
+			// does not wait for it. It is listed with the assets that were accepted.
+			if rej, ok := r.rejected.get(id); ok && rej.pubkey == pubkey && rej.appID == appID {
+				rejectedReason = rej.reason
+				continue
+			}
+			return releaseCheck{}, nil
+		}
+		if asset.PubKey != pubkey || asset.Kind != events.KindAsset {
 			return releaseCheck{}, nil
 		}
 		if appIDTag, ok := events.Find(asset.Tags, "i"); !ok || appIDTag != appID {
 			return releaseCheck{}, nil
 		}
 		assets = append(assets, asset)
+	}
+	if len(assets) == 0 {
+		return refuse("no asset of the release was accepted: %s", rejectedReason), nil
 	}
 	if reason, err := r.bannedListing(ctx, slices.Concat([]nostr.Event{*app, release}, assets)); err != nil || reason != "" {
 		if err != nil {
@@ -864,6 +960,7 @@ func maxVersionCode(assets []nostr.Event) int64 {
 // assets. The reason is logged and kept for the caller.
 func (r *T) refuseRelease(ctx context.Context, release nostr.Event, check releaseCheck, pendingAssets map[string]nostr.Event, refused map[string]string) error {
 	slog.Warn("listing refused", "release", release.ID, "pubkey", release.PubKey, "reason", check.refused)
+	r.rejected.forget(release)
 	ids := []string{release.ID}
 	for _, id := range events.FindAll(release.Tags, "e") {
 		if _, ok := pendingAssets[id]; ok {
