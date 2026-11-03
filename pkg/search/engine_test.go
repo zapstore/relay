@@ -1,6 +1,7 @@
 package search
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -57,6 +58,39 @@ func TestEngineSearch(t *testing.T) {
 
 	if result, _ := engine.Search(t.Context(), Request{Query: "n"}); len(result.Hits) != 0 {
 		t.Fatal("a one-letter query ranked")
+	}
+}
+
+func TestEncoderCancelIsQuiet(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	encode := func(ctx context.Context, _ string) ([]int8, error) {
+		return nil, ctx.Err()
+	}
+	engine := NewEngine(func(context.Context) ([]Entry, error) { return testEntries(), nil }, nil, encode, log)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	result, err := engine.Search(ctx, Request{Query: "Notes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := hitIDs(result); len(ids) == 0 || ids[0] != "org.example.notes" {
+		t.Fatalf("canceled query: %v", ids)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("canceled query logged: %s", buf.String())
+	}
+
+	buf.Reset()
+	broken := NewEngine(func(context.Context) ([]Entry, error) { return testEntries(), nil }, nil, func(context.Context, string) ([]int8, error) {
+		return nil, errors.New("model gone")
+	}, log)
+	if _, err := broken.Search(t.Context(), Request{Query: "Notes"}); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("encoder failed")) {
+		t.Fatalf("encoder failure was not logged: %s", buf.String())
 	}
 }
 

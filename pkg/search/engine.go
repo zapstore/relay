@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -158,7 +159,10 @@ func (e *Engine) Search(ctx context.Context, req Request) (Result, error) {
 	if residual != "" && e.encode != nil {
 		vector, err = e.encode(ctx, query)
 		if err != nil {
-			e.log.Warn("search: encoder failed; ranking without the vector", "error", err)
+			// A closed subscription cancels the query. That is not an encoder failure.
+			if !errors.Is(err, context.Canceled) {
+				e.log.Warn("search: encoder failed; ranking without the vector", "error", err)
+			}
 			vector = nil
 		}
 	}
