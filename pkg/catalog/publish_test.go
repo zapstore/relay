@@ -3,6 +3,8 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"strings"
@@ -324,7 +326,7 @@ func TestPreviousStackSignedByAnotherKeyIsDeleted(t *testing.T) {
 	if err := os.MkdirAll(SnapDir(data), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSnap(SnapPath(data, 1), []nostr.Event{stack}, nil); err != nil {
+	if err := WriteSnap(SnapPath(data, 1), []nostr.Event{stack}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	n, err := CreateBundle(t.Context(), data, State{}, signer, 20, nil)
@@ -365,6 +367,88 @@ func resolvedListing(t *testing.T, appID string) Listing {
 		t.Fatalf("%s: listings = %d", appID, len(st.Listings))
 	}
 	return st.Listings[0]
+}
+
+func TestReenrichedAppShipsWithoutListingChange(t *testing.T) {
+	data := t.TempDir()
+	const apk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	signer, err := ParseSigner("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := Resolve(append(sealableListing("com.example.fixed", apk), sealableListing("com.example.other", apk)...), "")
+	if len(next.Listings) != 2 {
+		t.Fatalf("listings = %d", len(next.Listings))
+	}
+	for _, id := range []string{"com.example.fixed", "com.example.other"} {
+		writeAbout(t, data, id)
+		writeCache(t, data, id, apk)
+	}
+	if n, err := CreateBundle(t.Context(), data, next, signer, 10, nil); err != nil || n != 1 {
+		t.Fatalf("first seal = %d, %v", n, err)
+	}
+	if n, err := CreateBundle(t.Context(), data, next, signer, 20, nil); err != nil || n != 1 {
+		t.Fatalf("unchanged seal = %d, %v", n, err)
+	}
+
+	withArtifacts(t, data, func(db *artifacts.DB) {
+		if err := db.SetAbout(t.Context(), "com.example.fixed", "Fixed."); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if n, err := CreateBundle(t.Context(), data, next, signer, 30, nil); err != nil || n != 2 {
+		t.Fatalf("re-enriched seal = %d, %v", n, err)
+	}
+	sealed, err := os.ReadFile(BundlePath(data, 1, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(BundlePath(data, 1, 2)); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := EnsureBundle(t.Context(), data, 1, 2, signer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(sealed, rebuilt) {
+		t.Fatal("rebuilt span differs from the sealed one")
+	}
+	files := tarFiles(t, sealed)
+	if got := string(files["com.example.fixed/about"]); got != "Fixed.\n" {
+		t.Fatalf("about = %q in %v", got, keys(files))
+	}
+	if _, ok := files["com.example.other/about"]; ok {
+		t.Fatal("an unchanged app shipped artifacts")
+	}
+	if _, ok := files["diff.jsonl"]; ok {
+		t.Fatal("no event changed, but the bundle has a diff")
+	}
+}
+
+// sealableListing is a listing triple that resolves again from a snapshot.
+func sealableListing(id, hash string) []nostr.Event {
+	pub := strings.Repeat("ab", 32)
+	sum := sha256.Sum256([]byte(id))
+	assetID := hex.EncodeToString(sum[:])
+	return []nostr.Event{
+		{
+			ID: id + "-app", Kind: events.KindApp, PubKey: pub,
+			Tags: nostr.Tags{{"d", id}, {"name", id}, {"f", "android-arm64-v8a"}},
+		},
+		{
+			ID: id + "-rel", Kind: events.KindRelease, PubKey: pub,
+			Tags: nostr.Tags{{"i", id}, {"version", "1.0.0"}, {"d", id + "@1.0.0"}, {"c", "main"}, {"e", assetID}},
+		},
+		{
+			ID: assetID, Kind: events.KindAsset, PubKey: pub,
+			Tags: nostr.Tags{
+				{"i", id}, {"x", hash}, {"version", "1.0.0"},
+				{"f", "android-arm64-v8a"}, {"version_code", "1"},
+				{"apk_certificate_hash", hash},
+				{"url", "https://example.com/" + id + ".apk"},
+			},
+		},
+	}
 }
 
 func apkListing(id, hash string) Listing {

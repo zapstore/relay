@@ -269,7 +269,7 @@ The relay, on `CATALOG_BUNDLE_INTERVAL` (default five minutes):
 1. Loads listing events, kind `30509`, kind `0`, the catalog key's kind
    `30267`, and the catalog key's kind `10067`.
 2. Applies the [release chain](../product/specs/catalog.md#the-release-chain).
-3. Compares it with the previous snapshot. An unchanged catalog writes nothing.
+3. Compares it and the artifact hashes with the previous snapshot. An unchanged catalog writes nothing.
 4. Otherwise writes snapshot `N` and the signed bundle `(N-1)-N`.
 
 `CATALOG_BUNDLE_INTERVAL=0` disables the tick. `relay bundle` writes one snapshot and exits. `relay bundle <app-id>` enriches only the listings whose id contains that string; the snapshot is still the whole catalog, so a filter never removes an app from phones. A filter that matches nothing is an error and writes nothing. The tick takes no filter.
@@ -302,11 +302,13 @@ configurable. The next snapshot is one above the larger of that and
 reuses an epoch. A request whose `from` has no snapshot gets the full
 snapshot, `from=0`, with `200`.
 
-A snapshot is the full event set at that epoch, and the ban notices in
-force when it was written. A bundle built later from it carries those ban
-lines, not the ones in force at request time. A bundle is the difference
-from one epoch to another: `diff.jsonl`, the artifacts for changed apps,
-and avatars whose picture URL changed. An app's artifacts are included only
+A snapshot is the full event set at that epoch, the ban notices in force
+when it was written, and each app's `files_hash` from `artifacts.db`. A
+bundle built later from it carries those ban lines, not the ones in force at
+request time. A bundle is the difference from one epoch to another:
+`diff.jsonl`, the artifacts for apps whose listing or `files_hash` changed,
+and avatars whose picture URL changed. A re-enriched app therefore ships in
+the next epoch without a new release. An app's artifacts are included only
 when the enricher built them for that listing's current APK hash.
 
 `diff.jsonl` is defined in the

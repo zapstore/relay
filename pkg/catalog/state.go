@@ -21,6 +21,9 @@ type State struct {
 	Relays   []Proof
 	// Notices is operator text for removed apps. It is not part of the event set.
 	Notices map[string]string
+	// Artifacts maps an app id to the hash of the bundle files it ships, for
+	// apps whose files match the listing's APK. Nil on a live state not yet sealed.
+	Artifacts map[string]string
 }
 
 // Profile is the current kind 0 event for one pubkey.

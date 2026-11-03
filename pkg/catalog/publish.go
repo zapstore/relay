@@ -46,6 +46,9 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 			writeBlock("enrich " + err.Error())
 		}
 	}
+	if next.Artifacts, err = artifactHashes(ctx, data, next); err != nil {
+		return 0, err
+	}
 	if err := finishDiff(ctx, data, &diff, prev, next); err != nil {
 		return 0, err
 	}
@@ -53,13 +56,7 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 		writeBlock("unchanged")
 		return latest, nil
 	}
-	floor, err := ReadFloor(data)
-	if err != nil {
-		return 0, err
-	}
-	// After a rebuild the first snapshot continues above every epoch already served,
-	// so no phone ever sees an epoch number reused for a different catalog.
-	nextN := max(latest, floor) + 1
+	nextN := latest + 1
 	writeBlock(fmt.Sprintf("snapshot %d, bundle %d-%d", nextN, latest, nextN))
 	body, err := BuildBundle(ctx, data, latest, nextN, bundledAt, diff, signer)
 	if err != nil {
@@ -70,14 +67,11 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 		return 0, err
 	}
 	snap := SnapPath(data, nextN)
-	if err := WriteSnap(snap, next.Events(), next.Notices); err != nil {
+	if err := WriteSnap(snap, next.Events(), next.Notices, next.Artifacts); err != nil {
 		return 0, err
 	}
 	at := time.Unix(bundledAt, 0)
 	if err := os.Chtimes(snap, at, at); err != nil {
-		return 0, err
-	}
-	if err := writeFloor(data, nextN); err != nil {
 		return 0, err
 	}
 	return nextN, nil
@@ -133,7 +127,14 @@ func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signe
 
 // finishDiff sets the parts of a diff that read the artifact store: the apps whose
 // artifacts match the listing's current APK, the changed avatars, and the ban notices.
+// An app whose artifact hash moved since prev ships even when its listing did not.
 func finishDiff(ctx context.Context, data string, diff *Diff, prev, next State) error {
+	for id, hash := range next.Artifacts {
+		if prev.Artifacts[id] != hash && !slices.Contains(diff.Apps, id) {
+			diff.Apps = append(diff.Apps, id)
+		}
+	}
+	slices.Sort(diff.Apps)
 	matched, err := appsMatchingAPK(ctx, data, next, diff.Apps)
 	if err != nil {
 		return err
@@ -172,6 +173,31 @@ func appsMatchingAPK(ctx context.Context, data string, st State, ids []string) (
 			continue
 		}
 		out = append(out, id)
+	}
+	return out, nil
+}
+
+// artifactHashes reads the artifact hash of every listing whose files were
+// built for its current APK.
+func artifactHashes(ctx context.Context, data string, st State) (map[string]string, error) {
+	db, err := openArtifacts(ctx, data)
+	if err != nil || db == nil {
+		return map[string]string{}, err
+	}
+	defer db.Close()
+	files, err := db.FilesByApp(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, listing := range st.Listings {
+		_, hash := apkOf(listing)
+		hash = strings.ToLower(strings.TrimSpace(hash))
+		f, ok := files[listing.AppID]
+		if hash == "" || !ok || strings.ToLower(strings.TrimSpace(f.APK)) != hash {
+			continue
+		}
+		out[listing.AppID] = f.Hash
 	}
 	return out, nil
 }

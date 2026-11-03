@@ -30,9 +30,10 @@ type member struct {
 	Data []byte
 }
 
-// WriteSnap writes the event set and the ban notices in force at this epoch,
-// so a bundle built from it later carries the same ban lines.
-func WriteSnap(path string, events []nostr.Event, notices map[string]string) error {
+// WriteSnap writes the event set, the ban notices in force at this epoch, and
+// the artifact hashes, so a bundle built from it later carries the same ban
+// lines and the same apps.
+func WriteSnap(path string, events []nostr.Event, notices, artifacts map[string]string) error {
 	raw, err := marshalEvents(events)
 	if err != nil {
 		return err
@@ -44,9 +45,17 @@ func WriteSnap(path string, events []nostr.Event, notices map[string]string) err
 	if err != nil {
 		return err
 	}
+	if artifacts == nil {
+		artifacts = map[string]string{}
+	}
+	hashes, err := json.Marshal(artifacts)
+	if err != nil {
+		return err
+	}
 	body, err := packUnsigned([]member{
 		{Name: "events.jsonl", Data: raw},
 		{Name: "notices.json", Data: notes},
+		{Name: "artifacts.json", Data: hashes},
 	})
 	if err != nil {
 		return err
@@ -78,6 +87,11 @@ func ReadSnap(path string) (State, error) {
 		st.Notices = map[string]string{}
 		if err := json.Unmarshal(notes, &st.Notices); err != nil {
 			return State{}, fmt.Errorf("%s: notices.json: %w", path, err)
+		}
+	}
+	if hashes, ok := members["artifacts.json"]; ok {
+		if err := json.Unmarshal(hashes, &st.Artifacts); err != nil {
+			return State{}, fmt.Errorf("%s: artifacts.json: %w", path, err)
 		}
 	}
 	return st, nil
