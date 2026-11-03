@@ -182,7 +182,7 @@ func prepare(ctx context.Context, t term, relayData, indexerDB, dir string) (pla
 	return pl, nil
 }
 
-// clearOld deletes the plan's events and every snapshot and bundle. epoch-floor stays.
+// clearOld deletes the plan's events and every snapshot and bundle. The new key starts at epoch 1.
 func clearOld(ctx context.Context, t term, relayData string, pl plan) error {
 	db, err := openDB(ctx, filepath.Join(relayData, "relay.db"), true)
 	if err != nil {

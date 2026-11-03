@@ -291,16 +291,14 @@ $DATA_DIR/
   snapshots/2.tar.zst
   bundles/0-1.tar.zst          # signed bundle
   bundles/1-2.tar.zst
-  epoch-floor                  # highest epoch written, kept across a rebuild
   seal.lock                    # held while a snapshot is written
   artifacts.db                 # about, security, vector, icon, publisher pictures
 ```
 
 Latest epoch is the largest `N` in `snapshots/N.tar.zst`. These paths are not
-configurable. The next snapshot is one above the larger of that and
-`epoch-floor`, so clearing `snapshots/` and `bundles/` for a rebuild never
-reuses an epoch. A request whose `from` has no snapshot gets the full
-snapshot, `from=0`, with `200`.
+configurable. The next snapshot is one above it. Epochs are never reset
+once the relay is in production. A request whose `from` has no snapshot gets
+the full snapshot, `from=0`, with `200`.
 
 A snapshot is the full event set at that epoch, the ban notices in force
 when it was written, and each app's `files_hash` from `artifacts.db`. A
