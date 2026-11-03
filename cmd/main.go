@@ -96,6 +96,15 @@ func start(cfg config.Config) (err error) {
 	if err = os.MkdirAll(dataDir, 0755); err != nil {
 		return err
 	}
+	// Search and GET /v1/bundle open artifacts.db read-only, so they cannot
+	// add a column. Open applies the schema, including trust, before either runs.
+	arts, err := artifacts.Open(ctx, artifacts.Path(dataDir))
+	if err != nil {
+		return err
+	}
+	if err = arts.Close(); err != nil {
+		return err
+	}
 	relayDBPath := filepath.Join(dataDir, "relay.db")
 	relayDB, err := relay.NewDB(relayDBPath)
 	if err != nil {
