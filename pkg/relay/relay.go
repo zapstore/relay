@@ -157,6 +157,7 @@ func Setup(
 		NotMainChannel,
 		TooLittleWork,
 		NotABugReport(config.Info.Pubkey),
+		TooLargeForBuffer,
 		NotAnchored(store, config.Info.Pubkey),
 		NotAllowed(pol),
 		NotAdmitted(gate),
@@ -931,6 +932,26 @@ func NotABugReport(catalogKey string) func(rely.Client, *nostr.Event) error {
 		}
 		return nil
 	}
+}
+
+// maxBufferedEventBytes is the NIP-44 plaintext limit, 64KB. hotbox signs a
+// request's single param NIP-44 encrypted: the catalog key's bundle
+// manifest, and a developer's C1 proof, kind 30509, one of bufferedKinds.
+// Neither can leave hotbox over this size, so a buffered-kind event this
+// big was never signed there and cannot be genuine. Same limit, same
+// reason, as maxReportBytes above: a kind 1059 wraps a NIP-44 sealed rumor.
+const maxBufferedEventBytes = 64 << 10
+
+// TooLargeForBuffer rejects a buffered-kind event, see bufferedKinds, over
+// maxBufferedEventBytes. Other kinds pass.
+func TooLargeForBuffer(_ rely.Client, e *nostr.Event) error {
+	if !slices.Contains(bufferedKinds(), e.Kind) {
+		return nil
+	}
+	if n := len(e.String()); n > maxBufferedEventBytes {
+		return fmt.Errorf("kind %d: event is %d bytes, over the %d byte limit hotbox can sign", e.Kind, n, maxBufferedEventBytes)
+	}
+	return nil
 }
 
 func UnsupportedQuery(_ rely.Client, _ string, filters nostr.Filters) error {

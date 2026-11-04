@@ -74,6 +74,12 @@ defines. A catalog-key listing waits there for its event checks only and is
 promoted the moment they pass; a failing event is dropped. Nothing reads its
 APK before promotion, and processing runs after. An upload lands on local
 disk and is not served until a stored or promoted listing names it.
+Any app, release, asset, or kind `30509` over 64 KiB is rejected in the
+`OK` reply and never enters the buffer zone: that is the NIP-44 plaintext
+limit on the single param of a `sign_event` request, and hotbox signs
+through one for the bundle manifest and a developer's C1 proof, so a
+genuine event of these kinds is never bigger.
+
 Promotion serves a developer listing and marks the files to move;
 a mover uploads them to Bunny when it is set, then deletes the local copy.
 Without Bunny, promoted files stay in `blossom/`. Anything not promoted
