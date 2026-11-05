@@ -363,7 +363,8 @@ func buildQueries(filters nostr.Filters) ([]sqlite.Query, error) {
 // event before the other conditions apply, so they are checked per row.
 var existsTags = map[string]bool{"f": true}
 
-// filterSQL converts a filter to SQL conditions and their arguments.
+// filterSQL converts a filter to SQL conditions and their arguments. A filter with
+// neither ids nor authors never returns a private stack (kind 30267 with content).
 func filterSQL(filter nostr.Filter) (conds []string, args []any) {
 	if len(filter.IDs) > 0 {
 		conds = append(conds, "e.id"+inClause(len(filter.IDs)))
@@ -382,6 +383,12 @@ func filterSQL(filter nostr.Filter) (conds []string, args []any) {
 		for _, pk := range filter.Authors {
 			args = append(args, pk)
 		}
+	}
+	if len(filter.IDs) == 0 && len(filter.Authors) == 0 {
+		// A stack with content is private: its apps are encrypted for its author. Nobody
+		// browsing stacks can use one, and they would crowd the public ones out of a page.
+		conds = append(conds, "NOT (e.kind = ? AND e.content <> '')")
+		args = append(args, events.KindStack)
 	}
 	if filter.Until != nil {
 		conds = append(conds, "e.created_at <= ?")

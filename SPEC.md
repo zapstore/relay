@@ -16,6 +16,11 @@ public stack (empty content) and kind `10067` need none. Kind `30078` is
 accepted for `zapstore-settings`, `zapstore-device-state`,
 `zapstore-device-key-backup`, and `zapstore-update-ignore`.
 
+A kind `30267` with content is private, and a filter with neither `ids` nor
+`authors` never returns one. Browsing stacks (a filter on `#f`, `#a` or only the
+kind) therefore lists public stacks only. A client reads its own private stacks
+with `authors`.
+
 This document covers what is specific to the relay. [Catalog](../product/specs/catalog.md)
 defines listings and `GET /v1/bundle`.
 [Publisher policy](../product/specs/publisher-policy.md) defines the gate and

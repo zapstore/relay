@@ -184,6 +184,50 @@ func TestQueryAssetByAppAndPlatform(t *testing.T) {
 	}
 }
 
+func TestPrivateStacksNeedAnAuthorOrID(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	stacks := []nostr.Event{
+		{ID: "public", PubKey: "alice", CreatedAt: 100, Tags: nostr.Tags{{"d", "p"}, {"f", "android-arm64-v8a"}, {"a", "32267:x:y"}}},
+		{ID: "private", PubKey: "bob", CreatedAt: 200, Content: "ciphertext", Tags: nostr.Tags{{"d", "q"}, {"f", "android-arm64-v8a"}}},
+	}
+	for i := range stacks {
+		stacks[i].Kind = events.KindStack
+		stacks[i].Sig = "sig"
+		if _, err := store.Save(ctx, &stacks[i]); err != nil {
+			t.Fatalf("failed to save %s: %v", stacks[i].ID, err)
+		}
+	}
+
+	cases := map[string]struct {
+		filter nostr.Filter
+		want   []string
+	}{
+		"by platform":    {nostr.Filter{Kinds: []int{events.KindStack}, Tags: nostr.TagMap{"f": {"android-arm64-v8a"}}, Limit: 10}, []string{"public"}},
+		"by kind":        {nostr.Filter{Kinds: []int{events.KindStack}, Limit: 10}, []string{"public"}},
+		"by author":      {nostr.Filter{Kinds: []int{events.KindStack}, Authors: []string{"bob"}, Limit: 10}, []string{"private"}},
+		"by id":          {nostr.Filter{IDs: []string{"private"}, Limit: 10}, []string{"private"}},
+		"another author": {nostr.Filter{Kinds: []int{events.KindStack}, Authors: []string{"alice"}, Limit: 10}, []string{"public"}},
+	}
+	for name, c := range cases {
+		got, err := store.Query(ctx, c.filter)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var ids []string
+		for _, e := range got {
+			ids = append(ids, e.ID)
+		}
+		if !slices.Equal(ids, c.want) {
+			t.Errorf("%s: ids = %v, want %v", name, ids, c.want)
+		}
+	}
+}
+
 // Multi-character tag keys indexed per event kind (kind-specific triggers).
 // All single-letter tags are indexed universally by single_letter_tags_ai.
 var (
