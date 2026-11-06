@@ -11,7 +11,6 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip19"
-	"github.com/nbd-wtf/go-nostr/nip46"
 )
 
 const (
@@ -21,9 +20,13 @@ const (
 	// bunkerHandshakeTimeout bounds the NIP-46 connect after a relay accepts TCP.
 	// The pool context must outlive this; it is cancelled only when the handshake fails.
 	bunkerHandshakeTimeout = 5 * time.Second
-	// bunkerSignTimeout bounds one later sign when the bunker stops answering.
-	bunkerSignTimeout = 5 * time.Second
+	// bunkerSignAttempts is how many times one sign is tried before it fails.
+	bunkerSignAttempts = 4
 )
+
+// bunkerSignTimeout bounds one later sign when the bunker stops answering.
+// It is a variable so tests can shorten it.
+var bunkerSignTimeout = 5 * time.Second
 
 const fixtureSK = "0000000000000000000000000000000000000000000000000000000000000001"
 
@@ -35,7 +38,7 @@ const localBunkerClientKey = "00000000000000000000000000000000000000000000000000
 type Signer struct {
 	PubKey string
 	secret string
-	bunker *nip46.BunkerClient
+	bunker *bunkerClient
 }
 
 // ParseSigner reads a local signing key: 1, 64-char hex, or nsec.
@@ -88,47 +91,58 @@ func (s Signer) Sign(ctx context.Context, event *nostr.Event) error {
 		return fmt.Errorf("event id does not match its body")
 	}
 	if s.bunker != nil {
-		signCtx, cancel := context.WithTimeout(ctx, bunkerSignTimeout)
-		defer cancel()
-		return s.bunker.SignEvent(signCtx, event)
+		return s.signBunker(ctx, event)
 	}
 	return event.Sign(s.secret)
 }
 
-func openBunker(ctx context.Context, bunkerURL string) (signer Signer, err error) {
+// signBunker retries a sign the bunker did not answer in time. The event id is
+// fixed, so signing it again is harmless. A rejection, an encryption error, or
+// a cancelled ctx is not retried.
+func (s Signer) signBunker(ctx context.Context, event *nostr.Event) error {
+	var err error
+	for attempt := 1; attempt <= bunkerSignAttempts; attempt++ {
+		signCtx, cancel := context.WithTimeout(ctx, bunkerSignTimeout)
+		err = s.bunker.signEvent(signCtx, event)
+		timedOut := signCtx.Err() != nil
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if !timedOut || ctx.Err() != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("bunker did not answer after %d attempts: %w", bunkerSignAttempts, err)
+}
+
+func openBunker(ctx context.Context, bunkerURL string) (Signer, error) {
 	target, relays, err := bunkerTarget(bunkerURL)
 	if err != nil {
 		return Signer{}, err
+	}
+	parsed, err := url.Parse(bunkerURL)
+	if err != nil {
+		return Signer{}, fmt.Errorf("bunker: %w", err)
 	}
 	writeBlock("connect bunker")
 	if err := dialRelays(ctx, relays); err != nil {
 		return Signer{}, fmt.Errorf("bunker: %w", err)
 	}
-	// ConnectBunker keeps this context for the pool. Cancel it only when the
-	// handshake does not finish; a live signer needs it for later Sign calls.
-	connectCtx, cancel := context.WithCancel(ctx)
-	timer := time.AfterFunc(bunkerHandshakeTimeout, cancel)
-	defer func() {
-		if err != nil {
-			timer.Stop()
-			cancel()
-		}
-	}()
-	remote, err := nip46.ConnectBunker(connectCtx, localBunkerClientKey, bunkerURL, nil, func(string) {})
+	// The pool and its subscription outlive the handshake, so later Sign calls
+	// use them. They end with ctx, or here when the handshake fails.
+	runCtx, cancel := context.WithCancel(ctx)
+	client, err := newBunkerClient(runCtx, cancel, localBunkerClientKey, target, relays)
 	if err != nil {
+		cancel()
 		return Signer{}, fmt.Errorf("bunker: %w", err)
 	}
-	pub, err := remote.GetPublicKey(connectCtx)
+	pub, err := client.handshake(ctx, runCtx, target, parsed.Query().Get("secret"))
 	if err != nil {
+		client.close()
 		return Signer{}, fmt.Errorf("bunker: %w", err)
 	}
-	if pub != target {
-		return Signer{}, fmt.Errorf("bunker public key %s does not match %s", pub, target)
-	}
-	if !timer.Stop() {
-		return Signer{}, fmt.Errorf("bunker: timed out")
-	}
-	return Signer{PubKey: pub, bunker: remote}, nil
+	return Signer{PubKey: pub, bunker: client}, nil
 }
 
 // dialRelays returns as soon as one relay accepts TCP.
