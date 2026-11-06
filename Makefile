@@ -1,7 +1,4 @@
 # dist/<name>-<os>-<arch>
-# The launch program drops the v1 apps_fts index, so it needs fts5:
-#   make launch-linux-amd64
-#   make launch-linux-arm64
 
 NAME := relay
 CMD := ./cmd
@@ -36,7 +33,7 @@ CGO_LDFLAGS := $(filter-out -Wl$(comma)-no_warn_duplicate_libraries,$(CGO_LDFLAG
 endif
 export CGO_LDFLAGS
 
-.PHONY: all bin darwin-arm64 linux-arm64 linux-amd64 launch launch-linux-amd64 launch-linux-arm64 clean
+.PHONY: all bin darwin-arm64 linux-arm64 linux-amd64 clean
 
 all: bin
 	ln -sfn $(BIN) $(NAME)
@@ -64,19 +61,6 @@ linux-amd64:
 	$(MAKE) bin GOOS=linux GOARCH=amd64 \
 		CC="zig cc -target x86_64-linux-gnu" \
 		CXX="zig c++ -target x86_64-linux-gnu"
-
-launch:
-	$(MAKE) all NAME=launch CMD=./cmd/launch TAGS=fts5
-
-launch-linux-amd64:
-	$(MAKE) bin NAME=launch CMD=./cmd/launch TAGS=fts5 GOOS=linux GOARCH=amd64 \
-		CC="zig cc -target x86_64-linux-gnu" \
-		CXX="zig c++ -target x86_64-linux-gnu"
-
-launch-linux-arm64:
-	$(MAKE) bin NAME=launch CMD=./cmd/launch TAGS=fts5 GOOS=linux GOARCH=arm64 \
-		CC="zig cc -target aarch64-linux-gnu" \
-		CXX="zig c++ -target aarch64-linux-gnu"
 
 clean:
 	rm -rf dist
