@@ -24,8 +24,8 @@ type Config struct {
 	StallTimeout time.Duration `env:"BLOSSOM_STALL_TIMEOUT"`
 
 	// PruneInterval is how often unreferenced blobs are removed from Bunny and the local blob directory.
-	// Zero disables the job. Default is 24 hours.
-	PruneInterval time.Duration `env:"BLOSSOM_PRUNE_INTERVAL"`
+	// BLOSSOM_PRUNE_INTERVAL must be set. Zero disables the job.
+	PruneInterval time.Duration `env:"BLOSSOM_PRUNE_INTERVAL,required,notEmpty"`
 
 	// Dir holds blob bytes in the Bunny key layout (blobs/, p/): the buffer zone,
 	// and every blob when Bunny is unset. It is always DATA_DIR/blossom and is set by main.
@@ -46,9 +46,8 @@ func NewConfig() Config {
 			"image/heic",
 			"image/heif",
 		},
-		StallTimeout:  30 * time.Second,
-		PruneInterval: 24 * time.Hour,
-		Bunny:         bunny.NewConfig(),
+		StallTimeout: 30 * time.Second,
+		Bunny:        bunny.NewConfig(),
 	}
 }
 

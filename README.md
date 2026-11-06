@@ -28,7 +28,7 @@ The catalog relay: a Nostr relay, a Blossom file host, and HTTP for `GET /v1/bun
 - A snapshot is written on `CATALOG_BUNDLE_INTERVAL` (default 5 minutes). The tick calls the enricher for apps in the diff first. `CATALOG_BUNDLE_INTERVAL=0` disables that tick. `relay bundle` enriches that diff and writes one snapshot, then exits. `relay bundle <app-id>` enriches only listings whose id contains that string; the snapshot is still the whole catalog. The tick takes no filter
 - Signing is `SIGN_WITH`. Its public key is `RELAY_PUBKEY`: unset, `RELAY_PUBKEY` takes it; set, it must equal it
 - `READ_ONLY=true` rejects events, Blossom uploads, and `relay.sock` blacklist and whitelist changes. Bundles are still signed with `SIGN_WITH`. The bundle tick still enriches
-- `BLOSSOM_PRUNE_INTERVAL` (default 24 hours) deletes APKs that no current asset event names, on Bunny and in `DATA_DIR/blossom`. Zero disables it
+- `BLOSSOM_PRUNE_INTERVAL` deletes APKs that no current asset event names, on Bunny and in `DATA_DIR/blossom`. Required. Zero disables it
 
 ### relay.sock
 - The [IPC](../product/specs/ipc.md) socket. `RELAY_SOCKET_PATH` sets its path; the default is `relay.sock` in the data directory. Mode 0660
@@ -75,7 +75,7 @@ cp .env.example .env
 
 ### Configuration
 
-Every variable, its default, and its unit are in [`.env.example`](.env.example). `DATA_DIR`, `SIGN_WITH`, `ADMIN_PUBKEYS`, and the three hostnames are required. Old names are not read.
+Every variable, its default, and its unit are in [`.env.example`](.env.example). `DATA_DIR`, `SIGN_WITH`, `ADMIN_PUBKEYS`, `BLOSSOM_PRUNE_INTERVAL`, and the three hostnames are required. Old names are not read.
 
 ### Data Directory Structure
 
