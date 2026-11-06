@@ -164,7 +164,8 @@ func coordKey(kind int, pubkey, d string) string {
 	return fmt.Sprintf("%d:%s:%s", kind, pubkey, d)
 }
 
-// MarshalDiff writes event lines, coordinate deletes, then one app-id delete line.
+// MarshalDiff writes event lines, coordinate deletes, one app-id delete line, then ban lines.
+// Both deletes are under "delete": an object names one coordinate, an array lists app ids.
 func MarshalDiff(d Diff) ([]byte, error) {
 	var buf bytes.Buffer
 	for _, event := range d.Events {
@@ -175,12 +176,15 @@ func MarshalDiff(d Diff) ([]byte, error) {
 		buf.Write(raw)
 		buf.WriteByte('\n')
 	}
+	type coordDelete struct {
+		Kind   int    `json:"kind"`
+		Pubkey string `json:"pubkey"`
+		D      string `json:"d"`
+	}
 	for _, coord := range d.Coords {
 		raw, err := json.Marshal(struct {
-			Kind   int    `json:"kind"`
-			Pubkey string `json:"pubkey"`
-			D      string `json:"d"`
-		}{coord.Kind, coord.Pubkey, coord.D})
+			Delete coordDelete `json:"delete"`
+		}{coordDelete{coord.Kind, coord.Pubkey, coord.D}})
 		if err != nil {
 			return nil, err
 		}
