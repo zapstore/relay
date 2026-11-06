@@ -44,7 +44,7 @@ func TestPublishMatchAPKOmitsStaleArtifacts(t *testing.T) {
 	writeCache(t, data, "com.example.oldcache", current)
 	writeCache(t, data, "com.example.nohash", "")
 
-	n, err := CreateBundle(t.Context(), data, next, signer, 10, nil)
+	n, err := CreateBundle(t.Context(), data, next, signer, 10, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestFromZeroMatchesSnapshot(t *testing.T) {
 	if len(state.Listings) != 1 {
 		t.Fatalf("listings = %d", len(state.Listings))
 	}
-	n, err := CreateBundle(t.Context(), data, state, signer, 10, nil)
+	n, err := CreateBundle(t.Context(), data, state, signer, 10, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestRequestBuiltBundleCarriesBanLines(t *testing.T) {
 		{Listings: []Listing{spy, maps}},
 		{Listings: []Listing{maps}, Notices: banned},
 	} {
-		if _, err := CreateBundle(t.Context(), data, st, signer, int64(10+i), nil); err != nil {
+		if _, err := CreateBundle(t.Context(), data, st, signer, int64(10+i), nil, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -186,7 +186,7 @@ func TestOlderSnapshotReadsLiveNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 	spy := resolvedListing(t, "com.example.spy")
-	if _, err := CreateBundle(t.Context(), data, State{Listings: []Listing{spy}}, signer, 10, nil); err != nil {
+	if _, err := CreateBundle(t.Context(), data, State{Listings: []Listing{spy}}, signer, 10, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := marshalEvents(nil)
@@ -232,7 +232,7 @@ func TestBundleEnrichesAppsInTheDiff(t *testing.T) {
 		}
 		return nil
 	}
-	n, err := CreateBundle(t.Context(), data, next, signer, 10, enrich)
+	n, err := CreateBundle(t.Context(), data, next, signer, 10, enrich, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestBundleContinuesWhenEnrichFails(t *testing.T) {
 	}
 	n, err := CreateBundle(t.Context(), data, State{Listings: []Listing{apkListing("com.example.app", current)}}, signer, 10, func(context.Context, []string) error {
 		return errors.New("down")
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestPreviousStackSignedByAnotherKeyIsDeleted(t *testing.T) {
 	if err := WriteSnap(SnapPath(data, 1), []nostr.Event{stack}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	n, err := CreateBundle(t.Context(), data, State{}, signer, 20, nil)
+	n, err := CreateBundle(t.Context(), data, State{}, signer, 20, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestPreviousStackSignedByAnotherKeyIsDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	diff := string(tarFiles(t, body)["diff.jsonl"])
-	want := `"kind":30267,"pubkey":"` + other + `","d":"editors"`
+	want := `{"delete":{"kind":30267,"pubkey":"` + other + `","d":"editors"}}`
 	if !strings.Contains(diff, want) {
 		t.Fatalf("diff = %s", diff)
 	}
@@ -384,10 +384,10 @@ func TestReenrichedAppShipsWithoutListingChange(t *testing.T) {
 		writeAbout(t, data, id)
 		writeCache(t, data, id, apk)
 	}
-	if n, err := CreateBundle(t.Context(), data, next, signer, 10, nil); err != nil || n != 1 {
+	if n, err := CreateBundle(t.Context(), data, next, signer, 10, nil, 0); err != nil || n != 1 {
 		t.Fatalf("first seal = %d, %v", n, err)
 	}
-	if n, err := CreateBundle(t.Context(), data, next, signer, 20, nil); err != nil || n != 1 {
+	if n, err := CreateBundle(t.Context(), data, next, signer, 20, nil, 0); err != nil || n != 1 {
 		t.Fatalf("unchanged seal = %d, %v", n, err)
 	}
 
@@ -396,7 +396,7 @@ func TestReenrichedAppShipsWithoutListingChange(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if n, err := CreateBundle(t.Context(), data, next, signer, 30, nil); err != nil || n != 2 {
+	if n, err := CreateBundle(t.Context(), data, next, signer, 30, nil, 0); err != nil || n != 2 {
 		t.Fatalf("re-enriched seal = %d, %v", n, err)
 	}
 	sealed, err := os.ReadFile(BundlePath(data, 1, 2))

@@ -51,10 +51,28 @@ type CatalogConfig struct {
 	// Zero disables the tick. `relay bundle` writes one snapshot anyway.
 	// `relay bundle <app-id>` limits enrichment to listings whose id contains the app id.
 	Interval time.Duration `env:"CATALOG_BUNDLE_INTERVAL"`
+
+	// MaxDeltaShare is the largest share of the catalog's apps and avatars an on-demand
+	// from→to bundle may ship. A larger delta is served as 0→to. Default is 0.5.
+	MaxDeltaShare float64 `env:"CATALOG_BUNDLE_MAX_DELTA_SHARE"`
+
+	// KeepSnapshots is how many snapshots before the latest are kept. Older ones and
+	// the bundles that start at them are deleted on each new snapshot; a client at a
+	// deleted epoch gets 0→to. Default is 2000.
+	KeepSnapshots int64 `env:"CATALOG_KEEP_SNAPSHOTS"`
+
+	// MaxBuilds is how many on-demand bundles build at once. A request beyond that
+	// gets 503 with Retry-After. Default is 4.
+	MaxBuilds int `env:"CATALOG_BUNDLE_MAX_BUILDS"`
 }
 
 func NewCatalogConfig() CatalogConfig {
-	return CatalogConfig{Interval: 5 * time.Minute}
+	return CatalogConfig{
+		Interval:      5 * time.Minute,
+		MaxDeltaShare: 0.5,
+		KeepSnapshots: 2000,
+		MaxBuilds:     4,
+	}
 }
 
 func (c CatalogConfig) Validate() error {
@@ -63,6 +81,15 @@ func (c CatalogConfig) Validate() error {
 	}
 	if c.Interval < 0 {
 		return fmt.Errorf("interval must be zero or greater")
+	}
+	if c.MaxDeltaShare <= 0 || c.MaxDeltaShare > 1 {
+		return fmt.Errorf("max delta share must be above 0 and at most 1")
+	}
+	if c.KeepSnapshots < 1 {
+		return fmt.Errorf("keep snapshots must be at least 1")
+	}
+	if c.MaxBuilds < 1 {
+		return fmt.Errorf("max builds must be at least 1")
 	}
 	return nil
 }
@@ -74,8 +101,11 @@ func (c CatalogConfig) String() string {
 	}
 	return fmt.Sprintf("Catalog:\n"+
 		"\tSIGN_WITH: %s\n"+
-		"\tInterval: %s",
-		sign, c.Interval)
+		"\tInterval: %s\n"+
+		"\tMax Delta Share: %g\n"+
+		"\tKeep Snapshots: %d\n"+
+		"\tMax Builds: %d",
+		sign, c.Interval, c.MaxDeltaShare, c.KeepSnapshots, c.MaxBuilds)
 }
 
 type SystemConfig struct {

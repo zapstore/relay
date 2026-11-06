@@ -217,7 +217,14 @@ func start(cfg config.Config) (err error) {
 	})
 	seal := func(ctx context.Context, req control.SealRequest) (string, error) {
 		if req.HasFrom {
-			if _, err := catalog.EnsureBundle(ctx, dataDir, req.From, req.To, signer, pol.Notices); err != nil {
+			err := catalog.WriteBundle(ctx, dataDir, req.From, req.To, cfg.Catalog.MaxDeltaShare, signer, pol.Notices)
+			if errors.Is(err, catalog.ErrFullBundle) {
+				if err := catalog.WriteBundle(ctx, dataDir, 0, req.To, 0, signer, pol.Notices); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("Bundle %d-%d is served as 0-%d, which is ready", req.From, req.To, req.To), nil
+			}
+			if err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("Bundle %d-%d is ready", req.From, req.To), nil
@@ -236,7 +243,7 @@ func start(cfg config.Config) (err error) {
 		if err != nil {
 			return "", err
 		}
-		epoch, err := catalog.Bundle(ctx, dataDir, relayDBPath, req.Filter, signer, notes, runEnrich)
+		epoch, err := catalog.Bundle(ctx, dataDir, relayDBPath, req.Filter, signer, notes, runEnrich, cfg.Catalog.KeepSnapshots)
 		if err != nil {
 			return "", err
 		}
@@ -279,7 +286,18 @@ func start(cfg config.Config) (err error) {
 		ReadOnly: cfg.Sys.ReadOnly,
 		Nostr:    rel.ServeNostr,
 	}
-	bundle := catalog.Handler{Data: dataDir, Signer: signer, Notices: pol.Notices, Log: slog.Default(), Limit: limiter}
+	if err := catalog.ClearBundles(dataDir); err != nil {
+		slog.Warn("cached bundles not cleared", "err", err)
+	}
+	bundle := catalog.Handler{
+		Data:     dataDir,
+		Signer:   signer,
+		Notices:  pol.Notices,
+		Log:      slog.Default(),
+		Limit:    limiter,
+		MaxShare: cfg.Catalog.MaxDeltaShare,
+		Builds:   cfg.Catalog.MaxBuilds,
+	}
 	if stats != nil {
 		bundle.Count = stats
 	}
@@ -325,7 +343,7 @@ func start(cfg config.Config) (err error) {
 	})
 	if cfg.Catalog.Interval > 0 {
 		g.Go(func() error {
-			catalog.Loop(gctx, cfg.Catalog.Interval, dataDir, relayDBPath, signer, pol.Notices, slog.Default(), nil)
+			catalog.Loop(gctx, cfg.Catalog.Interval, dataDir, relayDBPath, signer, pol.Notices, slog.Default(), nil, cfg.Catalog.KeepSnapshots)
 			return nil
 		})
 	}

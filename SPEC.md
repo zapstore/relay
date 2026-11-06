@@ -61,7 +61,7 @@ Uploads follow the [publisher policy](../product/specs/publisher-policy.md#uploa
 The pruner runs every
 `BLOSSOM_PRUNE_INTERVAL` and deletes every served blob that no current event names,
 including pending events, on Bunny and in `blossom/`. It skips the buffer
-zone. Zero disables it. An APK is at
+zone. The variable is required. Zero disables it. An APK is at
 most 500 MB and an image at most 500 KB. The limit is the number of bytes
 read, not the size hint. Any other media type is refused.
 
@@ -300,8 +300,10 @@ hotbox `bunker://` URL, as [Infra](../infra/SPEC.md#secrets) says.
 $DATA_DIR/
   snapshots/1.tar.zst          # full resolved catalog at epoch 1
   snapshots/2.tar.zst
-  bundles/0-1.tar.zst          # signed bundle
-  bundles/1-2.tar.zst
+  snapshots/3.tar.zst
+  bundles/2-3.tar.zst          # signed bundle, written with snapshot 3
+  bundles/0-3.tar.zst          # built on request
+  bundles/1-3.full             # empty: 1→3 is served as 0-3
   seal.lock                    # held while a snapshot is written
   artifacts.db                 # about, security, vector, icon, publisher pictures
 ```
@@ -310,6 +312,12 @@ Latest epoch is the largest `N` in `snapshots/N.tar.zst`. These paths are not
 configurable. The next snapshot is one above it. Epochs are never reset
 once the relay is in production. A request whose `from` has no snapshot gets
 the full snapshot, `from=0`, with `200`.
+
+Each new snapshot `N` deletes every bundle that does not end at `N`, since only
+the current span is served. It also deletes the snapshots before
+`N − CATALOG_KEEP_SNAPSHOTS` (default 2000) and the bundles that start at
+them; a phone that far behind gets `from=0`. Both run under `seal.lock`.
+APKs and blobs are pruned elsewhere.
 
 A snapshot is the full event set at that epoch, the ban notices in force
 when it was written, and each app's `files_hash` from `artifacts.db`. A
@@ -330,3 +338,20 @@ only for an app id that is in the delete list and has operator text.
 `bundles/<from>-<to>.tar.zst`, building it from snapshot `from` and
 snapshot `to` when the file is not there yet. `from=0` is built from
 snapshot `to` alone and cached the same way.
+
+A delta that would ship the files of more than `CATALOG_BUNDLE_MAX_DELTA_SHARE`
+(default 0.5) of the catalog's apps and publisher avatars is not written. The
+relay writes the empty marker `bundles/<from>-<to>.full` and serves `0-<to>`,
+so the manifest says `from=0` and the phone imports a full catalog. A later
+request for that `from` reads the marker and gets `0-<to>` without a build.
+A `from` whose snapshot is deleted while its delta builds is served the same way.
+
+A bundle on disk, a marker hit, and a `304` are free. A build costs one token
+from the requester's IP bucket, the one the relay and Blossom use. An empty
+bucket gets `429` with `Retry-After`, the seconds until the bucket refills
+enough. At most `CATALOG_BUNDLE_MAX_BUILDS` (default 4) distinct `from`/`to`
+pairs build at once; concurrent requests for one pair share its build. A
+request that would start one more gets `503` with `Retry-After: 30`; nothing
+queues. A build runs on its own five-minute deadline, so a waiter that
+disconnects does not fail the others. The response streams from the file and
+answers `Range` and `If-Modified-Since`.

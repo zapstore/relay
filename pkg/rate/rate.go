@@ -3,6 +3,7 @@
 package rate
 
 import (
+	"math"
 	"time"
 
 	"github.com/pippellia-btc/rate"
@@ -27,6 +28,20 @@ func NewLimiter(c Config) Limiter {
 		Limiter: rate.NewLimiter(refiller),
 		config:  c,
 	}
+}
+
+// RetryAfter is an upper bound on the wait until the entity can afford cost.
+// Tokens arrive TokensPerInterval at a time, once per Interval.
+func (l Limiter) RetryAfter(entity string, cost float64) time.Duration {
+	need := cost - l.Balance(entity)
+	if need <= 0 {
+		return 0
+	}
+	if l.config.TokensPerInterval <= 0 {
+		return l.config.Interval
+	}
+	intervals := math.Ceil(need / float64(l.config.TokensPerInterval))
+	return time.Duration(intervals) * l.config.Interval
 }
 
 func (l Limiter) InitialTokens() float64     { return float64(l.config.InitialTokens) }

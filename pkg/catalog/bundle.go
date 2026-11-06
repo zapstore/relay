@@ -23,7 +23,8 @@ type Enricher func(ctx context.Context, appIDs []string) error
 // contains it, and no other app is enriched. No match is an error. The
 // interval loop passes an empty filter.
 // Artifact files are included when the enricher cache matches the listing's current APK hash.
-func Bundle(ctx context.Context, data, dbPath, filter string, signer Signer, notices map[string]string, enrich Enricher) (int64, error) {
+// keep is the number of older snapshots a new one retains. Zero keeps them all.
+func Bundle(ctx context.Context, data, dbPath, filter string, signer Signer, notices map[string]string, enrich Enricher, keep int64) (int64, error) {
 	sealing.Lock()
 	defer sealing.Unlock()
 	raw, err := LoadEvents(ctx, dbPath, signer.PubKey, signer.PubKey)
@@ -48,7 +49,7 @@ func Bundle(ctx context.Context, data, dbPath, filter string, signer Signer, not
 		run = nil
 	}
 	next.Notices = notices
-	return CreateBundle(ctx, data, next, signer, at.Unix(), run)
+	return CreateBundle(ctx, data, next, signer, at.Unix(), run, keep)
 }
 
 // matchingApps are the app ids in st that contain filter.
@@ -65,7 +66,7 @@ func matchingApps(st State, filter string) []string {
 // Loop bundles every interval until ctx is cancelled. It bundles at once only
 // when data holds no snapshot, so a restart does not compete with the first
 // clients for the database.
-func Loop(ctx context.Context, every time.Duration, data, dbPath string, signer Signer, notices func(context.Context) (map[string]string, error), log *slog.Logger, enrich Enricher) {
+func Loop(ctx context.Context, every time.Duration, data, dbPath string, signer Signer, notices func(context.Context) (map[string]string, error), log *slog.Logger, enrich Enricher, keep int64) {
 	if every <= 0 {
 		return
 	}
@@ -79,7 +80,7 @@ func Loop(ctx context.Context, every time.Duration, data, dbPath string, signer 
 				return
 			}
 		}
-		n, err := Bundle(ctx, data, dbPath, "", signer, notes, enrich)
+		n, err := Bundle(ctx, data, dbPath, "", signer, notes, enrich, keep)
 		if err != nil {
 			log.Error("bundle", "error", err)
 			return

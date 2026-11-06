@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"slices"
 	"strings"
@@ -15,7 +17,9 @@ import (
 // the snapshot's modification time, so a later rebuild of the same span is identical.
 // enrich runs for the apps in the diff before artifacts are selected. A nil enricher skips that.
 // An enricher error is logged and the snapshot is still written.
-func CreateBundle(ctx context.Context, data string, next State, signer Signer, bundledAt int64, enrich Enricher) (int64, error) {
+// A new snapshot deletes every bundle that does not end at it, and, when keep is above
+// zero, the snapshots before epoch n+1−keep with the bundles that start at them.
+func CreateBundle(ctx context.Context, data string, next State, signer Signer, bundledAt int64, enrich Enricher, keep int64) (int64, error) {
 	if err := os.MkdirAll(SnapDir(data), 0o755); err != nil {
 		return 0, err
 	}
@@ -74,38 +78,72 @@ func CreateBundle(ctx context.Context, data string, next State, signer Signer, b
 	if err := os.Chtimes(snap, at, at); err != nil {
 		return 0, err
 	}
+	var keepFrom int64
+	if keep > 0 {
+		keepFrom = nextN - keep
+	}
+	if err := pruneSnaps(data, keepFrom); err != nil {
+		writeBlock("prune old snapshots " + err.Error())
+	}
+	if err := pruneBundles(data, nextN, keepFrom); err != nil {
+		writeBlock("clear old bundles " + err.Error())
+	}
 	return nextN, nil
 }
 
-// EnsureBundle returns the cached from→to bundle, building it from the two snapshots when absent.
+// ErrFullBundle means the from→to delta is not built: snapshot from is gone, or the
+// delta ships more than the allowed share of the catalog. 0→to is served instead.
+var ErrFullBundle = errors.New("delta is served as the full bundle")
+
+// EnsureBundle returns the from→to bundle, building it first when it is not cached.
+// It never falls back to 0→to for size.
+func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signer, notices func(context.Context) (map[string]string, error)) ([]byte, error) {
+	if err := WriteBundle(ctx, data, from, to, 0, signer, notices); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(BundlePath(data, from, to))
+}
+
+// WriteBundle builds the from→to bundle from the two snapshots unless it is already cached.
 // The ban lines are the notices snapshot to was written with. notices is read only for
 // a snapshot written before snapshots carried them. Nil means none.
-func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signer, notices func(context.Context) (map[string]string, error)) ([]byte, error) {
+// maxShare above zero is the largest share of the catalog's apps and avatars a delta
+// may ship. A larger delta writes a marker instead of the bundle and returns ErrFullBundle,
+// as does a from whose snapshot is gone.
+func WriteBundle(ctx context.Context, data string, from, to int64, maxShare float64, signer Signer, notices func(context.Context) (map[string]string, error)) error {
 	path := BundlePath(data, from, to)
-	if raw, err := os.ReadFile(path); err == nil {
-		return raw, nil
+	if _, err := os.Stat(path); err == nil {
+		return nil
 	} else if !os.IsNotExist(err) {
-		return nil, err
+		return err
 	}
 	var prev State
 	if from > 0 {
+		if _, err := os.Stat(fullMarkerPath(data, from, to)); err == nil {
+			return ErrFullBundle
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 		st, err := ReadSnap(SnapPath(data, from))
+		if errors.Is(err, fs.ErrNotExist) {
+			return ErrFullBundle
+		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		prev = st
 	}
 	next, err := ReadSnap(SnapPath(data, to))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	at, err := snapTime(SnapPath(data, to))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if next.Notices == nil && notices != nil {
 		if next.Notices, err = notices(ctx); err != nil {
-			return nil, fmt.Errorf("ban notices: %w", err)
+			return fmt.Errorf("ban notices: %w", err)
 		}
 	}
 	diff := Compare(prev, next)
@@ -113,16 +151,29 @@ func EnsureBundle(ctx context.Context, data string, from, to int64, signer Signe
 		diff.Apps = appIDs(next)
 	}
 	if err := finishDiff(ctx, data, &diff, prev, next); err != nil {
-		return nil, err
+		return err
+	}
+	if from > 0 && maxShare > 0 && deltaShare(diff, next) > maxShare {
+		if err := writeAtomic(fullMarkerPath(data, from, to), nil); err != nil {
+			return err
+		}
+		return ErrFullBundle
 	}
 	body, err := BuildBundle(ctx, data, from, to, at.Unix(), diff, signer)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := writeAtomic(path, body); err != nil {
-		return nil, err
+	return writeAtomic(path, body)
+}
+
+// deltaShare is the share of the catalog's apps and profiles whose files the diff ships.
+// Those files are most of a bundle's size.
+func deltaShare(diff Diff, next State) float64 {
+	total := len(next.Listings) + len(next.Profiles)
+	if total == 0 {
+		return 0
 	}
-	return body, nil
+	return float64(len(diff.Apps)+len(diff.Avatars)) / float64(total)
 }
 
 // finishDiff sets the parts of a diff that read the artifact store: the apps whose

@@ -57,7 +57,7 @@ func TestFilteredSealWritesTheWholeCatalog(t *testing.T) {
 		enriched = append(enriched, ids...)
 		return nil
 	}
-	n, err := Bundle(t.Context(), dir, dbPath, "maps", signer, nil, enrich)
+	n, err := Bundle(t.Context(), dir, dbPath, "maps", signer, nil, enrich, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestFilteredSealWritesTheWholeCatalog(t *testing.T) {
 	if got := appIDs(st); !slices.Equal(got, []string{"com.example.beacon", "com.example.maps"}) {
 		t.Fatalf("snapshot apps %v", got)
 	}
-	if _, err := Bundle(t.Context(), dir, dbPath, "nothing", signer, nil, enrich); err == nil {
+	if _, err := Bundle(t.Context(), dir, dbPath, "nothing", signer, nil, enrich, 0); err == nil {
 		t.Fatal("a filter that matches nothing must fail")
 	}
 }
