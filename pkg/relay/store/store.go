@@ -38,6 +38,10 @@ const (
 // dsn returns the connection string for path. A PRAGMA run through the pool
 // reaches one connection only, so per-connection settings go here, where
 // the driver applies them to every connection it opens.
+//
+// Transactions begin IMMEDIATE. Replace reads before it writes, and SQLite
+// fails a deferred transaction's upgrade to a write lock at once with
+// "database is locked", skipping the busy timeout.
 func dsn(path string) string {
 	sep := "?"
 	if strings.Contains(path, "?") {
@@ -46,7 +50,7 @@ func dsn(path string) string {
 	if !strings.HasPrefix(path, "file:") {
 		path = "file:" + path
 	}
-	return fmt.Sprintf("%s%s_busy_timeout=%d&_foreign_keys=1&_cache_size=%d",
+	return fmt.Sprintf("%s%s_txlock=immediate&_busy_timeout=%d&_foreign_keys=1&_cache_size=%d",
 		path, sep, busyTimeout.Milliseconds(), -int64(cacheSize/sqlite.KiB))
 }
 

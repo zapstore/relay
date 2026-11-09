@@ -88,6 +88,39 @@ func TestPragmasOnEveryConnection(t *testing.T) {
 	}
 }
 
+// Replace reads before it writes. In a deferred transaction, SQLite refuses
+// that upgrade with "database is locked" while another connection writes,
+// without waiting for the busy timeout.
+func TestConcurrentReplace(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	const writers = 32
+	errs := make(chan error, writers)
+	for i := range writers {
+		go func() {
+			event := nostr.Event{
+				ID:        "replace-" + strconv.Itoa(i),
+				PubKey:    "pk",
+				CreatedAt: nostr.Timestamp(i),
+				Kind:      events.KindApp,
+				Tags:      nostr.Tags{{"d", "com.example." + strconv.Itoa(i%4)}},
+				Sig:       "sig",
+			}
+			_, err := store.Replace(ctx, &event)
+			errs <- err
+		}()
+	}
+	for range writers {
+		if err := <-errs; err != nil {
+			t.Errorf("Replace: %v", err)
+		}
+	}
+}
+
 func TestTagsOfDeletedEvents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "relay.db")
 	store, err := New(path)
