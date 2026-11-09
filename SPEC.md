@@ -243,10 +243,12 @@ phones are.
 
 The relay also keeps daily REQ, filter, and saved-event totals in
 `relay_metrics`. It does not count APK downloads: most come from the
-forge, and Bunny's statistics and log reports cover what the CDN serves,
-including the most requested files. Nothing counts app page views on the
-relay; phones browse the catalog on the device. No IP and no country are
-written.
+forge, and what the CDN serves is the CDN's record. `sync ingest` reads
+Bunny's raw logs daily and writes per-app daily counts to `cdn.db` in the
+data directory ([Sync](../sync/SPEC.md#cdn-rollup)); the relay neither
+writes nor reads that file. Nothing counts app page views on the relay;
+phones browse the catalog on the device. No IP and no country are written
+here, and the rollup starts from logs Bunny has already anonymized.
 
 ## Deletion
 
