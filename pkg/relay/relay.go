@@ -975,7 +975,9 @@ func NoZapTag(_ rely.Client, e *nostr.Event) error {
 // NotAnchored returns an error if the event is not "anchored" to an existing event.
 // Anchoring means simply that the event references an existing root event.
 // An app coordinate is accepted for any pubkey when a listing for that app
-// exists. A kind 9735 p tag must be a known pubkey for the app.
+// exists. A kind 9735 p tag must be a known pubkey for the app. A kind 0 from
+// any pubkey passes: clients copy the profiles they read here, and the relay
+// keeps the newest one per pubkey.
 func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Event) error {
 	return func(_ rely.Client, e *nostr.Event) error {
 		if slices.Contains(RootKinds, e.Kind) {
@@ -987,17 +989,6 @@ func NotAnchored(db store.T, catalogKey string) func(_ rely.Client, e *nostr.Eve
 		defer cancel()
 
 		switch e.Kind {
-		case events.KindProfile:
-			isPublisher, err := db.Has(ctx, nostr.Filter{Authors: []string{e.PubKey}})
-			if err != nil {
-				slog.Error("NotAnchored: failed to check kind:0", "err", err)
-				return ErrInternal
-			}
-
-			if !isPublisher {
-				return errors.New("kind 0: pubkey must have other events on this relay")
-			}
-
 		case events.KindComment:
 			// A reply names a stored kind 11 or 1111 with its e tag.
 			return anchored(ctx, db, e, "A", true, &nostr.Filter{Kinds: []int{events.KindForumPost, events.KindComment}})

@@ -153,6 +153,15 @@ func TestNotAnchoredRequiresAListing(t *testing.T) {
 	}
 }
 
+func TestNotAnchoredAcceptsAnyProfile(t *testing.T) {
+	db := newSlotDB(t)
+	hook := NotAnchored(db, testPubkey(t))
+	stranger := &nostr.Event{Kind: events.KindProfile, PubKey: testPubkey(t), Content: `{"name":"nobody"}`}
+	if err := hook(nil, stranger); err != nil {
+		t.Fatalf("kind 0 from a pubkey with no other events: %v", err)
+	}
+}
+
 func testPubkey(t *testing.T) string {
 	t.Helper()
 	secret := nostr.GeneratePrivateKey()
