@@ -264,7 +264,6 @@ func signManifest(ctx context.Context, from, to, bundledAt int64, members []memb
 		tags = append(tags, nostr.Tag{"file", m.Name, hex.EncodeToString(sum[:])})
 	}
 	event := nostr.Event{CreatedAt: nostr.Timestamp(bundledAt), Kind: manifestKind, Tags: tags}
-	writeBlock("sign")
 	if err := signer.Sign(ctx, &event); err != nil {
 		return nil, err
 	}
