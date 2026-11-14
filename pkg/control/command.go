@@ -26,6 +26,7 @@ const (
 	opDisallow     = "disallow"
 	opSeal         = "seal"
 	opDeleteBundle = "delete-bundle"
+	opDeleteApp    = "delete-app"
 	opEnrich       = "enrich"
 	opCancel       = "cancel"
 )
@@ -52,6 +53,7 @@ var writeOps = map[string]spec{
 	opDisallow:     {required: []string{"id"}},
 	opSeal:         {optional: []string{"filter", "from", "note"}},
 	opDeleteBundle: {required: []string{"from", "to"}},
+	opDeleteApp:    {required: []string{"app"}},
 	opEnrich:       {required: []string{"app"}, optional: []string{"note"}},
 	opCancel:       {required: []string{"job"}},
 }

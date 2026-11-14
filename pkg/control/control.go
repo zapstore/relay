@@ -54,19 +54,23 @@ type SealFunc func(ctx context.Context, req SealRequest) (string, error)
 // EnrichFunc enriches one app and returns the enricher report.
 type EnrichFunc func(ctx context.Context, appID string) (string, error)
 
+// DeleteAppFunc deletes every stored event of one app and returns how many it removed.
+type DeleteAppFunc func(ctx context.Context, appID string) (int, error)
+
 // Server answers relay.sock. Set the fields, then call Listen.
 type Server struct {
-	Store  *policy.Store
-	Ban    policy.BanFunc
-	Seal   SealFunc
-	Enrich EnrichFunc
-	Data   string // the relay data directory: snapshots and bundles
+	Store     *policy.Store
+	Ban       policy.BanFunc
+	DeleteApp DeleteAppFunc
+	Seal      SealFunc
+	Enrich    EnrichFunc
+	Data      string // the relay data directory: snapshots and bundles
 	// Relay is the catalog pubkey. A signed command names it, so a command
 	// signed for one relay does not run on another.
 	Relay string
 	// Admins may sign commands. Hex pubkeys.
 	Admins []string
-	// ReadOnly refuses changes to the blacklist and the whitelist.
+	// ReadOnly refuses changes to the blacklist and the whitelist, and deleting an app.
 	ReadOnly bool
 	// Nostr serves a connection that opens with '[': NIP-01, not a command.
 	// in holds the bytes already read. Nil refuses such connections.
@@ -244,7 +248,7 @@ func (s *Server) handle(conn net.Conn, req request) response {
 		}
 		e = entry{op: req.Op, args: a}
 	}
-	if s.ReadOnly && changesPolicy(e.op) {
+	if s.ReadOnly && (changesPolicy(e.op) || e.op == opDeleteApp) {
 		return response{Error: "relay is read-only"}
 	}
 
@@ -354,6 +358,8 @@ func (s *Server) run(ctx context.Context, e entry) (response, error) {
 		return s.seal(a, e.pubkey)
 	case opDeleteBundle:
 		return response{}, s.deleteBundle(a)
+	case opDeleteApp:
+		return s.deleteApp(ctx, a["app"])
 	case opEnrich:
 		return s.enrich(a, e.pubkey)
 	case opCancel:
@@ -413,6 +419,22 @@ func (s *Server) enrich(a args, by string) (response, error) {
 	}
 	v := j.view()
 	return response{Job: &v, Message: fmt.Sprintf("Enrich job %d started", v.ID)}, nil
+}
+
+// deleteApp removes an app's listing, releases, and assets. An app with no
+// stored events is an error, so a mistyped id is not reported as done.
+func (s *Server) deleteApp(ctx context.Context, appID string) (response, error) {
+	if s.DeleteApp == nil {
+		return response{}, errors.New("delete-app is not available on this relay")
+	}
+	n, err := s.DeleteApp(ctx, appID)
+	if err != nil {
+		return response{}, err
+	}
+	if n == 0 {
+		return response{}, fmt.Errorf("the relay has no events for %s", appID)
+	}
+	return response{Message: fmt.Sprintf("Deleted %d events for %s", n, appID)}, nil
 }
 
 // deleteBundle removes one bundle file. A missing file is success.

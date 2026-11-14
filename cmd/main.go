@@ -276,15 +276,16 @@ func start(cfg config.Config) (err error) {
 	}
 	admins := cfg.Control.AdminPubkeys
 	sock := &control.Server{
-		Store:    pol,
-		Ban:      ban,
-		Seal:     seal,
-		Enrich:   control.EnrichFunc(enrichOne),
-		Data:     dataDir,
-		Relay:    cfg.Relay.Info.Pubkey,
-		Admins:   admins,
-		ReadOnly: cfg.Sys.ReadOnly,
-		Nostr:    rel.ServeNostr,
+		Store:     pol,
+		Ban:       ban,
+		DeleteApp: func(ctx context.Context, appID string) (int, error) { return rel.DeleteApp(ctx, appID) },
+		Seal:      seal,
+		Enrich:    control.EnrichFunc(enrichOne),
+		Data:      dataDir,
+		Relay:     cfg.Relay.Info.Pubkey,
+		Admins:    admins,
+		ReadOnly:  cfg.Sys.ReadOnly,
+		Nostr:     rel.ServeNostr,
 	}
 	if err := catalog.ClearBundles(dataDir); err != nil {
 		slog.Warn("cached bundles not cleared", "err", err)

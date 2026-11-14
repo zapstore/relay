@@ -29,6 +29,7 @@ type harness struct {
 	admin   string // secret key
 	mu      sync.Mutex
 	bans    []string
+	deleted []string
 	sealed  chan SealRequest
 	release chan struct{}
 }
@@ -71,6 +72,15 @@ func newHarness(t *testing.T, readOnly bool) *harness {
 			defer h.mu.Unlock()
 			h.bans = append(h.bans, pub.Kind+":"+pub.ID+":"+reason)
 			return nil
+		},
+		DeleteApp: func(_ context.Context, appID string) (int, error) {
+			if appID == "com.missing" {
+				return 0, nil
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.deleted = append(h.deleted, appID)
+			return 3, nil
 		},
 		Seal: func(ctx context.Context, req SealRequest) (string, error) {
 			h.sealed <- req
@@ -337,6 +347,45 @@ func TestDeleteBundle(t *testing.T) {
 		if resp := h.call(t, bad); resp.OK {
 			t.Fatalf("%v accepted", bad)
 		}
+	}
+}
+
+func TestDeleteApp(t *testing.T) {
+	h := newHarness(t, false)
+	resp := h.call(t, h.signed(t, h.admin, "delete-app", args{"app": "com.example.app"}, time.Now()))
+	if !resp.OK || !strings.Contains(resp.Message, "Deleted 3 events for com.example.app") {
+		t.Fatalf("delete %+v", resp)
+	}
+	h.mu.Lock()
+	got := append([]string(nil), h.deleted...)
+	h.mu.Unlock()
+	if len(got) != 1 || got[0] != "com.example.app" {
+		t.Fatalf("deleted %v", got)
+	}
+
+	if resp := h.call(t, h.signed(t, h.admin, "delete-app", args{"app": "com.missing"}, time.Now())); resp.OK || !strings.Contains(resp.Error, "no events") {
+		t.Fatalf("missing app %+v", resp)
+	}
+	other := nostr.GeneratePrivateKey()
+	if resp := h.call(t, h.signed(t, other, "delete-app", args{"app": "com.example.app"}, time.Now())); resp.OK || !strings.Contains(resp.Error, "not a relay admin") {
+		t.Fatalf("non-admin %+v", resp)
+	}
+	for _, bad := range []map[string]string{
+		{"op": "delete-app"},
+		{"op": "delete-app", "app": "com.a/../b"},
+		{"op": "delete-app", "app": "com.a", "id": "x"},
+	} {
+		if resp := h.call(t, bad); resp.OK {
+			t.Fatalf("%v accepted", bad)
+		}
+	}
+}
+
+func TestDeleteAppRefusedWhenReadOnly(t *testing.T) {
+	h := newHarness(t, true)
+	resp := h.call(t, map[string]string{"op": "delete-app", "app": "com.example.app"})
+	if resp.OK || !strings.Contains(resp.Error, "read-only") {
+		t.Fatalf("read-only %+v", resp)
 	}
 }
 

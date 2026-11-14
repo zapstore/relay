@@ -73,6 +73,13 @@ func ApplyBan(ctx context.Context, db store.T, pol *policy.Store, catalogKey str
 	return apps, nil
 }
 
+// DeleteApp removes the listing, releases, and assets of one app, from every
+// key that published them, and returns how many events it removed. The
+// publishers stay allowed: they can publish the app again.
+func (r *T) DeleteApp(ctx context.Context, appID string) (int, error) {
+	return r.deleteAppListings(ctx, appID)
+}
+
 // loadListings reads every stored app, release, and asset so a forge or
 // certificate ban can find the rows it affects. Worth indexing later.
 func loadListings(ctx context.Context, db store.T) ([]policy.Listing, error) {
