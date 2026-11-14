@@ -39,13 +39,6 @@ app is accepted, because the upload names no app id. The operator adds a key wit
 or from the webapp's `/admin`, which sends it there. `disallow` removes it. `allowed` lists the keys.
 The web of trust threshold is `VERTEX_THRESHOLD`.
 
-A catalog key listing for a new app id passes the forge check again: the
-`repository` tag that key signed must name an approved forge and an account
-at least 30 days old. The relay reads the account date from the forge API
-once and keeps it. A listing that fails is rejected. The indexer holds a
-candidate until its account is old enough, so this only catches an indexer
-mistake.
-
 Kinds `1111`, `9735`, and `1984` skip the gate. The relay is the catalog
 key's inbox for comments and zaps. Reports are public, like comments. The
 operator also reads them through Sentinel.
