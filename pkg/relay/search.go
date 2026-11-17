@@ -51,6 +51,10 @@ func searchEntries(ctx context.Context, db store.T, catalogKey, artifactsPath st
 	if arts != nil {
 		defer arts.Close()
 	}
+	curated, err := curatedApps(ctx, db, catalogKey)
+	if err != nil {
+		return nil, err
+	}
 
 	entries := make([]search.Entry, 0, len(listings))
 	for _, listing := range listings {
@@ -60,8 +64,9 @@ func searchEntries(ctx context.Context, db store.T, catalogKey, artifactsPath st
 		if name == "" {
 			continue
 		}
+		_, inStack := curated[appID]
 		entry := search.Entry{
-			App:   search.App{ID: appID, Name: name},
+			App:   search.App{ID: appID, Name: name, Curated: inStack},
 			Event: event,
 		}
 		if arts != nil {
@@ -81,6 +86,50 @@ func searchEntries(ctx context.Context, db store.T, catalogKey, artifactsPath st
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// curatedApps is the app ids named by a stack the catalog key, or the key
+// before it, signed.
+func curatedApps(ctx context.Context, db store.T, catalogKey string) (map[string]struct{}, error) {
+	stacks, err := loadEvents(ctx, db.DB, `
+		SELECT id, pubkey, created_at, kind, tags, content, sig FROM events
+		WHERE kind = ? AND pubkey IN (?, ?)`, events.KindStack, catalogKey, events.EarlierCatalogKey)
+	if err != nil {
+		return nil, fmt.Errorf("search: load catalog stacks: %w", err)
+	}
+	out := map[string]struct{}{}
+	for _, event := range stacks {
+		stack, err := events.ParseStack(&event)
+		if err != nil {
+			continue
+		}
+		for _, app := range stack.Apps {
+			out[app.AppID] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+// syncCurated resyncs the apps that entered or left a catalog stack since
+// before was read.
+func (r *T) syncCurated(ctx context.Context, before map[string]struct{}) {
+	after, err := curatedApps(ctx, r.store, r.config.Info.Pubkey)
+	if err != nil {
+		slog.Error("search: curated update failed", "error", err)
+		return
+	}
+	var changed []string
+	for id := range before {
+		if _, ok := after[id]; !ok {
+			changed = append(changed, id)
+		}
+	}
+	for id := range after {
+		if _, ok := before[id]; !ok {
+			changed = append(changed, id)
+		}
+	}
+	r.SyncSearch(ctx, changed...)
 }
 
 // UseSearch answers NIP-50 text search from engine.

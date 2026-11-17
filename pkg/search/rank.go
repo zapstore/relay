@@ -23,6 +23,7 @@ const (
 	ExactBoost      = 20_000_000
 	FactScore       = 18_000
 	HardFactScore   = 54_000
+	CuratedScore    = 18_000
 	MinSearchLength = 2
 	Limit           = 20
 )
@@ -69,13 +70,15 @@ type Parsed struct {
 	Facts    []string
 }
 
-// App is one ranked listing.
+// App is one ranked listing. A Curated app is in a catalog stack and gets
+// CuratedScore once a text hit or its vector admits it.
 type App struct {
 	ID       string
 	Name     string
 	Vector   []int8
 	FactBits int
 	Keywords []string
+	Curated  bool
 }
 
 type pill struct {
@@ -173,12 +176,22 @@ func Rank(apps []App, query string, vector []int8, boost, limit, penalty int, ad
 		app   App
 		score int
 	}
-	var kept []scored
+	var rows []App
+	sameName := 0
 	for _, app := range apps {
 		if app.FactBits&hard != hard || app.FactBits&exclude != 0 {
 			continue
 		}
-		score, ok := scoreApp(query, app, vector, boost, keepAll, penalty)
+		rows = append(rows, app)
+		if query != "" && Fold(app.Name) == query {
+			sameName++
+		}
+	}
+	// A name that several apps share does not say which one the user means.
+	sharedName := sameName > 1
+	var kept []scored
+	for _, app := range rows {
+		score, ok := scoreApp(query, app, vector, boost, keepAll, penalty, sharedName)
 		if ok {
 			kept = append(kept, scored{app, score})
 		}
@@ -196,8 +209,8 @@ func Rank(apps []App, query string, vector []int8, boost, limit, penalty int, ad
 	return out
 }
 
-func scoreApp(query string, app App, vector []int8, boost int, admitAll bool, penalty int) (int, bool) {
-	text := textBoost(query, app.Name, app.ID) + keywordScore(query, app.Keywords)
+func scoreApp(query string, app App, vector []int8, boost int, admitAll bool, penalty int, sharedName bool) (int, bool) {
+	text := textBoost(query, app.Name, app.ID, sharedName) + keywordScore(query, app.Keywords)
 	hasDot := vector != nil && len(app.Vector) == VectorDims
 	dot := 0
 	if hasDot {
@@ -206,20 +219,27 @@ func scoreApp(query string, app App, vector []int8, boost int, admitAll bool, pe
 	if !admitAll && text == 0 && (!hasDot || dot < MinVectorDot) {
 		return 0, false
 	}
-	return text + dot + factScore(app.FactBits, boost, penalty), true
+	curation := 0
+	if app.Curated {
+		curation = CuratedScore
+	}
+	return text + dot + factScore(app.FactBits, boost, penalty) + curation, true
 }
 
 func factScore(set, boost, penalty int) int {
 	return bits.OnesCount(uint(set&boost))*HardFactScore - bits.OnesCount(uint(set&penalty))*FactScore
 }
 
-func textBoost(query, name, appID string) int {
+// textBoost is the name boost. An exact name is the top boost unless
+// sharedName says several apps carry it; then it ranks as a prefix. An exact
+// app id is always unique.
+func textBoost(query, name, appID string, sharedName bool) int {
 	if query == "" {
 		return 0
 	}
 	foldedName := Fold(name)
 	foldedID := strings.ToLower(appID)
-	if query == foldedName || query == foldedID {
+	if query == foldedID || (query == foldedName && !sharedName) {
 		return ExactBoost
 	}
 	if strings.HasPrefix(foldedName, query) || strings.HasPrefix(foldedID, query) {
@@ -237,7 +257,9 @@ func textBoost(query, name, appID string) int {
 	return 0
 }
 
-// keywordScore is about cosine 0.30 per matched query word, at most two words.
+// keywordScore is about cosine 0.10 per matched query word, at most two words.
+// Generic keywords such as "offline" or "chat" sit on many unrelated apps, so
+// a keyword only reorders close vectors.
 func keywordScore(query string, keywords []string) int {
 	if query == "" || len(keywords) == 0 {
 		return 0
@@ -269,7 +291,7 @@ func keywordScore(query string, keywords []string) int {
 			start += len(parts)
 		}
 	}
-	return min(matched, 2) * HardFactScore
+	return min(matched, 2) * FactScore
 }
 
 func covers(queryWords, fieldWords []string) bool {

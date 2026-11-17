@@ -97,3 +97,58 @@ func TestParseSecurity(t *testing.T) {
 		t.Fatal("text without facts set bits")
 	}
 }
+
+func TestCloseVectorOutranksGenericKeyword(t *testing.T) {
+	query, close, loose := make([]int8, VectorDims), make([]int8, VectorDims), make([]int8, VectorDims)
+	for i := range 64 {
+		query[i], close[i], loose[i] = 20, 100, 60
+	}
+	apps := []App{
+		{ID: "com.workout", Name: "Workout", Vector: loose, Keywords: []string{"offline"}},
+		{ID: "org.maps", Name: "Atlas", Vector: close},
+	}
+	got := Rank(apps, "offline hiking maps", query, 0, Limit, 0, false, 0, 0)
+	if len(got) != 2 || got[0].ID != "org.maps" {
+		t.Fatalf("got %+v, want org.maps first", got)
+	}
+}
+
+func TestCuratedReordersAndAdmitsNothing(t *testing.T) {
+	neighbor := make([]int8, VectorDims)
+	for i := range neighbor {
+		neighbor[i] = 12
+	}
+	apps := []App{
+		{ID: "com.plain", Name: "Jotter", Vector: neighbor},
+		{ID: "org.curated", Name: "Scribble", Vector: neighbor, Curated: true},
+		{ID: "org.absent", Name: "Wallet", Curated: true},
+	}
+	got := Rank(apps, "notes", neighbor, 0, Limit, 0, false, 0, 0)
+	ids := make([]string, len(got))
+	for i, app := range got {
+		ids[i] = app.ID
+	}
+	if !slices.Equal(ids, []string{"org.curated", "com.plain"}) {
+		t.Fatalf("got %v", ids)
+	}
+}
+
+func TestSharedExactNameStopsBeingExact(t *testing.T) {
+	close, far := make([]int8, VectorDims), make([]int8, VectorDims)
+	for i := range close {
+		close[i], far[i] = 12, 8
+	}
+	first := func(apps []App) string {
+		return Rank(apps, "notes", close, 0, Limit, 0, false, 0, 0)[0].ID
+	}
+	tech := App{ID: "com.tech", Name: "Notes Tech", Vector: close}
+	// Shared, "Notes" ranks as a prefix, level with "Notes Tech", so the closer vector decides.
+	shared := []App{{ID: "com.a", Name: "Notes", Vector: far}, {ID: "com.b", Name: "Notes", Vector: far}, tech}
+	if got := first(shared); got != "com.tech" {
+		t.Fatalf("shared name: first %s, want com.tech", got)
+	}
+	unique := []App{{ID: "com.a", Name: "Notes", Vector: far}, tech}
+	if got := first(unique); got != "com.a" {
+		t.Fatalf("unique name: first %s, want com.a", got)
+	}
+}

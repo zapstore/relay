@@ -416,6 +416,14 @@ func (r *T) persist(c rely.Client, event *nostr.Event) persistResult {
 	if r.analytics != nil {
 		r.analytics.RecordEvent()
 	}
+	if r.search != nil && event.PubKey == r.config.Info.Pubkey && (event.Kind == events.KindStack || event.Kind == nostr.KindDeletion) {
+		before, err := curatedApps(ctx, r.store, r.config.Info.Pubkey)
+		if err != nil {
+			slog.Error("search: curated read failed", "error", err)
+		} else {
+			defer r.syncCurated(ctx, before)
+		}
+	}
 
 	switch {
 	case event.Kind == nostr.KindDeletion:
