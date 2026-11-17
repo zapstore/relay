@@ -42,7 +42,7 @@ HOST_ARCH := $(shell go env GOARCH)
 help: ## List targets
 	@awk 'BEGIN { FS = ":.*## " } /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-20s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-build: ## Build dist/$(NAME)-$(GOOS)-$(GOARCH); link when that matches this machine
+build: ## Build dist/<name>-<os>-<arch>; link it when built for this machine
 	mkdir -p dist
 	rm -rf $(BIN)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) \

@@ -58,3 +58,9 @@ dist/
 # air specific files
 /tmp/
 /air/
+
+# OS
+.DS_Store
+
+# Specs stay local
+SPEC.md
